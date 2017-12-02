@@ -1,18 +1,21 @@
 #!/usr/bin/python
-from numpy import log2
+#from numpy import log2
+import math
 import random
+
+basePath = '../../'
 
 def SimpleEntityExtraction():
 	paperid_path = []
-	fr = open('microsoft/index.txt','rb')
+	fr = open(basePath + 'microsoft/index.txt','rb')
 	for line in fr:
 		arr = line.strip('\r\n').split('\t')
 		paperid = arr[2]
-		path = 'text/'+arr[0]+'/'+arr[1]+'.txt'
+		path = basePath + 'text/'+arr[0]+'/'+arr[1]+'.txt'
 		paperid_path.append([paperid,path])
 	fr.close()
 	phrase2count = {}
-	for [paperid,path] in paperid_path:
+	for [paperid,path] in paperid_path[0]:
 		fr = open(path,'rb')
 		for line in fr:
 			arr = line.strip('\r\n').split(' ')
@@ -57,11 +60,11 @@ def SimpleEntityExtraction():
 
 def SimpleAttributeExtraction():
 	paperid_path = []
-	fr = open('microsoft/index.txt','rb')
+	fr = open(basePath + 'microsoft/index.txt','rb')
 	for line in fr:
 		arr = line.strip('\r\n').split('\t')
 		paperid = arr[2]
-		path = 'text/'+arr[0]+'/'+arr[1]+'.txt'
+		path = basePath + 'text/'+arr[0]+'/'+arr[1]+'.txt'
 		paperid_path.append([paperid,path])
 	fr.close()
 	index,nindex = [{}],1 # phrase's index
@@ -125,7 +128,7 @@ def SimpleAttributeExtraction():
 
 def SimpleLabelExtraction():
 	paperid2conf = {}
-	fr = open('microsoft/Papers.txt','rb')
+	fr = open(basePath + 'microsoft/Papers.txt','rb')
 	for line in fr:
 		arr = line.strip('\r\n').split('\t')
 		paperid,conf = arr[0],arr[7]
@@ -147,10 +150,10 @@ def Entropy(n,values):
 	for value in values:
 		p_i = 1.0*value/n
 		if not p_i == 0:
-			ret += -1.0*p_i*log2(p_i)
+			ret += -1.0*p_i*math.log(p_i,2)
 	p_i = 1.0*(n-sum(values))/n
 	if not p_i == 0:
-		ret += -1.0*p_i*log2(p_i)
+		ret += -1.0*p_i*math.log(p_i,2)
 	return ret
 
 def Gini(n,values):
@@ -328,12 +331,12 @@ def NaiveBayes():
 		print '--> Prediction:',(PYesPost > PNoPost)
 		print ''
 
-#SimpleEntityExtraction()
-#SimpleAttributeExtraction()
-#SimpleLabelExtraction()
+SimpleEntityExtraction()
+SimpleAttributeExtraction()
+SimpleLabelExtraction()
 
-#DecisionTreeFirstFeature()
+DecisionTreeFirstFeature()
 
-#NaiveBayes()
+NaiveBayes()
 
 
