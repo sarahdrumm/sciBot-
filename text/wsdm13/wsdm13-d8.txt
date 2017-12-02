@@ -1,0 +1,538 @@
+Pairwise Ranking Aggregation in a Crowdsourced Setting
+∗
+Xi Chen
+Carnegie Mellon University
+Pittsburgh , PA USA xichen@cscmuedu
+Paul N . Bennett ,
+Kevyn Collins Thompson , Eric Horvitz
+Microsoft Research
+Redmond , WA USA 98052
+{pauben,kevynct,horvitz}@microsoft.com
+ABSTRACT Inferring rankings over elements of a set of objects , such as documents or images , is a key learning problem for such important applications as Web search and recommender systems . Crowdsourcing services provide an inexpensive and efficient means to acquire preferences over objects via labeling by sets of annotators . We propose a new model to predict a gold standard ranking that hinges on combining pairwise comparisons via crowdsourcing . In contrast to traditional ranking aggregation methods , the approach learns about and folds into consideration the quality of contributions of each annotator . In addition , we minimize the cost of assessment by introducing a generalization of the traditional active learning scenario to jointly select the annotator and pair to assess while taking into account the annotator quality , the uncertainty over ordering of the pair , and the current model uncertainty . We formalize this as an active learning strategy that incorporates an exploration exploitation tradeoff and implement it using an efficient online Bayesian updating scheme . Using simulated and real world data , we demonstrate that the active learning strategy achieves significant reductions in labeling cost while maintaining accuracy .
+Categories and Subject Descriptors I26 [ Artificial Intelligence ] : Learning ; H33 [ Information Storage and Retrieval ] : Information Search and Retrieval— Retrieval models ; H12 [ Information Systems ] : User/Machine Systems—Human factors
+General Terms Algorithms , Human Factors
+Keywords Ranking , Crowdsourcing , Pairwise Preference ∗ Research .
+This work was performed during an internship at Microsoft
+1 .
+INTRODUCTION
+Obtaining a set of gold standard labels for a set of objects is a critical step in learning to rank . For example , when determining how to rank the results returned in response to a Web search , the results are often passed through a ranking model that has been learned using a machine learning procedure [ 13 ] . In order to learn this model , learning methods typically require a training set of queries and documents where gold standard labels on relevance with respect to a query have been provided . The learning method optimizes some objective with respect to the labels .
+A variety of approaches can be employed to acquire labels . We may obtain binary relevance judgments , graded relevance judgments , or preferences [ 1 ] . Among these there may be tradeoffs in the amount of information the label contains and the noise associated with obtaining the label . For example , while a graded relevance judgment on a five point scale may contain more information than a binary judgment , annotators may also make more errors due to the complexity of assigning finer grained judgments . One approach to acquiring inputs on rank is to obtain relative preference judgments for pairs of items . This method promises assessments that are easier and faster to obtain , is less prone to assessor error , and enables fine grained comparisons . Such pairwise assessment may be especially valuable for ranking in tasks with higher numbers of gradations , eg , assessing reading difficulty into one of the standard 12 American grade levels [ 3 ] . Pairwise assessment may also be valuable for inferring global rankings in such settings as developing recommender systems where we desire to order a set of products based on a small number of observed preferences from individual users .
+We focus on the task of inferring a gold standard ranking from a set of preferences over objects given in the form of pairwise comparisons ( ie , i is preferred to j denoted as i fi j ) . As in any collection of gold standard data , we seek to obtain the most accurate labeling with minimal labeling cost . To this end , we seek to take advantage of crowdsourcing services , such as Amazon Mechanical Turk , which enables one to programmatically obtain large collections of pairwise comparisons from sets of annotators at low cost . However , the reliability of annotators available via crowdsourcing can vary significantly . In addition , seeking pairwise assessments from the crowd can lead to inconsistent pairs ( eg , i fi j by one annotator and j fi i by another annotator ; or i fi j , j fi k and k fi i ) . Many existing ranking aggregation methods [ 21 , 16 , 19 , 14 , 2 , 20 ] are either incapable of modeling the quality of work by annotators or are inadequate for dealing with inconsistent pairs .
+To address the challenge of learning a global ranking in a crowdsourced setting , we introduce the Crowd BT algorithm , which extends the widely used Bradley Terry model [ 21 ] by explicitly incorporating the quality of contributions provided by different annotators . The Crowd BT algorithm can both appropriately weight annotators’ contributions by their annotation quality as well as distinguish between spammers and malicious annotators : spammers assign random labels,1 while malicious annotators ( or poorly informed annotators ) assign the wrong label most of the time.2 Many existing crowdsourcing algorithms treat assessments provided by spammers or malicious annotators the same as they do assessments of low quality . In contrast , Crowd BT can exclude pairs labeled by spammers from the modeling while automatically correcting the pairs provided by malicious annotators .
+Beyond appropriately handling error , spam , and malicious inputs , we seek to be budget conscious ; we typically prefer to harness fewer labeled samples while achieving reasonably good accuracy . Thus , we seek a formal model of active learning to guide the allocation of effort in crowdsourcing ( eg , see [ 9] ) . Most active learning methods [ 23 ] assume the availability of an oracle that can provide the correct label . In such settings , we only need to decide how to select the next pairwise assessment . We typically do not have access to such expertise in a crowdsourced setting . Thus , we face the challenge of simultaneously selecting the best next pair to be labeled and the best annotator to label the next pair . We shall formulate and study an exploration exploitation tradeoff in crowdsourcing , previously explored in bandit and reinforcement learning . More precisely , exploration refers to using pairs with high confidence labels to test the quality of annotators , while exploitation refers to asking for labels for the most uncertain pairs . We need to balance the tradeoff between exploration and exploitation carefully : too much exploration could lead to samples being repeatedly labeled , so that we do not have a sufficient number of unique samples within the assessment budget ; however , too much emphasis on exploitation may result in a large number of noisy labels provided by low quality annotators .
+In the remainder of the paper , we first provide background on the Bradley Terry model and demonstrate how to incorporate annotator quality into the model . We then demonstrate how to address situations that arise in practice via a regularization term before discussing how to optimize the objective function to infer the model parameters . Next , we formalize the active learning problem as an explorationexploitation tradeoff and derive an approach that enables the efficient updates needed in an active learning setting . Finally , we present a series of experiments with synthetic data to better understand model properties . The experiments with real world data demonstrate that modeling annotator quality improves inferred ranking quality , and furthermore , that our active learning approach achieves 90 % of the best gold standard accuracy with only 3 % of the total labeling cost .
+1Annotators who either do not actually look at instances , or robots pretending to be human annotators , presumably to quickly receive pay for work . 2That is , they label i fi j whenever j fi i and vice versa , perhaps because the annotators are malicious or misunderstand the labeling criteria .
+2 . RELATED WORK
+Early work for modeling annotator quality is presented in [ 5 ] , where the true category of an object is inferred from the crowd . With the availability of programmatic access to human effort via crowdsourcing platforms , a range of studies have applied machine learning to data collected from the crowd . Raykar et al . [ 22 ] extended Dawid & Skene ’s work [ 5 ] by introducing a logistic classification model to incorporate features of the input data . Wang et al . [ 26 ] proposed to separate malicious annotators from spammers in a binary classification setting . Our Crowd BT algorithm extends the latter work to pairwise ranking aggregation problems .
+Karger et al . [ 10 ] proposed an iterative algorithm to infer consensus class labels with asymptotic consistency guarantees . Welinder et al . [ 27 ] extended Dawid & Skene ’s work [ 5 ] to Bayesian updating procedures . While most of the work in learning from the crowd has focused on classification problems , several studies examine ordinal regression and ranking problems with assessments [ 22 , 25 ] . For example , the formulation presented by Volkovs & Zemel [ 25 ] models annotator quality as the variance term in a logistic formulation and could be used to address our challenge . However , the methodology suffers from the weakness that it cannot distinguish spammers and malicious ( or poorly informed ) annotators . In addition , Bayesian modeling and active learning with the variance term in their logistic formulation provide more difficult computational challenges .
+Cost and efficiency within a budget are important for learning about and harnessing a crowd for problem solving . Costs can be throttled with selective assessments guided by active learning procedures . Unlike many applications of active learning , in a crowd setting , we cannot assume we have access to an oracle with answers . Yan et al . [ 30 ] proposed an active learning strategy for binary classification with a crowd . This work mainly focused on selection of an annotator who can provide the most confident label for an actively selected sample . Kamar et al . [ 9 ] describe methods for guiding the acquisition of votes in a crowdsourcing system for citizen science with a decision theoretic computation of value of information within a POMDP representation , using a voting rule on a training set to define ground truth .
+A great deal of prior work has been devoted to challenges with aggregation of rankings . Methods studied include permutation based methods ( eg , Mallows [ 2 ] and CPS [ 20 ] models ) , matrix factorization methods ( eg , [ 6 ] ) and score based probabilistic methods ( eg , Bradley Terry [ 21 ] , Plackett Luce [ 16 , 19 ] and Thurstone [ 14 ] models ) .
+Permutation based methods are generally computationally expensive while matrix factorization methods lack probabilistic interpretation . Thus , we build our work on scorebased methods which are both more suitable for modeling pairwise comparisons and computationally efficient .
+In summary , in contrast to previous work in pairwise ranking aggregation , our method can learn annotator quality with a unified model and distinguishes malicious annotators from spammers . More importantly , the active learning strategy proposed in this paper explicitly models the tradeoff between the learning of annotator quality versus the learning of pairwise preference . Our work formalizes this as the important concept of an exploration exploitation tradeoff in active learning with the crowd .
+3 . CROWD BT : EXTENDING BRADLEY
+TERRY MODEL TO CROWDSOURCING As mentioned above , we choose to extend the BradleyTerry model because it has a well understood probabilistic interpretation , is well suited to preferences , and can be optimized for computational efficiency . In particular , we extend the Bradley Terry model [ 21 ] to incorporate parameters for individual annotator quality . We first review the basic Bradley Terry model before demonstrating how annotator quality can be incorporated . For any two objects X and Y , Bradley Terry models the probability that X is preferred over Y as Pr(X fi Y ) = , where πX , πY > 0 can be viewed as relevance scores πX +πY for X and Y respectively ( alternative interpretations in other settings are as skill scores or difficulty scores ) . By defining πX = exp{sX} , we obtain :
+πX
+Pr(X fi Y ) = esX esY + esY e(sX−sY ) 1 + e(sX−sY ) .
+=
+( 1 )
+The Bradley Terry model can be easily extended to model preferences among a small set of objects : esX
+Pr(X fi {Y , Z} ) =
+( 2 )
+. esX + esY + esZ
+It can also model a chain complete partial order by decomposing it into pairwise preferences : Pr(X fi Y fi Z ) . = Pr(X fi Y ) Pr(Y fi Z ) . We assume there are N objects {o1 , . . . , oN} and a pool of K annotators {a1 , . . . , aK} . We denote the set of labeled pairs by the k th annotator as Sk = {(i , j ) : oi fik oj} , where oi fik oj represents that the k th annotator prefers oi over oj . Here , we make an implicit assumption that an annotator never simultaneously claims oi fi oj and oi ≺ oj , so that each pair ( i , j ) in Sk can be ordered by oi fik oj . Directly applying the Bradley Terry model without distinguishing each annotator ’s quality , we have Pr(oi fik oj ) = esi esi +esj . Then , pairwise ranking aggregation can be directly formulated into N . a log likelihood maximization problem as follows :
+K .
+. fi
+' max s k=1
+( i,j)∈Sk log esi esi + esj st si = 0 .
+( 3 ) i=1
+Because the objective function on the left of Eq ( 3 ) is not scale invariant : if we increase all si by any given constant c , the log likelihood will remain the same . Therefore , to make the objective identifiable , we use a standard trick ( eg , i=1 si = 0 . By [ 8] ) , which adds one additional constraint , maximizing Eq ( 3 ) , we can obtain a global ranking over N objects by sorting the obtained s . ffN
+When directly applying the Bradley Terry model in crowdsourcing , as in Eq ( 3 ) , each annotator is treated equally and , hence , the model is incapable of capturing the variability in quality of contribution across individual annotators . We now introduce a parameter ηk for the k th annotator which is defined as the probability that the k th annotator agrees with the true pairwise preference . In particular , for any pair with the true preference X fi Y : ηk ≡ Pr(X fik Y |X fi Y ) .
+( 4 ) If the k th annotator is perfect , we have ηk ≈ 1 ; if he/she is a spammer , we have ηk ≈ 0.5 ; while if he/she is a malicious or poorly informed annotator , we have ηk ≈ 0 . Applying the law of total probability , we have
+Pr(oi .k oj ) = Pr(oi .k oj|oi . oj ) Pr(oi . oj )
++ Pr(oi .k oj|oi ≺ oj ) Pr(oi ≺ oj ) esi + esj + ( 1 − ηk ) The log likelihood L(η , s ) thus takes the form esi + esj
+= ηk esj esi
+.
+L(η , s ) =
+=
+K . k=1
+K . k=1
+. ( i,j)∈Sk . ( i,j)∈Sk
+( 5 )
+( 6 )
+'
+. log Pr(oi .k oj ) fi log
+ηk esi esi + esj + ( 1 − ηk ) esj esi + esj
+For a perfect annotator with ηk = 1 , Pr(oi fik oj ) will reduce to the Bradley Terry model . For a spammer with ηk = 0.5 , Pr(oi fik oj ) ≡ 0.5 for any si , sj and hence all the pairs provided by a spammer will not affect our objective in Eq ( 7 ) . In other words , once we detect a spammer , we automatically discard all the pairs labeled by him/her . For a malicious annotator with ηk = 0 , we have Pr(oi fik oj ) = esi +esj , which is equivalent to having oj fi oi provided by a esj perfect annotator . This means that our model can automatically recover the errors made by a malicious annotator . On the other hand , if si sj ( ie , there is a significant difference between these two objects ) , we have Pr(oi fik oj ) ≈ ηk , which indicates that the probability depends largely on the annotator ’s quality . If si ≈ sj , we have Pr(oi fik oj ) ≈ 0.5 which indicates that for two very similar objects , they are indistinguishable regardless of the annotator ’s quality . 3.1 Thurstone model
+A closely related model to the Bradley Terry model is the Thurstone model [ 14 ] , which assumes that the score for each object X has a Gaussian distribution N ( SX , σX ) . For simplicity , here we only consider the Case V Thurstone model where σX = 1 for all objects . Then , the difference between the score of X and that of Y follows a Gaussian distribution N ( SX − SY , , where Φ(· ) is the standard Gaussian cumulative distribution function . The likelihood L(η , s ) under the Thurstone model thus takes the following form :
+2 ) and thus Pr(X fi Y ) = Φ
+SX−SY√
+√
+2
+L(η , s ) =
+K . k=1
+. ( i,j)∈Sk fi ff log
+ηkΦ si − sj√
+2
++ ( 1 − ηk)Φ ff sj − si√
+2
+'
+.
+To solve this corresponding maximum likelihood problem , we need to evaluate Φ(· ) many times , which involves an integration and hence is computationally more expensive than maximizing Eq ( 6 ) . Thus , we adopt the Bradley Terry model in the paper . However , we note that the performance of Bradley Terry and Thurstone models have been shown to be very similar [ 24 ] ; and all the developed methods in this paper can be used in a straightforward way to extend the Thurstone model for use in crowdsourcing . 3.2 Regularization
+For better visualization and interpretation , pairwise comparisons are often presented as a comparison graph : if an annotator prefers oi over oj , we draw a directed edge from oj to oi . We first point out that application of the Bradley Terry ffN is no longer needed if we fix s0 . Recall that this constraint is used to address the scale invariant problem in the objective function in Eq ( 3 ) . Now , in Eq ( 7 ) , if we fix s0 , the objective is no longer scale invariant and hence the constraint i=1 si = 0 could be dropped . Let us provide more detailed explanations for the regularization term in Eq ( 7 ) . First , as we show in Section 3.2 , without the regularization , the corresponding optimization is not well defined when the graph is not strongly connected , and we will not have a finite solution . Therefore , the regularization is indispensable for comparison graphs that are not strongly connected . Secondly , when the graph is indeed strongly connected , the regularization might change the solution . However , if we set λ to be sufficiently small , the ranking inferred from s will be the same as that obtained from the un regularized problem . Interestingly , in many problems , the regularized problem could lead to an even better solution than the un regularized one as shown in our experiments . In practice , if one only wants to recover the ranking from the un regularized problem ( assuming it is well defined ) , one could just use a sufficiently small λ . On the other hand , if gold pairs are available ( ie , samples with the true label provided by experts),4 one can carefully use them to tune the parameter λ to achieve the best performance on gold samples . Regardless of the optimal choice , we show empirically later that for a broad range of λ ∈ [ 0.1 , 10 ] our algorithm outperforms the baseline ( see Tables 2 and 3 ) . To maximize the objective L(η , s ) + λR(s ) , a natural optimization strategy is the alternating approach [ 17 ] : fix η and optimize over s ; then fix s and optimize over η ; and iterate over these two steps . In particular , we adopt limitedmemory BFGS [ 17 ] to optimize s and the projected Newton method to optimize η [ 12 ] . We note that as Eq ( 7 ) is a non concave maximization problem , a good initialization is important to avoid being trapped in local minima . As long as the average quality of the annotators is better than that of spammers , we suggest starting with ηk = 1 for each annotator and first optimizing over s . In fact , this strategy is better than the traditional multiple random initialization strategy for solving non convex optimization since we utilize the prior side information of the problem ( ie , most annotators are good ) . If there are more spammers and malicious annotators ( although it may happen rarely in practice ) , we could initialize ηk by measuring the performance of each annotator on a handful of gold samples . In particular , ηk could be initialized as the ratio of the correct answers on the gold samples .
+4 . ACTIVE LEARNING
+Active learning in crowdsourcing is fundamentally different from traditional active learning in two different aspects : ( 1 ) we do not have access to an oracle for labels and ( 2 ) beyond selecting pairs to be labeled ( exploitation ) we also need to probe each annotator ’s quality ( exploration ) , and carefully balance this exploration exploitation tradeoff . For pairwise comparison , at each round , we need to choose a triplet ( object i , object j , annotator k ) and ask for the preference between object i and object j from the annotator k .
+4In fact , even if there is no expert , one can construct gold pairs from the data . For example , we could treat a pair as a gold sample if more than 10 annotators rank the pair and at least 90 % of them agree on the same preference .
+Figure 1 : Example of comparison graph . model in Eq ( 3 ) can face numerical challenges if the underlying comparison graph is not strongly connected.3 More specifically , one cannot have a maximizer of the log likelihood in Eq ( 3 ) when the comparison graph is not strongly connected . As an example , we consider the comparison graph in Fig 1 with two strongly connected components in red circles . For any given solution sA , sB , sC , sD , if one adds an arbitrary positive constant c to sA , sB and subtracts the constant c from sC , sD , then the likelihood terms corresponding to the edges C → A and D → B ( ie , esB +esD ) will always increase , while the likelihood terms corresponding to the edges within each strongly connected component ( ie , A → B , B → A , C → D and D → C ) will remain the same . Therefore , we could not have a maximizer of the log likelihood . esA +esC and esB esA
+This numerical problem can be addressed via the so called virtual node regularization which has been used in ranking problems under different settings [ 4 , 11 ] . In particular , we introduce a virtual object ( node ) o0 with the score es0 . We assume that each object oi is compared to o0 by a perfect annotator with one virtual win and one virtual loss . Thus , any comparison graph will be made into a strongly connected one . According to [ 15 ] , the log likelihood will then have a unique maximizer . In fact , this amounts to using a regularized form L(η , s ) + λR(s ) , where the regularization term R(s ) is defined as : fi N .
+'' fi
+' fi
+R(s ) = log i=1 es0 es0 + esi
++ log esi es0 + esi and λ > 0 is the predefined regularization parameter . 3.3 Crowd BT
+The final Crowd BT formulation for pairwise ranking aggregation in crowdsourcing is essentially a regularized maximum likelihood problem : max η,s
+L(η , s ) + λR(s ) K .
+(
+. N . log fi k=1
+( i,j)∈Sk
+. =
++ λ i=1
+0 ≤ ηk ≤ 1 , st
+As we can see from Eq ( 7 ) , another benefit of this extra i=1 si = 0 in Eq ( 3 ) regularization is that the constraint 3A directed graph is called strongly connected if there is a path from each node in the graph to every other node .
+( 7 )
+) '' esj esi + esj esi es0 + esi
+ηk esi esi + esj + ( 1 − ηk ) fi fi
+' es0
++ log es0 + esi log ∀k ∈ {1 , . . . , K} . ffN
+Let T be the total budget , ie , the total number of triplets that we can query . The high level picture of the active learning in crowdsourcing for our problem is as follows . For each round t = 1 , . . . , T run the following steps :
+Pr(oi .k oj )
+.
+KL
+1 . Choose the triplet ( oi , oj , k ) that maximizes the impact on the model uncertainty given the expectation over the annotator k ’s response .
++ Pr(oi ≺k oj )
+2 . Query the preference between oi and oj from the an notator k .
+3 . Update the model with the elicited preference .
+However , there are three major challenges for implementing the above approach . First , the sheer number of possible triplets is KN ( N − 1)/2 so that the maximization in Step 1 is taken over a large space . The second is quantifying the impact on the model uncertainty in a way that also incorporates the notion of an exploration exploitation tradeoff . The third is how to update the model in a time efficient manner without re training the whole model . For the first issue , since the maximization can be solved in a straightforward parallel manner , this challenge can be addressed given enough computational power . For the second issue , we establish a Bayesian framework for our problem and introduce a novel definition of the expected information gain by extending the traditional Kullback Leibler ( KL ) divergence to incorporate the exploration exploitation tradeoff . Finally , we introduce an efficient online update of the model parameters using the techniques from [ 28 ] .
+We first extend Crowd BT into a Bayesian framework to enable the definition of the information gain/model uncertainty and facilitate the development of an online updating method . We assume {si}N k=1 are independent random variables and introduce a Gaussian prior for each si ( ie , si ∼ N ( μi , σi ) ) and a Beta prior for each ηk ( ie , ηk ∼ Beta(αk , βk) ) . Given a pair labeled by the k th annotator , ( oi fik oj ) , we have the prior i=1 and {ηk}K p(si , sj , ηk ) = N ( si ; μi , σi)N ( sj ; μj , σj)B(ηk ; αk , βk )
+, σ
+, σ i'kj i i'kj j i'kj k i'kj i i'kj j
+)N ( sj ; μ with the likelihood l(si , sj , ηk ) given in Eq ( 5 ) . Then the posterior can be calculated from Bayes’ rule . However , since the marginal posterior will be again used as the prior for the coming pairs , it is difficult to directly use the exact inferred posterior . Therefore , we approximate the posterior p(si , sj , ηk|oi fik oj ) using the variational approximation : p(si , sj , ηk|oi fik oj ) = l(si , sj , ηk)p(si , sj , ηk)/C ≈ N ( si ; μ )B(ηk ; α where l(si , sj , ηk ) = Pr(oi fik oj ) = ηk esi + esj , is the likelihood function and C = Pr(oi fik oj ) is the normalization constant . In particular , we assume si , sj and ηk are ( conditionally ) independent in posterior , the posterior distributions for si and sj are still Gaussian , and ηk is Beta . Let us defer the discussion of how to efficiently update the posterior parameters to the next subsection and first present the proposed active learning strategy . For each potential triplet in the pool ( oi , oj , ak ) ( ie , represents asking the k th annotator to compare oi and oj ) , we compute the expected information gain : esi + esj +(1−ηk )
+( 8 ) i'kj k esj esi
+, β
+) .
++ KL i
+. N ( μi.k j . N ( μi.k j . Beta(αi.k j
+, σi.k j , σi.k j j j i k
+KL
++γ KL . . N ( μi≺k j . N ( μi≺k j . Beta(αi≺k j
+, σi≺k j , σi≺k j
++γ KL
++ KL j j i i k fi fi fi fi
+)||N ( μi , σi ) )||N ( μj , σj )
+)||N ( μi , σi ) )||N ( μj , σj )
+( 9 ) fifi fifi
+, βi.k j k
+)||Beta(αk , βk )
+, βi≺k j k
+)||Beta(αk , βk ) where KL(· ) denotes the Kullback Leibler ( KL ) divergence . Since we do not know whether oi fik oj or not before the pair is labeled , we take the expected information gain over the Bernoulli outcome ; the computation of Pr(oi fik oj ) is shown in the next section ( Eq ( 15 ) and Eq ( 18) ) . At each iteration , we choose the triplet ( oi , oj , ak ) that maximizes Eq ( 9 ) . In other words , we use a pure greedy strategy to select the most informative triplet . We also realize that other mixed methods may work better in practice . For example , one can use an greedy approach , ie , with probability 1− select the triplet that maximizes the expected information gain , else with probability , select a random triplet .
+The expected information gain defined via KL divergence has been a popular utility function in traditional active learning [ 23 ] and used for ranking problems [ 18 ] . To extend active learning to crowdsourcing , our formulation in Eq ( 9 ) generalizes the traditional expected information gain by introducing an extra parameter γ . In particular , recall that the traditional information gain is simply defined by the KL divergence between the posterior and the prior : p(si , sj , ηk|oi fik oj)|| p(si , sj , ηk ) i'kj i i'kj j i'kj i i'kj , σ j i'kj k
+)|| N ( μi , σi ) )|| N ( μj , σj ) i'kj k
+)|| Beta(αk , βk )
++ KL
+Beta(α
+= KL
++ KL
+N ( μ
+N ( μ
+( 10 ) ff
+KL
+, σ
+, β
+.
+As compared to Eq ( 10 ) , our formulation in Eq ( 9 ) introduces the parameter γ which represents the tradeoff between exploration and exploitation . A larger γ will give more weight to the KL divergence terms related to annotator quality in the objective in Eq ( 9 ) , which means that we are willing to spend more to explore the quality of annotators . On the other hand , a smaller γ will result in relatively more emphasis on exploiting the information in the observed pairwise comparisons . When gold samples are not available , according to our experience , any γ ∈ [ 5 , 10 ] could lead to much better performance than setting γ = 0 ( ie , traditional active learning without exploring annotator quality ) or γ = 1 ( ie , traditional information gain defined by KL divergence ) . Meanwhile , setting γ larger than 10 could lead to too much exploration at the beginning—especially when the budget is limited . Therefore , as a simple rule of thumb , one could set γ = 5 when the budget is limited while γ = 10 when the budget is sufficient . Although such a simple rule is by no means an optimal choice of γ , it often leads to superior empirical performance . We can adopt a more sophisticated guideline for the selection of γ . Specifically , we can start from a large γ ; and gradually reduce the parameter γ by half for every τ % of the budget ( eg , τ = 25 ) . The reason behind such a dynamic strategy of setting γ is as follows : at
+− eμi eμj
+( eμi + eμj )2
+' '
+( 13 )
+' '
+, κ
+( 14 )
+, κ −4 ) to
+,
+. fi fi fl
+≈ ∂ log fz(zi , zj )
+∂zi zi=zj =0
+.
+E(η
+2 k ) = the beginning , we may typically have very little knowledge about the quality of annotators , so more exploration should be carried out with a larger γ . As we gradually gather more information about annotator quality , we should do more exploitation instead of exploration using a smaller γ . 4.1 Online Learning
+To update the posterior parameters efficiently in Eq ( 8 ) , we use a moment matching strategy . We first approximate the first and second order moments for si , sj , ηk under the true posterior distribution and then update the posterior parameters accordingly . To compute E(si ) , E(sj ) , Var(si ) , Var(sj ) under the true posterior , we first integrate out ηk and the marginal posterior for ( si , sj ) takes the form : fs(si , sj)N ( si ; μi , σi)N ( sj ; μj , σj ) , where
+αk esi
+βk esj esi + esj . fs(si , sj ) = ∼ N ( 0 , 1 ) . We Let zi = si−μi can view fs(si , sj ) as a function of zi , zj and rewrite it as : esi + esj + αk + βk ∼ N ( 0 , 1 ) and zj =
+αk + βk sj−μj
+σj
+σi fz(zi , zj ) =
+αk eσizi+μi
+αk + βk βk
++ eσizi+μi + eσj zj +μj eσj zj +μj
+αk + βk eσizi+μi + eσj zj +μj
+.
+Using the technique from [ 28 ] , which is essentially the extension of the Stein ’s Lemma [ 29 ] , the expectation E(zi ) can be approximated :
+E(zi ) = E
+∂fz(zi , zj )/∂zi
+( fz(zi , zj )
+)) ) )
+Therefore , we have :
+μi'kj i ff
+= E(si ) = μi + σiE(zi ) αkeμi ≈ μi + σ2 i
+αkeμi + βkeμj
+( 11 )
+.
+− eμi eμi + eμj i eµj
+αkeµi i'kj i
+≈ μi + σ2
+We can interpret this updating rule as follows . For a perfect αkeµi +βkeµj ≈ 1 and annotator with αk βk , we have hence μ eµi +eµj . This formulation captures the intuition that μi should increase when an observation oi fik oj is made by a good annotator . Secondly , if μi μj , the extra information of observing oi fik oj is limited and hence the amount of increase of μi , σ2 eµi +eµj , is very small . i On the other hand , for a random annotator with αk ≈ βk , ≈ we have μ μi − σ2
+≈ μi while for a malicious annotator , μ eµi +eµj . Similarly , we have : i'kj i eµi i'kj i eµj i
+μi'kj j ff ff
+= E(sj ) = μj + σj E(Zj ) ≈ μj + σ2 ≈ μj − σ2
+βkeμj
+αkeμi
+αkeμi + βkeμj j
+αkeμi + βkeμj
+−
+− eμj eμi + eμj eμi eμi + eμj
+( 12 ) following [ 28 ] : j i'kj We can also derive σ i i ) − ( E(zi ) ) ∂2fz(zi , zj)/∂z2 i fi
+Var(zi ) = E(z
+2
+2 i'kj j
+, σ
+''
+=
+1 + E
+− E fi fi fz(zi , zj ) ∂2 log fz(zi , zj )
+∂z2 i
+'
+≈ 1 +
+∂fz(zi , zj)/∂zi fz(zi , zj ) ∂2 log fz(zi , zj ) fififififi
+∂z2 i
+. zi=zj =0
+= 1 + E
+.
+2
+Then we have :
+2 i'kj i
+σ
+= Var(si ) = σ
+= σ
+2 i max
+1 + σ
+2 i i'kj j
+2
+)
+( σ
+= Var(sj ) = σ fi fi
+2 i Var(zi ) αkeμi βkeμj
+( αkeμi + βkeμj )2
+2 j Var(zj ) αkeμi βkeμj
+= σ
+2 j max
+1 + σ
+2 j
+( eμi + eμj )2 where the parameter κ is a small constant ( eg , 10 ensure the positivity of variance .
+( αkeμi + βkeμj )2
+− eμi eμj
+To update αk and βk , let C1 = EN
+, where EN denotes the expectation over the prior Gaussian distribu= 1 − C1 . The tion of ( si , sj ) and let C2 = EN normalization constant C = Pr(oi fik oj ) in Eq ( 8 ) can be computed as : esi +esj esi +esj esj esi
+( C1ηk + C2(1 − ηk ) ) Beta(ηk ; αk , βk)dηk
+C =
+=
+[ 0,1 ]
+C1αk + C2βk
+αk + βk
+.
+( 15 ) fl
+Then we can compute the first and second order moment of ηk as follows : 1 C
+ηk ( C1ηk + C2(1 − ηk ) ) Beta(ηk ; αk , βk)dηk
+E(ηk ) =
+[ 0,1 ]
+=
+C1(αk + 1)αk + C2αkβk C(αk + βk + 1)(αk + βk ) C1(αk + 2)(αk + 1)αk + C2(αk + 1)αkβk C(αk + βk + 2)(αk + βk + 1)(αk + βk )
+.
+. and update the αk and βk as follows : ( E(ηk ) − E(η2
+αi'kj k
+=
+βi'kj k
+= k))E(ηk )
+E(η2 k ) − ( E(ηk))2
+( E(ηk ) − E(η2 k))(1 − E(ηk ) )
+E(η2 k ) − ( E(ηk))2
+( 16 )
+( 17 )
+Now the challenge is to compute C1 efficiently . Let g(si , sj ) = esi esi +esj and we take the second order Taylor expansion of g(si , sj ) at ( μi , μj ) : g(si , sj ) ≈ g(μi , μj ) + ( si − μi)∇si g(μi , μj)+ ( sj − μj)∇sj g(μi , μj ) + ( si − μi ) ( si − μi)(sj − μj)∇si,sj g(μi , μj ) + We take the expectation of g(si , sj ) under the prior distribution and we obtain C1 . In particular , by the fact that EN ( si − μi ) = EN ( sj − μj ) = 0 , we have :
+2∇si,si g(μi , μj)+ 1 2
+( sj − μj )
+1 2
+2∇sj ,sj g(μi , μj ) .
+C1 ≈ eμi eμi + eμj
++
+1 2
+( σ2 i + σ2 j ) sμi sμj ( sμj − sμi )
+( sμi + sμj )3
+.
+( 18 )
+We can use the above closed form updating rules to infer approximate posterior distributions in constant time . Combining the posterior update rules with our selection criteria based on expected information gain in Eq ( 9 ) , the entire active algorithm is presented in Algorithm 1 . We note that , after labeling the pairs , we can simply sort {μi} to obtain the ranking ( which is used in our experiments ) , or we could rank the objects by using Crowd BT . In general , solving the optimization of Crowd BT leads to a slightly better performance than sorting {μi} but is also computationally more expensive .
+Algorithm 1 Active Ranking Aggregation in Crowd
+Input : Prior distribution parameters {μi} , {σi} , {αk} , {βk} , the tradeoff parameter γ and the total budget T . for t = 1 , . . . T do
+Select a pair ( oa , ob ) and an annotator k which maximize the expected information gain in Eq ( 9 ) . Query the annotator k on the preference between oa and ob . if oa fik ob then
+Set i = a and j = b else
+Set i = b and j = a . end if Update μi , μj , σi , σj , αk and βk according to Eq ( 11 ) , ( 12 ) , ( 13 ) , ( 14 ) , ( 16 ) and ( 17 ) . end for Output : Rank objects by sorting the obtained {μi} .
+5 . EXPERIMENTS
+5.1 Simulated Study
+511 Accuracy for Different Distributions of Anno tator Quality k}100 ∗
+We first conduct experiments with simulated data to test the performance where the average quality of annotators is varied . We assume that there are 100 objects , each with an underlying true score in the range of 1 to 100 . We randomly sample 400 pairs of objects and assume that each pair is labeled by 10 different annotators . In this way , we gather 4000 labeled pairs . We assume that the ground truth quality of 100 annotators {η k=1 follow a Beta distribution Beta(α , β ) . For any pair ( oi , oj ) labeled by the k th annotator , he/she will claim oi fik oj with the probability ηk and vice versa with the probability 1 − ηk . We test our Crowd BT method Eq ( 7 ) with two different initialization schemes : ( 1 ) initialize each ηk by 1 , ie , starting by assuming that all annotators are perfect ( Crowd BT One ) and ( 2 ) initialize each ηk by the accuracy on 5 gold pairs with known true relationship ( Crowd Gold ) ; and compare them with the vanilla Bradley Terry model ( BT ) in Eq ( 3 ) . We evaluate algorithms using the accuracy based on WilcoxonMann Whitney statistics : ff
+ACC :=
+,
+( 19 ) ff i,j I(yi > yj ∧ si > sj ) i,j I(yi > yj ) where y is the true relevance score and s is the estimated score .
+We first vary the distribution of annotator quality and report the accuracy for each distribution in Table 1 with virtual node regularization parameter λ = 05 The sensitivity of λ will be further investigated in another simulated experiment . As we can see from Table 1 , when the average quality is above 0.5 , the two initialization strategies for Crowd BT achieve very similar performance and are both better than the Bradley Terry model . For a difficult scenario with many more malicious annotators , the performance of Crowd BT with “ all ones ” initialization is indeed quite bad . However , initialization by a very rough estimate of quality using only five gold pairs will lead to a significant boost in performance . This is because our method has the ability to
+Too little exploration
+Too much exploration
+Figure 2 : Active Learning with different γ . automatically recover from the errors made by malicious annotators with a reasonable initialization . In summary , when there are more good annotators , which is often the case in practice , we could directly apply Crowd BT with “ all ones ” initialization ; otherwise , it is necessary to obtain a rough estimate of quality via several gold samples .
+512 Exploration Exploitation Tradeoff
+We now investigate the effect of considering the control of an exploration exploitation tradeoff in active learning and compare our active learning method with different configurations of the tradeoff to the random selection strategy . In particular , we assume that the true quality for each annotator is drawn from the Beta distribution Beta(2 , 1 ) . This is similar to one of the most common settings in practice where we have many good annotators but also some spammers and malicious contributors . We initialize the prior of the quality with Beta(10 , 1 ) to reflect our starting assumption that all annotators are very good . We plot the number of sampled pairs against accuracy by varying the parameter γ . As displayed in Figure 2 , the active learning strategy with an appropriate γ ( eg , blue line with γ = 5 ) significantly outperforms the random selection strategy . If one uses too small a value for γ ( eg , red line with γ = 0 ) , the accuracy has a sharp increase at the beginning , but becomes worse as we sample more pairs . This outcome arises because in the absence of enough exploration of annotator quality , we may assign many pairs to bad annotators and thus harm the performance in the long run . On the other hand , if we adopt too large γ ( eg , black line with γ = 30 ) , the increase in accuracy is slow at the beginning . The main reason for this is that during the first few hundred iterations , we perform too much exploration and hence obtain limited information about pairwise preferences .
+We also study the exploration exploitation tradeoff under different settings of averaged annotator quality . For each distribution of annotator quality and each setting of γ , we calculate the normalized area under the active learning curve . A typical active learning curve is displayed in Figure 2 . As presented in Figure 3 , in both ( a ) and ( b ) with different priors , when the average quality is relatively low ( eg , 0.667 ) , a larger γ ( eg , γ = 5 , 10 ) performs best , which means that we need more exploration in that scenario . On the other hand , when average quality approaches one , exploration becomes unnecessary and γ = 0 or γ = 1 leads to the best performance .
+( α , β ) Average Quality BT Crowd BT One Crowd BT Gold
+( 10 , 1 ) 0.909 0.882 0.899 0.899
+( 5,1 ) 0.833 0.890 0.918 0.917
+( 2,1 ) 0.667 0.800 0.869 0.869
+( 2,2 ) 0.500 0.542 0.849 0.850
+( 1,2 ) 0.333 0.171 0.109 0.897
+( 1,5 ) 0.166 0.144 0.122 0.878
+Table 1 : Accuracies of different approaches on the simulated datasets . Average Quality is the mean α/(α + β ) of the Beta distribution . Best performance in each column is in bold .
+0.909
+0.8414
+0.8374
+0.8385
+0.8342
+0.833
+0.8269
+0.8340
+0.8339
+0.8390
+0.75
+0.7893
+0.7919
+0.8089
+0.8123
+0.667
+0.7335
+0.7703
+0.7686
+0.7837
+0.5
+0.5523
+0.6276
+0.6042
+0.5561
+0.333
+0.2462
+0.1975
+0.2017
+0.2037
+0.167
+0.1596
+0.1421
+0.1637
+0.1669
+0
+5
+γ
+10
+20
+( a ) Prior Beta(10 , 1 )
+0.909
+0.8659
+0.8616
+0.8655
+0.8554
+0.833
+0.8554
+0.8525
+0.8334
+0.7879
+0.75
+0.8202
+0.8346
+0.8083
+0.7938
+0.667
+0.7545
+0.8087
+0.7949
+0.7744
+0.5
+0.5216
+0.6750
+0.3825
+0.6653
+0.333
+0.8111
+0.8289
+0.8078
+0.7933 y t i l a u Q
+. g v A y t i l a u Q
+. g v A
+0.167
+0.8429
+0.8593
+0.8256
+0.8031
+0
+5
+γ
+10
+20
+( b ) Prior estimated on 5 gold pairs
+0.8000
+0.7000
+0.6000
+0.5000
+0.4000
+0.3000
+0.2000
+0.8500
+0.8000
+0.7500
+0.7000
+0.6500
+0.6000
+0.5500
+0.5000
+0.4500
+0.4000
+Figure 3 : Normalized area under the active learning curve for different averaged quality and γ .
+513 Virtual Node Regularization
+Finally , we conduct a simulated experiment to investigate the effect of the virtual node regularization parameter λ . We generate the synthetic data in a similar manner as in the previous section . Again , we assume that there are 100 objects , each with an underlying true score in the range 1 to 100 , and 100 annotators with the ground truth quality {η k=1 following a Beta distribution Beta(2 , 1 ) . We randomly sample n pairs of objects and assume that each pair is labeled by m = ( 4000/n ) distinct annotators . We test our Crowd BT algorithm in Eq ( 7 ) with different virtual node regularization λ under different settings of n and compare the accuracies with that from the Bradley Terry ( BT ) model . We report the accuracy and the correlation between in Table 2 . For all settings , Crowd BT is superior to the baseline BradleyTerry model . In addition , the correlations between the estimated quality and true quality are very close to one . More interestingly , when n is smaller ( ie , the number of unique the estimated quality ffiη and true quality η k}100 ∗
+∗
+ACC 0.6722 ( 0.002 ) TrueSkill Online Crowd BT 0.6822 ( 0.002 )
+Table 4 : Comparisons of online learning methods on reading level dataset ( with all 12,728 pairs ) . pairs is small ) , we need a larger regularization weight λ to achieve better performance . In fact , when n = 4000 , it is very likely that the underlying comparison graph is strongly connected and hence we do not need a strong regularization . On the other hand , when n = 200 , then we have at most 400 directed edges in the graph . In such a sparse graph , strong regularization will help to improve performance . 5.2 Real World Challenge : Reading Level
+We now apply Crowd BT to the task of ranking documents by their reading difficulty . Our dataset is composed of 491 documents , each assigned a gold standard reading difficulty level from 1 to 12 , as described in [ 3 ] in more detail . Using the CrowdFlower crowdsourcing platform,5 a total of 624 distinct annotators in the United States and Canada were shown representative passages from randomly selected pairs of these documents , and asked to decide which of the two texts was more challenging to read and understand . To help avoid an imbalanced judgment pool that is biased toward a few prolific annotators , each annotator was allowed to contribute a maximum of 40 judgments . We obtained a total of 12,728 pairwise comparisons . The overall quality of annotators on this task is known to be relatively high .
+We compare Crowd BT with ηk = 1 as the initialization to several competitors : ( 1 ) Bradley Terry ( BT ) model ; ( 2 ) for each pair of objects ( oi , oj ) , we first use majority vote to obtain the preference between them and apply the BT model ( eg , if 3 annotators claim oi fi oj and 2 claim oi ≺ oj , then we generate a pair oi fi oj as labeled by a perfect annotator ) ; ( 3 ) a model proposed in [ 25 ] where the difference for annotators is captured by a variance term in the logistic form in Bradley Terry model . We call this method VarianceBT . As the evaluation metric , we again use the accuracy in Eq ( 19 ) as in the simulated experiments which measures the overall accuracy across all pairs in the gold standard ranking . The results are presented in Table 3 . As we can see , Crowd BT performs the best for any λ , followed by Variance BT and Majority Vote BT , which has the worst performance . We also plot the histogram for the estimated η in Figure 4 and we observe that about half of the annotators are estimated to be perfect annotators on this dataset .
+We also compare our Bayesian online Crowd BT with another well known online ranking aggregation algorithm : Trueskill [ 7 ] . Since the sample ordering in an online algo
+5http://crowdflower.com/ n × m
+λ
+4000 × 1
+400 × 10
+0.1
+0.5
+1
+0.1
+0.5
+1
+BT ( ACC )
+Crowd BT ( ACC )
+0.849 0.955
+Quality Correlation
+0.956
+0.803 0.893
+0.849 0.936
+0.804 0.849 0.894 0.946 Crowd BT Estimate vs . Truth 0.950
+0.945
+0.957
+0.950
+0.804 0.883
+200 × 20
+0.1
+0.745 0.793
+0.5
+0.748 0.803
+1
+0.749 0.810
+0.947
+0.972
+0.970
+0.967
+Table 2 : Simulated studies for the virtual node regularization . Best performance in each block is in bold .
+λ = 0.1 0.6760 BT Majority Vote BT 0.6686 0.6790 Variance BT 0.6924 Crowd BT
+λ = 0.5 0.6796 0.6700 0.6835 0.6961
+ACC λ = 1 0.6815 0.6688 0.6862 0.6978
+λ = 10 0.6802 0.6483 0.6828 0.6874
+λ = 50 0.6629 0.6409 0.6658 0.6690
+Table 3 : ACC for different methods on reading level dataset ( with all 12,728 pairs ) . Best performance in each column is in bold . Best performance in each row is in italics .
+50
+40
+30
+20
+10
+)
+%
+(
+. o n n A f o
+. e g a t n e c r e P
+0 0
+0.2
+0.4
+Estimated Quality
+0.6
+0.8
+1
+Figure 4 : Histogram for the estimated η for different annotators . rithm is random , the results could be slightly different for each run , so we report the mean and standard deviation over 50 runs in Table 4 . As we can see , our method improves over the TrueSkill method ’s accuracy . We note that the performance of the online methods is worse than that of the deterministic methods . The main advantages of online methods are their computational efficiency and the ability to handle streaming data .
+Finally , we compare the active learning strategy with different exploration exploitation tradeoffs , against the random strategy . For better visualization , we only present the accuracy for the first 4,500 labeled pairs in Figure 5 . As captured in the figure , the active learning strategy significantly outperforms the random strategy . The exploration exploitation tradeoff can also be observed from Figure 5 . In particular , the accuracy for γ = 0 ( red line ) increases sharply at the beginning ; on the other hand , the accuracy for γ = 50 ( black line ) increases slowly at the beginning but outperforms the γ = 0 case after about 3,000 samples . This indicates that different from traditional active learning , the explorationexploitation tradeoff leveraged by γ is very important for active learning in crowdsourcing . In practice , according to our experience , we suggest choosing γ ∈ [ 1 , 10 ] to achieve better performance . To further quantify the improvement ,
+C C A
+0.8
+0.7
+0.6
+0.5
+0.4
+0.3
+0.2
+0.1
+0
+Active : γ=0 Active : γ=5 Active : γ=20 Random
+1000 3000 No . of Sampled Pairs
+2000
+4000
+Figure 5 : Active learning vs . random strategy on reading level dataset . we report the number of sampled pairs to first achieve a certain accuracy . In particular , the best accuracy over different methods after sampling all 12,728 pairs is 06843 We report the number of sampled pairs to achieve a certain ratio of best accuracy in Table 5 . As we can see , the number of pairs needed for the active learning strategy is much smaller than that for the random strategy . With active learning , we can achieve 90 % of the best accuracy with only about 400/12 , 728 ≈ 3.14 % of the total pairs .
+Ratio to best accuracy 98 % 95 % 90 %
+γ = 0 1850 700 400
+γ = 5 1400 850 450
+γ = 20 Random 3650 2450 850
+7250 5350 2150
+Table 5 : Number of pairs required to achieve a specified level of accuracy . Best performance in each row is in italics .
+6 . CONCLUSIONS AND FUTURE WORK
+We have explored the challenge of learning a global ranking from pairwise comparisons via inputs from the crowd . We generalized the widely applied Bradley Terry model by incorporating annotator quality . We further proposed an active learning strategy that can adaptively sample the next assessment pair and annotator . We introduced and studied an exploration exploitation tradeoff in active learning with crowdsourcing pairwise comparisons , and demonstrated the importance of the configuration of this tradeoff via empirical studies . Although we developed methods on the foundation provided by the Bradley Terry model , the proposed methods can be applied to other models for pairwise ranking , such as the Thurstone model [ 14 ] .
+We see several interesting future directions for extending this work . In one direction of research , we see opportunities for reducing the computational cost via narrowing the sampling space for active learning . Heuristics for narrowing the space promise to be valuable . For example , if we are certain about oi fi oj and oj fi ok , we may exploit the nearly certain preference between oi and ok which can be inferred by the transitivity rule . A second direction of research centers on optimizing in an automated manner both the explorationexploitation tradeoff parameter γ and virtual node regularization parameter λ . We are also interested in better ways of harnessing limited sets of gold samples in validation sets .
+7 . ACKNOWLEDGMENTS
+We would like to thank TK Huang , Denny Zhou and Susan Dumais for helpful discussions and Vaughn Hester for support obtaining information from Crowdflower runs needed for this research .
+8 . REFERENCES [ 1 ] B . Carterette , P . Bennett , D . Chickering , and
+S . Dumai . Here or there : Preference judgments for relevance . In ECIR , 2008 .
+[ 2 ] CLMallows Non null ranking models . Biometrika ,
+44:114–130 , 1957 .
+[ 3 ] K . Collins Thompson and J . Callan . A language modeling approach to predicting reading difficulty . In HLT , 2004 .
+[ 4 ] R . Coulom . Computing elo ratings of move patterns in the game of go . Technical report , Universit´e Charles de Gaulle , 2007 .
+[ 5 ] A . P . Dawid and A . M . Skene . Maximum likelihood estimation of observer error rates using the em algorithm . Journal of the Royal Statistical Society . Series C ( Applied Statistics ) , 28:20–28 , 1979 .
+[ 9 ] E . Kamar , S . Hacker , and E . Horvitz . Combing human and machine intelligence in large scale crowdsourcing . In AAMAS , 2012 .
+[ 10 ] D . R . Karger , S . Oh , and D . Shah . Iterative learning for reliable crowdsourcing systems . In NIPS , 2011 .
+[ 11 ] KWChang , C . Hsieh . , T . Huang , T . Wu , R . Weng , and CJLin Large scale ranking by sparse paired comparisons . Unpublished manuscript , 2012 .
+[ 12 ] C . Lin and J . J . More . Newton ’s method for large bound constrained optimization problems . SIAM Journal on Optimization , 9:1100–1127 , 1999 .
+[ 13 ] T . Liu . Learning to rank for information retrieval . Foundations and Trends in Information Retrieval , 3:225–331 , 2009 .
+[ 14 ] LLThurstone The method of paired comparisons for social values . Journal of Abnormal and Social Psychology , 21:384–400 , 1927 .
+[ 15 ] LRFord Solution of a ranking problem from binary comparisons . American Math Monthly , 64:28–33 , 1957 .
+[ 16 ] R . Luce . Individual choice behavior : a theoretical analysis . Wiley , 1959 .
+[ 17 ] J . Nocedal and S . Wright . Numerical Optimization .
+Springer , 2000 .
+[ 18 ] T . Pfeiffer , X . A . Gao , A . Mao , Y . Chen , and D . G . Rand . Adaptive polling for information aggregation . In AAAI , 2012 .
+[ 19 ] R . Plackett . The analysis of permutations . Applied
+Statistics , 24:193–302 , 1975 .
+[ 20 ] T . Qin , X . Geng , and TYLiu A new probabilistic model for rank aggregation . In NIPS , 2010 .
+[ 21 ] RABradley and M . Terry . The rank analysis of incomplete block designs : I . the method of paired comparisons . Biometrika , 39:324—345 , 1952 .
+[ 22 ] V . Raykar , S . Yu , L . H . Zhao , G . Valadez , C . Florin ,
+L . Bogoni , and L . Moy . Learning from crowds . Journal of Machine Learning Research , 11:1297–1322 , 2010 .
+[ 23 ] B . Settles . Active learning literature survey . Technical report , University of Wisconsin–Madison , 2009 .
+[ 24 ] K . Tsukida and M . R . Gupta . How to analyze paired comparison data . Technical report , University of Washington , 2011 .
+[ 25 ] M . N . Volkovs and R . S . Zemel . A flexible generative model for preference aggregation . In WWW , 2012 . [ 26 ] J . Wang , P . G . Ipeirotis , and F . Provost . Managing crowdsourcing workers . In The 2011 Winter Conference on Business Intelligence , 2011 .
+[ 27 ] P . Welinder , S . Branson , S . Belongie , and P . Perona .
+The multidimensional wisdom of crowds . In NIPS , 2010 .
+[ 6 ] D . Gleich and L . Lim . Rank aggregation via nuclear
+[ 28 ] R . C . Weng and C J Lin . A bayesian approximation norm minimization . In KDD , 2011 .
+[ 7 ] R . Herbrich , T . Minka , and T . Graepel . Trueskill(tm ) : method for online ranking . Journal of Machine Learning Research , 12:267–300 , 2011 .
+A bayesian skill rating system . In NIPS , 2007 .
+[ 29 ] M . Woodroofe . Very weak expansions for sequentially
+[ 8 ] T K Huang , R . C . Weng , and C J Lin . Generalized bradley terry models and multiclass probability estimates . Journal of Machine Learning Research , 7:85–115 , 2006 . designed experiments : linear models . The Annals of Statistics , 17:1087–1102 , 1989 .
+[ 30 ] Y . Yan , R . Rosales , G . Fung , and J . G . Dy . Active learning from crowds . In ICML , 2011 .

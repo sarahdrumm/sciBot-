@@ -1,0 +1,581 @@
+Extreme Multi label Loss Functions for Recommendation ,
+Tagging , Ranking & Other Missing Label Applications
+Himanshu Jain , Yashoteja Prabhu
+Indian Institute of Technology Delhi himanshuj689@gmailcom , yashotejaprabhu@gmailcom
+Manik Varma
+Microsoft Research manik@microsoft.com
+ABSTRACT The choice of the loss function is critical in extreme multilabel learning where the objective is to annotate each data point with the most relevant subset of labels from an extremely large label set . Unfortunately , existing loss functions , such as the Hamming loss , are unsuitable for learning , model selection , hyperparameter tuning and performance evaluation . This paper addresses the issue by developing propensity scored losses which : ( a ) prioritize predicting the few relevant labels over the large number of irrelevant ones ; ( b ) do not erroneously treat missing labels as irrelevant but instead provide unbiased estimates of the true loss function even when ground truth labels go missing under arbitrary probabilistic label noise models ; and ( c ) promote the accurate prediction of infrequently occurring , hard to predict , but rewarding tail labels . Another contribution is the development of the PfastreXML algorithm ( code available from [ 1 ] ) which efficiently scales to large datasets with up to 9 million labels , 70 million points and 2 million dimensions and which gives significant improvements over the state ofthe art .
+This paper ’s results also apply to tagging , recommendation and ranking which are the motivating applications for extreme multi label learning . They generalize previous attempts at deriving unbiased losses under the restrictive assumption that labels go missing uniformly at random from the ground truth . Furthermore , they provide a sound theoretical justification for popular label weighting heuristics used to recommend rare items . Finally , they demonstrate that the proposed contributions align with real world applications by achieving superior clickthrough rates on sponsored search advertising in Bing .
+1 .
+INTRODUCTION
+Extreme multi label learning addresses the problem of learning a classifier that can annotate a data point with the most relevant subset of labels from an extremely large label set . Note that multi label learning is distinct from multi
+KDD ’16 , August 13 17 , 2016 , San Francisco , CA , USA cfl 2016 Copyright held by the owner/author(s ) . Publication rights licensed to ACM . ISBN 978 1 4503 4232 2/16/08 . . . $15.00 DOI : http://dxdoiorg/101145/29396722939756 class classification which aims to predict a single mutually exclusive label .
+Extreme multi label learning is an important research prob lem as it has many applications in tagging , recommendation and ranking . For instance , there are more than a million labels ( tags ) on Wikipedia and one might wish to build an extreme multi label classifier that tags a new article or web page with the subset of most relevant Wikipedia labels . Similarly , given a user ’s buying or viewing history , one might wish to build an extreme multi label classifier that recommends the subset of millions of items that the user might wish to buy or view next . In general , one can reformulate ranking and recommendation problems as extreme classification tasks by treating each item to be ranked/recommended as a separate label , learning an extreme multi label classifier that maps a user ’s feature vector to a set of labels , and then using the classifier to predict the subset of items that should be ranked/recommended to each user .
+Extreme multi label learning differs from traditional multilabel learning in a number of ways including the need for logarithmic time prediction , training at an extreme scale with millions of data points , features and labels , etc . Two aspects are germane to this paper . First , every data point has missing labels in its ground truth labelling since it is impossible for annotators to go through millions of labels and mark out the exact relevant subset . This has a fundamental impact on training , validation and performance evaluation . Second , the notion of what constitutes a good prediction changes when one moves from traditional to extreme multi label learning . In particular , due to relevant label sparsity , it is more important to accurately predict relevant labels than irrelevant ones . Furthermore , due to the power law distribution over labels , infrequently occurring tail labels have little training data and are harder to predict than frequently occurring ones but might also be more informative and rewarding . As such , design choices made for traditional multi label learning might not apply at the extreme scale .
+One of the most critical design choices is that of the loss function . It determines whether the training algorithm learns a good solution , whether hyper parameters are tuned appropriately , influences model selection and , perhaps most importantly , ensures that performance evaluation on the test set is aligned with real world application requirements .
+This paper argues that traditional multi label loss functions are unsuitable for extreme multi label learning even though they have been used extensively thus far . For instance , the popular Hamming loss [ 5 , 7 , 10 , 11 , 14 , 19 , 22 ,
+935 40 , 43 , 48 ] does not prioritize predicting the few relevant labels over the millions of irrelevant ones , erroneously treats missing labels as irrelevant , treats all relevant labels as being equally important and is biased due to missing ground truth . As a result , extreme multi label models optimized and selected using traditional loss functions might perform poorly when deployed in real world applications .
+The primary contribution of this paper is to develop loss functions suitable for extreme multi label learning . It is argued that losses which focus on ranking relevant labels as highly as possible are more suitable than the Hamming loss . Propensity scored variants of such losses , including precision@k and nDCG@k , are developed and proved to give unbiased estimates of the true loss function even when ground truth labels go missing under arbitrary probabilistic label noise models . Furthermore , it is shown that the propensity models developed in this paper based on real world applications naturally promote the accurate prediction of infrequently occurring , difficult to predict , but rewarding tail labels . This addresses both the limitations of traditional multi label loss functions as discussed in this paper . Another contribution is the development of the PfastreXML algorithm that can scale to extreme multi label datasets with up to 9 million labels , 70 million training points and 2 million dimensional features and achieves significant improvements over the state of the art . The code for PfastreXML is available from [ 1 ] .
+This paper ’s results generalize beyond extreme multi label learning and are also relevant to tagging , recommendation and ranking . Previous attempts at developing unbiased loss functions in these areas have been limited to square loss [ 17 ] , recall [ 38 ] and average discounted gain [ 26 ] under the restrictive assumption that ground truth labels go missing uniformly at random . Furthermore , the propensity models developed in this paper present a sound theoretical justification for the popular label weighting heuristics [ 9 , 12 , 35 , 39 , 44 , 47 , 49 , 51 ] used in the recommendation literature to promote the prediction of rare and novel items . Finally , the fact that higher clickthrough rates are achieved while ranking queries for sponsored search advertising in Bing demonstrates that the loss functions and algorithms proposed in this paper are better aligned with real world applications .
+2 . RELATED WORK
+Extreme multi label learning algorithms typically follow a tree [ 4 , 34 , 46 ] or an embedding based approach [ 5 , 6 , 7 , 10 , 11 , 14 , 18 , 20 , 22 , 27 , 32 , 36 , 43 , 45 , 48 , 50 ] . While some algorithms have been proposed for training with missing labels [ 23 , 40 , 48 ] under restrictive settings , aspects such as hyper parameter tuning , model selection and performance evaluation have not been addressed before . As such , the Hamming loss [ 5 , 7 , 10 , 11 , 14 , 19 , 22 , 40 , 43 , 48 ] continues to be one of the most popular losses for extreme multi label learning along with precision [ 4 , 6 , 18 , 21 , 22 , 34 , 45 , 46 ] and the F measure [ 5 , 11 , 15 , 19 , 20 , 22 , 40 , 50 ] . On the other hand , unbiased estimators for recall [ 38 ] , average discounted gain [ 26 ] and square loss [ 17 ] have been developed under the restrictive assumption that labels go missing uniformly at random from the ground truth . By contrast , this paper develops propensity scored variants of precision , nDCG and other loss functions and proves that they are unbiased even under general probabilistic label noise models .
+Propensity scoring has been used to develop unbiased es i s t n o P #
+6 10
+4 10
+2 10
+0 10 0
+Wikipedia
+Amazon i s t n o P #
+3 10
+2 10
+1 10
+0 10 0
+2
+4 Label ID
+6
+5 x 10
+2
+4 Label ID
+6
+5 x 10
+Figure 1 : Plot showing the number of times each label occurs in a dataset : 246201 and 452262 labels occur less than 5 times each in Wikipedia and Amazon respectively . Such labels are harder to predict than popular ones but might also be more informative and rewarding in certain applications . timators for observational data [ 37 ] . In machine learning , propensities have been used for bias correction in situations where the training and test data have been drawn from different distributions [ 3 ] . Propensities have also been used for off policy evaluation , whereby feedback data from the interaction logs of an existing system is used to evaluate a new system [ 8 , 24 , 25 , 41 , 42 ] .
+Label ( item ) weighting loss functions have been proposed to promote the accurate prediction of infrequently occurring labels ( rare items ) which might delight and surprise the user . For instance , denoting a label ’s normalized frequency of occurrence by pl , [ 9 , 44 , 47 , 49 , 51 ] used the heuristic of weighting each label by − log pl whereas [ 12 , 35 , 39 ] recommended a weight of p−γ/(γ+1 ) where γ ≥ 0 was a user tunable parameter . This paper provides theoretical justification for such heuristics by showing how similar weights can arise from the proposed propensity models . l
+3 . A MOTIVATING EXAMPLE
+Consider evaluating the performance of an extreme multilabel algorithm for tagging Wikipedia articles by computing a chosen loss function on the ground truth labels provided by Wikipedia ’s editors . To take a concrete example , Wikipedia ’s editors annotated the article for the Divine Comedy with 15 labels such as “ 14th century Christian texts ” , “ Epic poems in Italian ” , “ 1300 in Italy ” , etc . Note that many relevant labels such as “ Dante Alighieri ” , “ Medieval philosophical literature ” and “ Allegory ” are missing since it is impossible for any annotator or expert to go through the entire list of Wikipedia labels and select all the relevant ones . Evaluating performance using the Hamming loss leads to the following issues which can be overcome by the proposed propensity scored nDCG@k and precision@k . Relevant labels : Table 2 shows that the number of labels relevant to any given data point is far smaller than the number of irrelevant ones . Accurately predicting a relevant label is therefore more important than predicting an irrelevant one . For instance , predicting that “ Epic poems in Italian ” is relevant to the Divine Comedy is more difficult , and informative , than predicting that “ Baseball ” is irrelevant . Similarly , it is more important to accurately predict relevant labels to fill the few slots available in typical recommendation applications than it is to predict irrelevant ones . Unfortunately , the Hamming loss charges the same penalty for misclassifying relevant and irrelevant labels . Precision@k and nDCG@k avoid this by promoting the prediction of relevant labels with high ranks .
+936 Missing labels : The Hamming loss would penalize an algorithm for predicting that the label “ Dante Alighieri ” was relevant to the article for the Divine Comedy since the label was missing from the ground truth . Section 4 addresses this issue by developing propensity scored variants of precision@k and nDCG@k which provide unbiased estimates of the true loss as if computed on the complete ground truth without any missing labels .
+Tail labels : Labels follow a power law distribution in extreme multi label learning applications ( see Figure 1 ) . Infrequently occurring labels have little training data and are harder to predict than frequently occurring ones but might also be more informative and rewarding . This is particularly important on a dataset such as Wikipedia where 246201 labels occur in less than 5 articles each . For instance , little information is gained by predicting popular generic labels such as “ Poems ” for the Divine Comedy article as compared to predicting relatively infrequent labels such as “ Epic poems in Italian ” ( which implies “ Poems ” and more ) or “ 14thcentury Christian texts ” . Similarly , in certain applications , there is little to be gained by recommending popular items since users might know about them already . Predicting rare items might be more desirable in these cases . While existing losses treat all labels as equal , Section 5 develops a propensity model that naturally promotes the accurate prediction of infrequent labels with high ranks .
+4 . PROPENSITY SCORED LOSSES
+This Section develops propensity scored variants of precision@k , nDCG@k and other popular loss functions ( see Table 1 for examples ) . It is proved that the proposed propensity scored losses computed on the observed labels provide unbiased estimates of the true loss function computed on the complete ( but unobtainable ) ground truth without any missing labels .
+Label representation : Extreme multi label learning deals with applications having an extremely large number of labels L where it is not possible for any annotator to select the exact relevant label subset for even a single data point . Let y∗ , y ∈ {0 , 1}L denote the complete ( but unobtainable ) and observed ( but with missing labels ) ground truth label vectors for a given data point such that y∗ l = yl = 1 for observed relevant labels , y∗ l = 1 , yl = 0 for unobserved rele
+Table 1 : ( a ) presents unbiased propensity scored loss functions L(y , ˆy ) corresponding to precision@k and nDCG@k for an unrestricted probabilistic label noise model which is the focus of this paper . The unbiased losses in ( b ) , including the Mean Reciprocal Rank ( MRR ) and the Average Discounted Gain ( ADG ) , require either knowledge of 1⊤y∗ or that labels go missing with probability 1 − gl/1⊤y∗ with known gl ( except for the F score ) . Note that ˆy has only k non zero entries for precision@k , nDCG@k and recall@k and that rl represents the rank of label l in ˆy .
+( a )
+Gain
+−L(y , ˆy )
+Precision@k nDCG@k
+Hamming
+Loss
+1 pl
+1 yl ˆyl
+1 pl yl ˆyl pl log(rl+1 ) log(1+l ) k Pl Pl Pk ( 2ˆyl − 1 ) yl − ˆy2 l=1
+1 l
+Gain
+Recall@k
+MRR
+ADG
+Fβ score
+( b )
+−L(y , ˆy )
+1
+1 pl
+1
+1 yl ˆyl yl plrl yl
+1⊤y∗ Pl 1⊤ y∗ Pl 1⊤y∗ Pl β2(1⊤y∗)+1⊤ ˆy Pl
+( 1+β2 ) pl log(rl+1 )
+1 pl yl ˆyl vant labels and y∗ l = yl = 0 for irrelevant labels . Continuing with the example of the Divine Comedy from Section 3 , y∗ l = yl = 1 for the observed relevant label “ Epic poems in Italian ” , while y∗ l = 1 , yl = 0 for the relevant , but missing , label “ Dante Alighieri ” and y∗ l = yl = 0 for the irrelevant label “ Baseball ” . Furthermore , it is assumed that the noise in the labelling process is one sided and that irrelevant labels are never marked as relevant . For instance , Wikipedia ’s editors are not malicious and never allow an article to be tagged with an irrelevant label . Note that , even if this mild assumption was violated , it might be possible to hire annotators to weed out the irrelevant tags . Also note that , since y∗ is unavailable , this label representation does not assume that the position of missing labels is known unlike previous work [ 48 ] . Finally , let ˆy ∈ {0 , 1}L denote an algorithm ’s predicted label vector for a given data point .
+Propensities : The propensity pil ≡ P ( yil = 1|y∗ il = 1 ) denotes the marginal probability of a relevant label l being observed for a data point i . No constraints have been placed on the propensities apart from the fact that label noise is one sided – i . e . P ( yil = 1|y∗ In particular , it is not assumed that labels go missing independently or uniformly at random . Note that , for notational convenience , the subscript i will be dropped from pil even though the propensity depends on both the label l and the data point i . il = 0 ) = 0 . l:y∗ l ( y∗ l =1 L∗ l , ˆyl ) = PL
+Propensity scored loss functions : Let L∗(y∗ , ˆy ) = PL l=1 L∗ l ( 1 , ˆyl ) denote the family of loss functions which decompose over individual labels l and are computed over the relevant labels alone ( {l|y∗ l = 1} ) . L∗ represents the true loss function measuring the loss incurred for predicting ˆy when the complete ground truth vector was y∗ . Training and performance evaluation using L∗ is desirable but infeasible as y∗ is unavailable . The propensity scored variant of L∗ computed on the observed l:yl=1 Ll(1 , ˆyl ) = l ( 1 , ˆyl)/pl . Then the following theorem implies that L can be a viable proxy for L∗ for training , model selection , hyperparameter tuning and performance evaluation . ground truth y is defined to be L(y , ˆy ) = PL PL l:yl=1 L∗
+Theorem 41 The loss function L(y , ˆy ) evaluated on the observed ground truth y is an unbiased estimator of the true loss function L∗(y∗ , ˆy ) evaluated on the complete ground truth y∗ . Thus , Ey[L(y , ˆy ) ] = Ey∗ [ L∗(y∗ , ˆy) ] , for any P ( y∗ ) and P ( y ) related through propensities pl and any fixed ˆy .
+Proof . Please click here for the supplementary material containing the proof .
+Theorem 4.1 covers loss functions which decompose over individual labels such as precision@k and nDCG@k which are the primary focus of this paper . Unbiased estimators of recall , average discounted gain , mean reciprocal rank and other relevant non decomposable loss functions can also be derived if it is assumed that P ( y∗ ) is a delta function implying that each ground truth label is either definitely relevant or definitely irrelevant ( with no uncertainty ) to the data point being annotated .
+Theorem 42 If P ( y∗ ) is a delta function then Ey[L(y , ˆy ) ]
+= Ey∗ [ L∗(y∗ , ˆy ) ] for non decomposable loss functions of the form L∗(y∗ , ˆy ) = PL
+L∗ l ( 1 , ˆyl ) g∗(y∗,ˆy)pl l:y∗ l =1
+L∗ l ( 1 , ˆyl ) g∗(y∗,ˆy ) and L(y , ˆy ) = PL l:yl=1 with arbitrary propensities pl .
+937 1
+0.8
+0.6
+0.4
+0.2 l p
+Propensities on Wikipedia
+1
+0.8
+0.6
+0.4
+0.2 l p
+Propensities on Amazon
+15
+Weights on Wikipedia
+1/p l −β αN l a log(N/N
+) + b l
+2
+4
+6 log
+( N ) l e
+8
+10
+12
+20
+15 l w
+10
+5
+0 0
+Weights on Amazon
+1/p l −β αN l a log(N/N
+) + b l
+2
+4 log
+( N ) l e
+6
+8
+10 l w
+5
+0 0
+0 0
+2
+4
+6 log
+8 ( N ) e l
+10
+12
+0 0
+2
+4 log
+6 ( N ) l e
+8
+10
+Figure 2 : Propensities pl and their corresponding weights wl = 1/pl on Wikipedia and Amazon . The estimated propensities follow a sigmoidal curve on the semi log plot and provide a principled setting of the weights for recommending rare items as compared to popular heuristics such as N −β and log(N/Nl ) . l
+Proof . Please click here for the supplementary material containing the proof .
+Note that Theorem 4.2 is useful only if g∗(y∗ , ˆy ) can be evaluated even though y∗ is unknown . This is certainly possible in some applications . For instance , in the case of recall , g∗(y∗ , ˆy ) = 1⊤y∗ counts how many labels were relevant in the complete ground truth . This can be readily estimated by counting the number of face detections ( 1⊤y∗ ) in a given image in name tagging applications on Facebook even though the name of each individual might not be known ( y∗ is unknown ) . Alternatively , if g∗(y∗ , ˆy ) is unknown , the following corollary derives unbiased estimators when g∗(y∗ , ˆy ) = g∗(y∗ ) and labels go missing with probability 1−gl/g∗(y∗ ) with known gl . Note that this generalizes the results of [ 26 , 38 ] which assume that labels go missing uniformly at random with constant gl = 1⊤y .
+Corollary 421 If P ( y∗ ) is a delta function and labels are retained with propensities pl = gl/g∗(y∗ ) , then Ey[L(y , ˆy ) ] = Ey∗[L∗(y∗ , ˆy ) ] for non decomposable loss functions of the form L∗(y∗ , ˆy ) = PL l ( 1 , ˆyl )
+L∗ l:y∗ l =1
+.
+L∗ l ( 1 , ˆyl ) g∗(y∗ ) and L(y , ˆy ) = PL l:yl=1 gl Proof . Please click here for the supplementary material containing the proof .
+The theorems so far prove that the propensity scored losses are unbiased in expectation . In practice , one can only compute the propensity scored loss on the observed labels rather than in expectation over y . The following theorem shows that the bias induced by this point estimate depends on the average number of relevant labels rather than the total number of labels and that it reduces as the number of points over which the loss is computed is increased .
+Theorem 43 ( Concentration bound ) Let Y = {yi ∈ i=1 be a set of N independent observed ground truth
+{0 , 1}L}N random variables . Then with probability at least 1 − δ
+N PN fififi EY h 1 where ρ = maxilfififi i=1 L(yi , ˆyi)i − 1 N PN i ,ˆyi ) fififi
+2 and L∗ i is the maximum number of labels that can be relevant to a data point i in the complete ground truth . i=1 L(yi , ˆyi)fififi , ¯L = q 1 N PN
+≤ ρ ¯Lq 1 i=1 L∗ i l ( yil , ˆyil ) g(y∗
+1 pil
+2N log , 2 δ
+L∗
+Proof . Please click here for the supplementary material containing the proof .
+Finally , an unbiased estimator can also be derived for the Hamming loss even though other loss functions , such as precision@k and nDCG@k , might be preferable
+Theorem 44 For any P ( y∗ ) and P ( y ) related through propensities pl and any fixed ˆy , Ey[L(y , ˆy ) ] = Ey∗ [ L∗(y∗ , ˆy ) ] l is an unbiased esl − ylk2 with where L(y , ˆy ) = Pl 1 timator of the Hamming loss L∗(y∗ , ˆy ) = Pl ky∗ concentration bound ρ ¯Lq 1
+( 1 − 2ˆyl ) yl + ˆy2
+2N log ( 2/δ ) where ρ = maxil ( 1/pil ) . pl
+Proof . Please click here for the supplementary material containing the proof .
+5 . PROPENSITY MODEL
+The unbiased variants of precision@k , nDCG@k and other loss functions developed in Section 4 require that the marginal propensities of labels being retained is known . Unfortunately , propensities are generally unknown as y∗ is unavailable due to the large label space . Based on empirical observation , this Section proposes that the propensities might be modelled as a sigmoidal function of log Nl pl ≡ P ( yl = 1|y∗ l = 1 ) =
+1
+1 + Ce−A log(Nl+B )
+( 1 ) where Nl is the number of data points annotated with label l in the observed ground truth dataset of size N and A , B are application specific parameters and C = ( log N −1)(B +1)A . In particular , propensities are estimated on Wikipedia and Amazon where meta data is available for the task and shown to give a close fit to ( 1 ) ( see Figure 2 ) .
+Tagging on Wikipedia ( A = 0.5 , B = 0.4 ) : The marginal propensity of a label can be estimated as pl = Nl/N ∗ l where Nl and N ∗ l are the number of times the label occurred in the observed and complete ground truth respectively . Estimates of N ∗ l can be obtained for Wikipedia by leveraging its hierarchy . It is assumed that if a label is relevant to a Wikipedia article then so are all its ancestor labels . For instance , the Divine Comedy article has been annotated with “ 1300 in Italy ” and should therefore have also been annotated with its ancestor “ 14th century in Italy ” . Examining all Wikipedia articles revealed that 45 articles were annotated with a descendant of the label “ 14th century in Italy ” but only 10 were annotated with the label itself resulting in a propensity estimate of pl = 10/(10 + 45 ) = 0182 This procedure was carried out for all labels with more than 4 descendants for robust estimation . Labels with similar frequencies were binned together in an equiheight histogram with 20 labels per bin . Figure 2 plots the average propensity per bin as a function of label frequency on a log scale . As can be seen , the proposed sigmoid propensity model with parameters A = 0.5 and B = 0.4 is a close fit to the estimated propensities .
+938 Product recommendation on Amazon ( A = 0.6 , B = 2.6 ) : The item to item recommendation task on Amazon is to predict the subset of items ( labels ) that a user might buy along with a given item . In this case , Nl represents the number of items that item l was bought along with in the observed dataset ( across all transactions ) while N ∗ l represents the total number of items that item l could have been bought along with . While Nl is known , N ∗ l can be estimated by figuring out which items could have been substituted in place of the ones that item l was bought along with . It has been argued that substitutable products can be inferred from the “ also viewed ” items while complimentary items can be inferred from the “ also bought ” items [ 28 , 30 ] . Following this principle , N ∗ l can be estimated as the total number of unique items viewed along with items that item l was “ also bought ” along with . For robustness , propensities pl = Nl/N ∗ l were estimated only for those items for which “ also viewed ” information was available for each of the items that item l was “ also bought ” with . Items with similar Nl were binned together in an equiheight histogram as in the case of Wikipedia . Figure 2 plots the average propensity per bin as a function of item frequency on a log scale . As can be seen , the proposed sigmoid propensity model with parameters A = 0.6 and B = 2.6 is a close fit to the estimated propensities .
+Recommending rare items : It is important to remove the popularity bias and recommend rare/novel items in many applications [ 9 , 12 , 35 , 39 , 44 , 47 , 49 , 51 ] . A common heuristic is to weight each item inversely to its popularity and to assign weighted rewards for accurate recommendations . Weights have often been set in an ad hoc fashion as wl ∝ N −β
+[ 12 , 35 , 39 ] or wl ∝ log(N/Nl ) [ 9 , 44 , 47 , 49 , 51 ] . l Such weights arise naturally as inverse propensities in the unbiased losses developed in this paper . As can be seen from ( 1 ) and Table 1 , each label in the proposed unbiased losses has a weight given by wl = 1/pl = 1 + C(Nl + B)−A
+( 2 ) which somewhat matches ( Nl + B)−A and log(N/Nl ) in different ranges of Nl ( see Figure 2 ) . This not only provides a sound theoretical justification of label weighting heuristics for recommending rare items but also leads to a more principled setting of the weights .
+Other datasets : Propensity estimation might not be possible on datasets where meta information is not available . In such cases , it is recommended that A = ( 0.5 + 0.6)/2 = 0.55 and B = ( 0.4 + 2.6)/2 = 1.5 are set to their values averaged over Wikipedia and Amazon . This was verified to be reasonably close to the parameter settings on the Wiki10 dataset ( A = 0.55 , B = 01 )
+6 . ALGORITHMS
+This Section develops the PfastreXML algorithm for extreme multi label learning . PfastreXML optimizes propensity scored nDCG by leveraging FastXML [ 34 ] for nDCG optimization . PfastreXML then further extends FastXML to improve tail label prediction which is the most challenging aspect of extreme multi label learning . PfastreXML achieves this at scale by making key approximations which increase FastXML ’s training time by just seconds while retaining the prediction accuracy gains of the extension .
+6.1 Propensity scored FastXML
+Classifier architecture : Propensity scored FastXML ( PfastXML ) shares the same architecture as FastXML [ 34 ] which learns an ensemble of trees during training . Trees are grown by recursively partitioning nodes starting at the root until each tree is fully grown . Nodes are split by learning a separating hyperplane which partitions training points between a left and a right child . The FastXML hyperplane is learnt by optimizing nDCG such that each training point ’s relevant labels are ranked as highly as possible in its partition . Node partitioning terminates when a node contains less than a user specified number of points . Leaf nodes contain a probability distribution over labels generated by normalizing the frequency counts of all the training labels reaching the node .
+Predictions are made in logarithmic time by passing a test point down each of the balanced trees in the ensemble . The test point is sent to an internal node ’s left ( right ) child if it lies on the negative ( positive ) side of the separating hyperplane at that node . The label distributions of all the leaves containing the test point are aggregated in order to make a prediction as follows :
+Ppf(y∗|x ) = PT t=1 Pleaf t T
+( x )
+( 3 )
+Propensity scored objective function : PfastXML improves upon FastXML by replacing the nDCG loss with its propensity scored variant which is unbiased and assigns higher rewards for accurate tail label predictions . Given a set of N training points at a node {(xi , yi)N i=1} with features xi ∈ RD and observed ground truth label vectors yi ∈ {0 , 1}L , PfastXML ’s separating hyperplane w∗ at the node is given by the optimal solution of min log(1 + e−δiw
+⊤ xi )
+1 kwk1 + CδXi + Cr Xi + Cr Xi
+1
+2 ( 1 + δi)LPSnDCG@L(r+ , yi )
+2 ( 1 − δi)LPSnDCG@L(r− , yi )
+( 4 ) w . r . t . w ∈ RD , δ ∈ {−1 , +1}L , r+ , r− ∈ Π(1 , L ) yl
+1 pl log(rl+1 ) where LPSnDCG@L(r , y ) = − Pl PL the training points present at the node being partitioned , δi ∈ {−1 , +1} indicates whether point i was assigned to the negative or positive partition and r+ and r− represent the predicted label rankings for the positive and negative partition respectively .
+, i indexes all log(1+l ) l=1
+Optimization : Note that FastXML ’s objective function il = can be recovered from PfastXML ’s by substituting yp yil/pil – i . e . by replacing each label yil with label yp objective function can therefore be optimized by FastXML ’s iterative alternating optimization applied to yp il . In each iteration , the algorithm fixes w and alternates between optimizing δ and r± using efficient closed form solutions until a stationary point is reached according to Theorem 1 of [ 34 ] . Then δ and r± are fixed and w is optimized by solving a standard l1 regularized logistic regression binary classification problem using Liblinear [ 13 ] . il . PfastXML ’s
+Scale : PfastXML enjoys all the scaling properties of FastXML and is therefore one of the most efficient extreme multi label
+939 Table 2 : Dataset statistics
+Dataset
+EUR Lex AmazonCat 13K Wiki10 31K WikiLSHTC 325K Amazon 670K Ads 9M
+Train
+N 15,539 1,186,239 14,149 1,778,351 490,449 70,455,530
+Features
+D 5,000 203,882 101,938 1,617,899 135,909 2,082,698
+Labels
+L 3,993 13,330 30,935 325,056 670,091 8,838,461
+Test M
+3,809 306,782 6,613 587,084 153,025 22,629,136 per label
+Avg . labels Avg . points per point 5.31 5.05 17.25 3.26 5.38 1.79
+25.73 566.01 11.58 23.74 5.17 14.32 learning algorithm for large scale problems . It could train on WikiLSHTC 325K ( 325 K labels , 1.7 M training points and 1.6 M dimensions ) and Ads 9M ( 9 M labels , 70 M training points and 2 M dimensions ) in less than 30 minutes and 17 hours respectively using a 16 core Intel Xeon 2.6 GHz server . In contrast , MLRF [ 4 ] required 4 and 42 hours on a thousand core cluster for training on these datasets and resulted in significantly lower prediction accuracies [ 34 ] . No other algorithm has been shown to scale to datasets of the size of Ads 9M to the best of our knowledge . Equally importantly in terms of scaling , PfastXML ’s predictions required less than 1.5 milliseconds per test point even at the largest scale which is critical for deployment in real world applications .
+6.2 PfastreXML
+Propensity scoring improves FastXML but tree classifiers are still prone to predicting tail labels with low probabilities as partitioning errors in the internal nodes disproportionately reduce the support of tail labels in the leaf node distributions . PfastreXML addresses this limitation by reranking PfastXML ’s predictions using classifiers designed specifically for tail labels . PfastreXML ’s training and prediction routines are shown in Algorithms 2 and 3 of the supplementary material while code is available from [ 1 ] .
+Tail label classifiers : It is assumed that each label can be predicted independently based on a hyperspherical decision boundary generated by
+P ( y∗ il|xi ) = 1/(1 + v2y∗ il−1 il
+) where vil = e
+γ
+2 kxi−µlk2
+2
+( 5 )
+Discriminative MLE estimation of the parameters {µl} on the observed training data {(xi , yi)N i=1} with features xi ∈ RD and observed ground truth label vectors yi ∈
+{0 , 1}L can be carried out as arg max{µl}QN y∗ il=0 il|xi ) where it has been reasonably assumed il , xi ) = P ( yil|y∗
+P ( yil|y∗ il)P ( y∗ that P ( yil|y∗ i=1 QL l=1P1 il ) .
+Optimization : Taking the log leads to L independent optimization problems
+µ∗ l = arg max
+µl
+N
+Xi=1 log(1 − yil ) + pil(2yil − 1 )
+1 + vil
+( 6 ) where uil = vil 1+vil
+Taking the gradient and equating it to zero yields µ∗ l = PN i=1 uilxi . Note that this is PN i=1 uil not a closed form solution since vil is a function of µ∗ l and hence one needs to apply an optimization technique , such as stochastic gradient descent , to obtain µ∗ l .
+− ( 1−yil)vil 1+vil −pil
+Approximation : Unfortunately , stochastic gradient descent is too expensive at the scale of Ads 9M . A simple , yet effective , approximation is therefore proposed which allowed training on Ads 9M in 18 minutes on a single core ( all other datasets were trained in less than 20 seconds ) , led to sparse solutions taking up only 2.64 Gigabytes of RAM for Ads 9M and reduced prediction accuracy over the stochastic gradient descent solution by 0.2 % as measured on the smaller datasets . In particular , assuming that γ 2 kxi − µlk2 ≫ 0∀ i ∈ {1 , , N } , led to the simplification uil ≈ yil yielding
+µ∗ l = PN PN i=1 yilxi i=1 yil
+( 7 )
+Thus , each µ∗ l turns out to be the mean of the training points for which the label was observed to be relevant . This implies that solutions preserving data sparsity can be efficiently computed for millions of tail labels as each of them has only a handful of training points .
+Re ranking : The final ranked list of labels is predicted by sorting a linear combination of ( 3 ) and ( 5 ) sl = α log Ppf(y∗ l = 1|x ) + ( 1 − α ) log P ( y∗ l = 1|x )
+( 8 ) restricted to those l for which Ppf(y∗ l = 1|x ) 6= 0 . Note that the re ranking takes place in 0.13 milliseconds per point on Ads 9M so that the overall prediction time continues to be less than 1.5 milliseconds per test point .
+7 . EXPERIMENTS
+Experiments were carried out on a synthetic dataset to show that the proposed propensity scored loss functions are unbiased and preferable for both training and performance evaluation . Experiments were also carried out on the largest benchmark datasets demonstrating that PfastreXML could achieve significantly higher prediction accuracies as compared to the state of the art . Improvements in the clickthrough rates on Bing Ads indicated that the proposed loss functions and algorithms were better suited for real world applications .
+Datasets : Experiments were carried out on extreme multi label datasets including Ads 9M , Amazon 670K [ 6 , 29 ] , Wiki1031K [ 6 , 52],WikiLSHTC 325K [ 33 , 34 ] , AmazonCat 13K [ 29 ] and EUR Lex [ 31 ] . The Ads 9M dataset is proprietary . All the other datasets are publically available and can be downloaded from The Extreme Classification Repository [ 2 ] . The tasks include annotating Wikipedia articles with the subset of relevant 325 K Wikipedia tags , item to item recommendation on Amazon with 670 K items and ranking 9 M queries for sponsored search advertising on Bing . Table 2 lists the statistics of these datasets .
+Baseline algorithms : PfastreXML was compared to a number of baseline extreme multi label algorithms including FastXML [ 34 ] and SLEEC [ 6 ] which are the leading tree and embedding based approaches respectively . Other
+940 1
+0.8
+0.6
+0.4
+0.2 y t i s n e p o r P
+32 % ( A=0.9 ) 45 % ( A=0.7 )
+A=0.55 60 % ( A=0.5 )
+75 % ( A=0.3 )
+86 % ( A=0.1 )
+0 0
+2
+4 ( N log ) l e
+6
+8
+( a )
+70
+60
+50
+40
+30
+20
+10
+)
+%
+(
+3 @ G C D n
+20
+EUR−Lex nDCG@3 with missing labels nDCG@3 without missing labels Propensity scored nDCG@3
+40
+60
+80
+% of missing labels per point
+EUR−Lex
+FastXML PfastXML
+65
+60
+55
+50
+45
+40
+)
+%
+(
+3 @ G C D n
+35
+20
+40
+80 % of missing labels per point
+60
+57
+56
+55
+54
+)
+%
+(
+3 @ G C D n
+53
+0
+0.2
+( b )
+( c )
+EUR−Lex
+FastXML PfastXML True PfastXML
+0.4
+0.6
+0.8
+1
+A ( d )
+Figure 3 : ( a ) propensity curves used for simulating missing labels on the EUR Lex dataset with each curve labelled with the corresponding percentage of missing labels ; ( b ) propensity scored nDCG@k is unbiased ; ( c ) propensity scoring improves training ; and ( d ) training using incorrect propensities ( A 6= 0.55 ) might be better than training without propensities . See text for details . Figure best viewed under magnification . baseline algorithms include 1 vs All [ 16 ] , LEML [ 48 ] , WSABIE [ 45 ] , CPLST [ 10 ] , CS [ 18 ] , ML CSSP [ 7 ] and LPSR [ 46 ] . A Popularity baseline was also included which predicted a constant ranking of the most frequently occurring labels in each dataset . Unfortunately , some of the algorithms did not scale beyond the EUR Lex dataset and results are presented in Table 3 .
+Implementations of SLEEC , FastXML , LEML and 1 vsAll were provided by the authors . The remaining algorithms were implemented by us taking care to ensure that the published results could be reproduced and were verified by the authors wherever possible .
+Hyper parameters : PfastreXML has 2 hyper parameters
+α , γ in addition to FastXML ’s hyper parameters . These were set to constants α = 0.8 , γ = 30 across all datasets . All of FastXML ’s hyper parameters were also set to constant default values across all datasets as was done in [ 34 ] . This helps significantly reduce training time by eliminating hyper parameter tuning . The hyper parameters for all the other algorithms were set using fine grained validation on each data set so as to achieve the highest possible prediction accuracy .
+Evaluation metrics : Given a set of M test points , performance was evaluated using the unbiased propensity scored loss functions of Table 1 as G({ˆyi} ) = −1 i=1 L(yi , ˆyi ) . Note that the gain G could be greater than 1 due to the propensities . Therefore , for greater interpretability , Table 3 reports 100∗G({ˆyi})/G({yi} ) for Precision@k and nDCG@k , referred to as Pk and Nk respectively , for k = 1 , 3 and 5 . Coverage@k measuring the percentage of normalized unique labels present in the top k = 1 , 3 and 5 predictions made by an algorithm across all test points is also reported as Ck .
+M PM
+Simulations : It was assumed that the complete ground truth was available for the EUR Lex dataset and missing labels were simulated according to the propensity curves shown in Figure 3a .
+In the second experiment , FastXML was trained on missing labels by optimizing nDCG while PfastXML was trained on the same set by optimizing propensity scored nDCG . Both methods were evaluated using nDCG@3 computed on the complete ground truth with no missing labels . As Figure 3c shows , PfastXML consistently outperformed FastXML thereby indicating that propensity scoring could improve training . A related concern might be that PfastXML ( or PfastreXML ) might outperform FastXML just because it optimizes the loss function being used for evaluation while FastXML does not . This experiment demonstrates otherwise as PfastXML was trained using propensity scored nDCG but evaluated using standard nDCG . Results of similar experiments on the benchmark datasets are provided in the supplementary material .
+Finally , Figure 3d demonstrates that training with incorrect propensities might be better than training with no propensities . In this experiment , labels were removed from the training set using a reference propensity curve depicted in bold in Figure 3a . FastXML and PfastXML were trained on this set and their performance evaluated using nDCG@3 computed on the complete test set without any missing labels . PfastXML was then trained on the very same training set but using incorrect propensities ( also shown in Figure 3a with A 6= 055 ) As can be seen , PfastXML trained on incorrect propensities could outperform FastXML trained without propensities . This indicates that using even incorrect propensity estimates might be beneficial in certain situations as compared to using no propensities .
+Benchmark Results : Table 3 compares PfastreXML ’s performance to that of state of the art SLEEC , FastXML and other baseline algorithms using unbiased precision and nDCG . As can be seen , the proposed PfastXML and PfastreXML lead to significantly better prediction accuracies as compared to the state of the art . PfastreXML ’s improvements ranged from 3 % on Ads 9M to more than 20 % on AmazonCat 13K . Figure 4 shows that most of these improvements were made for infrequently occurring tail labels . In addition , Table 4 shows that PfastreXML predicted a larger number of unique labels than SLEEC or FastXML further indicating that PfastreXML had better coverage in the tail .
+PfastreXML also improves upon PfastXML ’s prediction accuracy with negligible training and prediction overheads . For instance , PfastXML could train on WikiLSHTC 325K and Ads 9M in less than 30 minutes and 17 hours respectively using a 16 core Intel Xeon 2.6 GHz server . PfastreXML took an extra 12 seconds and 18 minutes for training on these datasets using a single core . PfastreXML ’s predictions took an extra 0.13 milliseconds per test point over PfastXML ’s and continued to be under 1.5 milliseconds .
+Sponsored search on Bing : PfastreXML ’s query rankings were also used to serve ads on the Bing search engine . PfastreXML was observed to give an improvement of sig
+941 Table 3 : The proposed PfastreXML and PfastXML algorithms make significantly more accurate predictions as compared to state of the art SLEEC , FastXML and other baseline algorithms . PfastreXML ’s predictions are more accurate than PfastXML ’s with negligible training and prediction overheads . Performance is evaluated according to the unbiased propensity scored Precision@k ( Pk ) and nDCG@k ( Nk ) for k = 1 , 3 and 5 .
+( a ) EUR Lex N = 15K , D = 5K , L = 4K
+Algorithm Popularity 1 vs All SLEEC LEML WSABIE CPLST CS ML CSSP FastXML LPSR PfastXML PfastreXML
+N1( % ) N3( % ) N5( % ) P1( % ) P3( % ) P5( % ) 2.62 46.17 44.62 29.13 36.99 34.55 25.13 28.97 39.95 42.17 46.67 48.08
+1.80 37.97 35.45 24.33 31.65 28.93 25.31 25.25 27.61 33.65 41.31 45.38
+2.10 42.44 39.79 26.45 34.12 31.60 26.98 26.70 33.22 38.20 44.01 46.42
+1.80 37.97 35.45 24.33 31.65 28.93 25.31 25.25 27.61 33.65 41.31 45.38
+2.20 44.01 41.35 27.22 35.04 32.57 27.57 27.27 35.35 39.88 45.02 46.79
+2.36 43.97 41.97 27.70 35.43 32.92 25.71 27.79 36.28 39.82 45.13 47.25
+( b ) AmazonCat 13K N = 1.18M , D = 203K , L = 13K
+Algorithm Popularity SLEEC FastXML PfastXML PfastreXML
+N1( % ) N3( % ) N5( % ) P1( % ) P3( % ) P5( % ) 12.95 65.96 68.50 74.32 75.21
+14.41 46.75 46.58 67.44 69.05
+13.08 55.19 55.48 70.70 71.79
+14.41 46.75 46.58 67.44 69.05
+13.22 60.08 61.59 72.27 73.33
+12.59 58.46 59.00 71.94 72.83
+( c ) Wiki10 31K N = 14K , D = 101K , L = 31K
+Algorithm Popularity SLEEC FastXML PfastXML PfastreXML
+N1( % ) N3( % ) N5( % ) P1( % ) P3( % ) P5( % ) 2.29 13.96 10.42 16.71 18.93
+2.30 13.43 10.31 15.62 21.32
+2.26 13.66 10.18 16.05 19.97
+2.30 13.43 10.31 15.62 21.32
+2.25 13.75 10.14 16.20 19.53
+2.28 13.81 10.35 16.42 19.48
+( d ) WikiLSHTC 325K N = 1.78M , D = 1.62M , L = 325K
+Algorithm Popularity SLEEC FastXML PfastXML PfastreXML
+N1( % ) N3( % ) N5( % ) P1( % ) P3( % ) P5( % ) 1.53 25.23 23.69 28.59 33.35
+2.56 20.51 16.52 25.58 31.16
+1.91 22.45 19.70 26.55 31.56
+2.56 20.51 16.52 25.58 31.16
+1.65 23.32 21.12 27.01 31.80
+1.83 23.52 21.17 27.42 32.40
+Table 4 : PfastreXML has more unique labels Ck in the top k = 1 , 3 and 5 predictions across all test points in a dataset as compared to SLEEC or FastXML indicating that it has better coverage of tail labels .
+( a ) EUR Lex N = 15K , D = 5K , L = 4K
+Algorithm 1 vs All SLEEC FastXML PfastreXML
+C1 ( % ) C3 ( % ) C5 ( % ) 53.82 49.26 40.49 62.31
+33.50 27.21 16.39 48.81
+44.29 38.10 28.39 56.29
+( b ) AmazonCat 13K N = 1.18M , D = 203K , L = 13K
+Algorithm SLEEC FastXML PfastreXML
+C1 ( % ) C3 ( % ) C5 ( % ) 49.16 53.69 86.49
+8.62 2.13 83.03
+23.50 15.76 85.12
+( c ) Wiki10 31K N = 14K , D = 101K , L = 31K
+Algorithm SLEEC FastXML PfastreXML
+C1 ( % ) C3 ( % ) C5 ( % ) 6.59 2.88 17.67
+5.73 2.12 18.48
+5.94 1.57 25.67
+( d ) WikiLSHTC 325K N = 1.78M , D = 1.62M , L = 325K
+Algorithm SLEEC FastXML PfastreXML
+C1 ( % ) C3 ( % ) C5 ( % ) 30.11 23.29 40.67
+14.06 9.52 29.63
+24.53 18.43 36.45
+( e ) Amazon 670K N = 490K , D = 136K , L = 670K
+Algorithm SLEEC 24.19 FastXML PfastreXML
+C1 ( % ) C3 ( % ) C5 ( % )
+26.18 22.06 34.58
+30.97 25.25 36.41
+30.94 40.13
+( e ) Amazon 670K N = 490K , D = 136K , L = 670K
+( f ) Ads 9M N = 70.45M , D = 2.08M , L = 8.84M
+Algorithm Popularity SLEEC FastXML PfastXML PfastreXML
+N1( % ) N3( % ) N5( % ) P1( % ) P3( % ) P5( % ) 0.04 25.98 27.28 29.09 32.80
+0.03 20.62 20.20 25.61 29.93
+0.04 22.63 22.94 26.95 30.91
+0.03 20.62 20.20 25.61 29.93
+0.04 23.32 23.88 27.42 31.26
+0.04 24.43 25.26 28.09 31.94
+( f ) Ads 9M N = 70.45M , D = 2.08M , L = 8.84M
+Algorithm FastXML PfastreXML
+C1 ( % ) C3 ( % ) C5 ( % ) 4.33 8.09
+3.94 7.45
+3.26 6.04
+Algorithm Popularity FastXML PfastXML PfastreXML
+N1( % ) N3( % ) N5( % ) P1( % ) P3( % ) P5( % ) 0.12 17.26 18.22 20.50
+0.05 12.89 13.27 13.52
+0.08 14.86 15.39 16.43
+0.09 15.88 16.49 17.95
+0.05 12.89 13.27 13.52
+0.09 15.61 16.32 17.79 nificantly more than 5 % in the clickthrough rate over both FastXML and the highly specialized system in production
+( which was a large ensemble of many different ranking techniques ) . Note that the production system was very good at predicting head queries with high ranks and that PfastreXML was rewarded for making only those predictions which could not be made by the production system . Accurately ranking tail queries highly was therefore critical in this case and PfastreXML was able to successfully serve ads which had never received clicks before . This helps verify that the propensity scored loss functions and proposed algorithm align with the requirements of real world applications .
+942 EUR−Lex
+EUR−Lex
+Wiki10−31K
+Wiki10−31K
+)
+%
+(
+1 P o t n o i t u b i r t n o C
+)
+%
+(
+1 P o t n o i t u b i r t n o C
+FastXML SLEEC PfastreXML
+2 log
+4 ( N ) e l
+WikiLSHTC−325K
+6
+FastXML SLEEC PfastreXML
+2
+1.5
+1
+0.5
+0 0
+2.5
+2
+1.5
+1
+0.5
+0 0
+2
+4
+6 log
+8 ( N ) e l
+10
+12
+)
+%
+(
+5 P o t n o i t u b i r t n o C
+)
+%
+(
+5 P o t n o i t u b i r t n o C
+FastXML SLEEC PfastreXML
+2 log
+4 ( N ) e l
+WikiLSHTC−325K
+6
+FastXML SLEEC PfastreXML
+1
+0.8
+0.6
+0.4
+0.2
+0 0
+1.5
+1
+0.5
+0 0
+2
+4
+6 log
+8 ( N ) e l
+10
+12
+)
+%
+(
+1 P o t n o i t u b i r t n o C
+)
+%
+(
+1 P o t n o i t u b i r t n o C
+3
+2
+1
+0 0
+6
+4
+2
+0 0
+FastXML SLEEC PfastreXML
+)
+%
+(
+5 P o t n o i t u b i r t n o C
+FastXML SLEEC PfastreXML
+2
+1.5
+1
+0.5
+2
+4 ( N log ) l e
+6
+Amazon−670K
+8
+FastXML SLEEC PfastreXML
+2
+4 ( N log ) l e
+6
+8
+)
+%
+(
+5 P o t n o i t u b i r t n o C
+0 0
+4
+3
+2
+1
+0 0
+2 log
+4 ( N ) l e
+6
+Amazon−670K
+8
+FastXML SLEEC PfastreXML
+2 log
+4 ( N ) l e
+6
+8
+Figure 4 : Plot showing the contribution of each label to the overall propensity scored Precision@1 and Precision@5 . PfastreXML is significantly more accurate at predicting infrequently occurring ( small Nl ) tail labels . Figure best viewed under magnification
+8 . CONCLUSIONS
+This paper developed loss functions suitable for extreme multi label learning and long tail , missing label applications such as ranking , recommendation and tagging . Propensity scored variants of precision and nDCG were developed and proved to give unbiased estimates of the true loss function evaluated on the complete ground truth . No restrictions were placed on the propensities apart from the mild assumption that irrelevant labels were never marked as relevant . Furthermore , propensity models were developed based on real world applications and were shown to naturally promote the accurate prediction of infrequently occurring tail labels . This provides a sound theoretical justification of popular label weighting heuristics used to remove the popularity bias and recommend rare/novel items . The results also provide a more principled setting of the weights as compared to previous heuristics .
+This paper also developed the PfastreXML algorithm for optimizing propensity scored nDCG . PfastreXML was shown to make significantly more accurate predictions on all datasets as compared to the state of the art . PfastreXML was demonstrated to be specially well suited to predicting tail labels which is the most challenging aspect of extreme multi label learning . This helped PfastreXML achieve significantly higher clickthrough rates for sponsored search advertising on Bing as compared to the large ensemble of highly specialized rankers currently in production . In terms of scaling , PfastreXML could train on WikiLSHTC 325K and Ads 9M in less than 30 minutes and 17 hours respectively using a 16 core Intel Xeon 2.6 GHz server . Finally , PfastreXML ’s predictions were made in under 1.5 milliseconds per test point which is critical for deployment in real world applications . The code for PfastreXML is available from [ 1 ] .
+Fellowship and MSR India travel grant . Manik Varma would like to thank the School of Information Technology at IIT Delhi where he holds an adjunct position .
+References [ 1 ] Code for PfastreXML . http://researchmicrosoftcom/en us/um/people/manik/ code/PfastreXML/downloadhtml
+[ 2 ] The Extreme Classification Repository . http://researchmicrosoftcom/en us/um/people/manik/ downloads/XC/XMLRepositoryhtml
+[ 3 ] D . Agarwal , L . Li , and A . J . Smola . Linear time estimators for propensity scores . In AISTATS , 2011 .
+[ 4 ] R . Agrawal , A . Gupta , Y . Prabhu , and M . Varma .
+Multi label learning with millions of labels : Recommending advertiser bid phrases for web pages . In WWW , 2013 .
+[ 5 ] K . Balasubramanian and G . Lebanon . The landmark selection method for multiple output prediction . In ICML , 2012 .
+[ 6 ] K . Bhatia , H . Jain , P . Kar , M . Varma , and P . Jain . Sparse local embeddings for extreme multi label classification . In NIPS , 2015 .
+[ 7 ] W . Bi and J . T . Kwok . Efficient multi label classification with many labels . In ICML , 2013 .
+[ 8 ] L . Bottou , J . Peters , J . Quinonero Candela , D . X . Charles ,
+D . M . Chickering , E . Portugaly , D . Ray , P . Simard , and E . Snelson . Counterfactual reasoning and learning systems : The example of computational advertising . JMLR , 2013 .
+[ 9 ] P . Castells , S . Vargas , and J . Wang . Novelty and diversity metrics for recommender systems : choice , discovery and relevance . In DDR , 2011 .
+Acknowledgement We are grateful to Rahul Agrawal , Samy Bengio , Abhishek Kadian , Shrutendra Harsola , Purushottam Kar , Prateek Jain and Ambuj Tewari for discussions , feedback and help with experiments . Himanshu Jain is supported by a Google PhD Fellowship . Yashoteja Prabhu is supported by a TCS PhD
+[ 10 ] Y . N . Chen and H . T . Lin . Feature aware label space dimension reduction for multi label classification . In NIPS , 2012 .
+[ 11 ] M . Ciss´e , N . Usunier , T . Arti`eres , and P . Gallinari . Robust bloom filters for large multilabel classification tasks . In NIPS , 2013 .
+943 [ 12 ] C . Dhanjal , R . Gaudel , and S . Cl´emen¸con . Collaborative
+[ 33 ] I . Partalas , A . Kosmopoulos , N . Baskiotis , T . Arti`eres , filtering with localised ranking . In AAAI , 2015 .
+[ 13 ] R . E . Fan , K . W . Chang , C . J . Hsieh , X . R . Wang , and
+C . J . Lin . LIBLINEAR : A library for large linear classification . JMLR , 2008 .
+[ 14 ] C . S . Ferng and H . T . Lin . Multi label classification with error correcting codes . In ACML , 2011 .
+[ 15 ] S . Gopal and Y . Yang . Recursive regularization for large scale classification with hierarchical and graphical dependencies . In KDD , 2013 .
+[ 16 ] B . Hariharan , S . V . N . Vishwanathan , and M . Varma .
+Efficient max margin multi label classification with applications to zero shot learning . ML , 2012 .
+[ 17 ] C . J . Hsieh , N . Natarajan , and I . Dhillon . PU learning for matrix completion . In ICML , 2015 .
+G . Paliouras , ´E . Gaussier , I . Androutsopoulos , M . R . Amini , and P . Gallinari . LSHTC : A benchmark for large scale text classification . CoRR , 2015 .
+[ 34 ] Y . Prabhu and M . Varma . FastXML : A fast , accurate and stable tree classifier for extreme multi label learning . In KDD , 2014 .
+[ 35 ] B . Pradel , N . Usunier , and P . Gallinari . Ranking with non random missing ratings : Influence of popularity and positivity on evaluation metrics . In RecSys , 2012 .
+[ 36 ] P . Rai , C . Hu , R . Henao , and L . Carin . Large scale bayesian multi label learning via topic based label embeddings . In NIPS , 2015 .
+[ 37 ] P . R . Rosenbaum and D . B . Rubin . The central role of the propensity score in observational studies for causal effects . Biometrika , 1983 .
+[ 18 ] D . Hsu , S . Kakade , J . Langford , and T . Zhang . Multi label prediction via compressed sensing . In NIPS , 2009 .
+[ 38 ] H . Steck . Training and testing of recommender systems on data missing not at random . In KDD , 2010 .
+[ 19 ] K . Jasinska and K . Dembczy`nski . Consistent label tree classifiers for extreme multi label classification . In Extreme Classification Workshop , ICML , 2015 .
+[ 20 ] S . Ji , L . Tang , S . Yu , and J . Ye . Extracting shared subspace for multi label classification . In KDD , 2008 .
+[ 21 ] A . Kapoor , R . Viswanathan , and P . Jain . Multilabel classification using bayesian compressed sensing . In NIPS , 2012 .
+[ 22 ] N . Karampatziakis and P . Mineiro . Scalable multilabel prediction via randomized methods . CoRR , 2015 .
+[ 23 ] X . Kong , Z . Wu , L . J . Li , R . Zhang , P . S . Yu , H . Wu , and W . Fan . Large scale multi label learning with incomplete label assignments . In SDM , 2014 .
+[ 24 ] L . Li , S . Chen , J . Kleban , and A . Gupta . Counterfactual estimation and optimization of click metrics in search engines : A case study . In WWW , 2015 .
+[ 39 ] H . Steck . Item popularity and recommendation accuracy .
+In RecSys , 2011 .
+[ 40 ] Y . Y . Sun , Y . Zhang , and Z . H . Zhou . Multi label learning with weak label . In AAAI , 2010 .
+[ 41 ] A . Swaminathan and T . Joachims . Counterfactual risk minimization : Learning from logged bandit feedback . In ICML , 2015 .
+[ 42 ] A . Swaminathan and T . Joachims . The self normalized estimator for counterfactual learning . In NIPS , 2015 .
+[ 43 ] F . Tai and H . T . Lin . Multi label classification with principal label space transformation . In MLD , 2010 .
+[ 44 ] S . Vargas and P . Castells . Rank and relevance in novelty and diversity metrics for recommender systems . In RecSys , 2011 .
+[ 45 ] J . Weston , S . Bengio , and N . Usunier . Wsabie : Scaling up to large vocabulary image annotation . In IJCAI , 2011 .
+[ 25 ] L . Li , W . Chu , J . Langford , and X . Wang . Unbiased offline
+[ 46 ] J . Weston , A . Makadia , and H . Yee . Label partitioning for evaluation of contextual bandit based news article recommendation algorithms . In WSDM , 2011 .
+[ 26 ] D . Lim , J . McAuley , and G . Lanckriet . Top N recommendation with missing implicit feedback . In RecSys , 2015 .
+[ 27 ] Z . Lin , G . Ding , M . Hu , and J . Wang . Multi label classification via feature aware implicit label space encoding . In ICML , 2014 .
+[ 28 ] J . McAuley , T . Christopher , S . Qinfeng , and A . van den
+Hengel . Image based recommendations on styles and substitutes . In SIGIR , 2015 .
+[ 29 ] J . McAuley and J . Leskovec . Hidden factors and hidden topics : understanding rating dimensions with review text . In RecSys , 2013 .
+[ 30 ] J . McAuley , R . Pandey , and J . Leskovec . Inferring networks of substitutable and complementary products . In KDD , 2015 .
+[ 31 ] E . L . Mencia and J . F¨urnkranz . Efficient pairwise multilabel classification for large scale problems in the legal domain . In SIGIR , 2008 .
+[ 32 ] P . Mineiro and N . Karampatziakis . Fast label embeddings for extremely large output spaces . In ECML , 2015 . sublinear ranking . In ICML , 2013 .
+[ 47 ] H . Wu , X . Cui , J . He , B . Li , and Y . Pei . On improving aggregate recommendation diversity and novelty in folksonomy based social systems . Personal and Ubiquitous Computing , 2014 .
+[ 48 ] H . F . Yu , P . Jain , P . Kar , and I . S . Dhillon . Large scale multi label learning with missing labels . In ICML , 2014 .
+[ 49 ] L . Zhang . The definition of novelty in recommendation system . JESTR , 2013 .
+[ 50 ] Y . Zhang and J . G . Schneider . Multi label output codes using canonical correlation analysis . In AISTATS , 2011 .
+[ 51 ] T . Zhou , Z . Kuscsik , J . G . Liu , M . Medo , J . R . Wakeling , and Y . C . Zhang . Solving the apparent diversity accuracy dilemma of recommender systems . Proc . Nat . Acad . Sci . USA , 2010 .
+[ 52 ] A . Zubiaga . Enhancing navigation on wikipedia with social tags . CoRR , 2012 .
+944

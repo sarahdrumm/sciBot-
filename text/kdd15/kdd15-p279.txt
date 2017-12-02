@@ -1,0 +1,594 @@
+A Clustering Based Framework to Control
+Block Sizes for Entity Resolution
+Jeffrey Fisher
+Peter Christen
+Qing Wang
+Research School of Computer
+Research School of Computer
+Research School of Computer
+Science
+Science
+Science
+Australian National University
+Australian National University
+Australian National University
+Canberra ACT 0200 jeffreyfisher@anueduau
+Canberra ACT 0200 peterchristen@anueduau
+Canberra ACT 0200 qingwang@anueduau
+Erhard Rahm Database Group
+University of Leipzig Germany rahm@informatik.uni leipzig.de
+ABSTRACT Entity resolution ( ER ) is a common data cleaning task that involves determining which records from one or more data sets refer to the same real world entities . Because a pairwise comparison of all records scales quadratically with the number of records in the data sets to be matched , it is common to use blocking or indexing techniques to reduce the number of comparisons required . These techniques split the data sets into blocks and only records within blocks are compared with each other . Most existing blocking techniques do not provide control over the size of the generated blocks , despite this control being important in many practical applications of ER , such as privacy preserving record linkage and realtime ER . We propose two novel hierarchical clustering approaches which can generate blocks within a specified size range , and we present a penalty function which allows control of the trade off between block quality and block size in the clustering process . We evaluate our techniques on three real world data sets and compare them against three baseline approaches . The results show our proposed techniques perform well on the measures of pairs completeness and reduction ratio compared to the baseline approaches , while also satisfying the block size restrictions .
+Categories and Subject Descriptors H28 [ Database management ] : Database applications— Data mining ; H33 [ Information Storage and Retrieval ] : Information Search and Retrieval—Clustering
+Keywords Blocking , indexing , data cleaning , record linkage .
+1 .
+INTRODUCTION
+Entity resolution ( ER ) is a common data cleaning and pre processing task that aims to determine which records in one or more data sets refer to the same real world entities [ 7 ] . It has numerous applications , including matching customer records following a corporate merger , detecting persons of interest for national security , or linking medical records from different health organisations . In many cases ER is performed in static mode where all matching decisions are conducted at once . However , it can also be performed in real time , where the task involves finding the most similar record(s ) to a given query record [ 18 ] .
+In both static and real time ER , a key step is to compare the similarities of record pairs [ 2 ] . However , comparing all records in a data set , or between multiple data sets , scales quadratically with the number of records in the data sets and can be computationally infeasible if the data sets are large . As a result , blocking or indexing techniques are commonly used to limit the number of comparisons so that only record pairs that have a high likelihood of referring to the same real world entity are compared [ 2 ] . This is done by dividing the data set(s ) into ( possibly overlapping ) blocks and only performing comparisons between records in the same block . In this paper we study the problem of how to control block sizes when generating blocks for ER . Our study is motivated by the observation that there are various application areas where maximum and minimum block sizes are important .
+• One application area is real time ER [ 18 ] where operational requirements mean that only a certain number of comparisons can take place within a specific ( or limited ) time span ( eg sub second ) . Therefore , blocking is important to ensure that these comparisons are with the candidate records that most likely correspond to matches . In such cases , having a maximum block size ensures that operational requirements can be satisfied .
+• In privacy preserving record linkage [ 22 ] , there may be privacy requirements on both the minimum and maximum block size . For example , to guarantee kanonymous privacy [ 21 ] it is necessary that each block contains at least k records . If all blocks have a similar size this reduces the vulnerability of the ER process
+279 Original data set
+Split using < FN , F2> from Table 1
+<’Jo’>
+Merge
+<’Jo’>
+Split using <SN , Sdx>
+Merge
+Final Blocks
+<’S530’>
+<’S530’ , ’S253’>
+<’Jo’> <’S530’ , ’S253’>
+John , Smith , 2000
+John , Smith , 2000
+John , Smith , 2000
+John , Smith , 2000
+John , Smith , 2000
+John , Smith , 2000
+Johnathon , Smith , 2009
+Johnathon , Smith , 2009
+Johnathon , Smith , 2009
+Johnathon , Smith , 2009
+Johnathon , Smith , 2009
+Johnathon , Smith , 2009
+Joey , Schmidt , 2009
+Joey , Schmidt , 2009
+Joey , Schmidt , 2009
+<’S253’>
+Joey , Schmidt , 2009
+Joey , Schmidt , 2009
+Joe , Miller , 2902
+Joe , Miller , 2902
+Joe , Miller , 2902
+Joey , Schmidt , 2009
+<’M460’ , ’M450’>
+<’Jo’><’M460’ , ’M450’>
+Joseph , Milne , 2902
+Joseph , Milne , 2902
+Joseph , Milne , 2902
+<’M460’>
+Joe , Miller , 2902
+Joe , Miller , 2902
+Paul , , 3000
+<’Pa’>
+Peter , Jones , 3000
+Paul , , 3000
+<’Pe’>
+Peter , Jones , 3000
+Joe , Miller , 2902
+Joseph , Milne , 2902
+Joseph , Milne , 2902
+<’Pa’ , ’Pe’>
+Paul , , 3000
+Peter , Jones , 3000
+<’M450’>
+Joseph , Milne , 2902
+Blocking Keys = <FN , F2> , <SN , Sdx>
+<’Pa’ , ’Pe’>
+Paul , , 3000
+Peter , Jones , 3000
+S = 2 , S = 3 max min
+Figure 1 : Example of algorithm flow using the data set from Table 1 with smin = 2 and smax = 3 . The initial data set is split using the first blocking key hF N , F2i ( the first two characters of the F irstN ame attribute ) and the small blocks are merged . The block that is still too large after the initial split is split again , this time using the second blocking key hSN , Sdxi ( Soundex encoding of the Surname attribute ) . The small blocks are again merged until we end up with three blocks in the specified size range ( blocks shown with bold frames ) . to frequency based attacks [ 22 ] . In this situation it is important to produce blocks in the specified size range .
+• Finally , if blocking is being used as a preliminary step for an ER approach that has poor scalability , restricting the maximum size of blocks is very important . Collective entity resolution techniques , such as those proposed by Bhattacharya and Getoor [ 1 ] , Kalashnikov and Mehrotra [ 12 ] and Dong et al . [ 6 ] , all give high match quality at the expense of scalability . Similarly , techniques such as Markov logic network based ER [ 20 ] have very poor scalability for networks above a certain size . Ensuring block sizes are below a certain size threshold allows the matching power of these techniques to be fully harnessed by running them on smaller subsets of large data sets .
+In this paper , we propose two recursive clustering approaches for generating blocks within a specified size range . The idea behind our approaches is to use an initial blocking key to split a data set into individual blocks . If some of the blocks are too small we merge them , and if blocks are too large we use a second blocking key to split them . We merge any resulting small blocks , split any that are still too large using a third blocking key , and so on . Our two approaches differ in how we perform the clustering during the merge steps and as a result , give different distributions of block sizes , as we will present in Section 4 .
+Motivating Example . Throughout the rest of this paper we make use of the example data set in Table 1 to help illustrate this process . Figure 1 shows the algorithm flow of our approaches on this small data set .
+Contributions . In this paper , we develop a novel blocking framework based on recursive agglomerative clustering to produce blocks in a specified size range . We then propose a novel penalty function which allows us to relax the hard block size restrictions and gives us control over the block generation process by selecting a trade off between block size and block quality . We have conducted experiments on
+Record ID First Name
+Surname Postcode r1 r2 r3 r4 r5 r6 r7
+John
+Johnathon
+Joey Joe
+Joseph
+Paul Peter
+Smith Smith Schmidt
+Miller Milne
+Jones
+2000 2009 2009 2902 2092 3000 3000
+Table 1 : Example data set . three real world data sets and the results show our proposed approaches perform well on measures of block quality ( both pairs completeness and reduction ratio [ 2 ] ) in comparison to three baseline approaches , and can effectively generate blocks within the specified size range .
+Outline . We next discuss recent literature relating to iterative blocking and clustering methods . In Section 3 we describe the notation we use and formally define our problem . In Sections 4 and 5 we describe our blocking approaches and a penalty function which allows a trade off between block size and block quality . In Section 6 we conduct an experimental evaluation of our approaches and we finish with conclusions and directions for future work in Section 7 .
+2 . RELATED WORK
+Blocking ( also called indexing ) for ER is an area of active research and several recent surveys have been conducted [ 3 , 7 , 15 ] . In the following we briefly describe some key prior research that relates to our work , in particular , the blocking techniques that adopt an iterative approach or that aim to control the size of blocks .
+Several iterative blocking techniques have been studied for ER in recent years [ 5 , 18 , 23 ] . Whang et al . [ 23 ] proposed an iterative blocking process in order to perform ER . Rather than processing each block individually , the approach propagates the results from processed blocks ( ie where records
+280 have been compared ) to inform decisions in subsequent blocks . Once two records are determined as a match , they are merged , and the resulting new record is propagated into other blocks where the combination of attributes may cause previously undetected matches to be found . The results of previous comparisons are stored so that comparisons are not repeated unnecessarily . However , these techniques give no control over the size of the blocks that are produced .
+Das Sarma et al . [ 5 ] also developed an iterative blocking approach that combines splitting and merging to efficiently block large scale data sets for ER . The work makes use of labelled training examples to generate blocking schemas in an automated fashion . The authors performed a postprocessing step of merging small canopies ( blocks ) to increase recall based on a heuristic of minimising combined size and maximising the number of matches . While this technique gives some control of the block sizes , it does not enforce hard size contraints and also requires labelled training examples , whereas our approaches are unsupervised .
+Ramadan et al . [ 18 ] modified the sorted neighbourhood approach [ 2 ] for real time ER to allow for updating a blocking key value tree in response to a query record . The authors examined an adaptive window size approach to vary the number of candidate records returned for comparison based on either a similarity or a size threshold . The similarity between neighbouring nodes in a tree can be precalculated to reduce query times . This approach does not enforce minimum and maximum size constraints nor does it generate individual blocks which makes it unsuitable for applications such as privacy preserving record linkage .
+Zhu et al . [ 25 ] examined the clustering problem under size constraints , although not in the context of ER . They proposed an approach to produce clusters of a certain size , which can also be relaxed to a size range . Nevertheless , the authors only tested their approach on small data sets that have less than one thousand records or no more than three clusters . Their approach also requires computing the complete similarity between all pairs of records in a data set , which limits its usefulness for blocking in ER tasks where the aim is specifically to avoid this complete pairwise comparison . Work by Ganganath et al . [ 10 ] , Malinen and Fr¨anti [ 16 ] and Rebollo Monedero et al . [ 19 ] have the same limitations . In contrast to their work , our approach aims to support larger data sets , and does not require a complete pairwise comparison of all records .
+3 . PROBLEM STATEMENT
+We assume that a data set R consists of records , each of which is associated with a set A of attributes . The value of an attribute a ∈ A in a record r ∈ R is denoted as ra
+To split a set of records Rx ⊆ R into blocks we make use of one or more blocking keys . A blocking key , ki,j = hai , fji is a pair consisting of an attribute ai ∈ A and a function fj . The function fj takes as input an attribute value and returns another value , such as a phonetic encoding , a substring , or a reversed string . For a given blocking key ki,j = hai , fji , we generate a blocking key value ( BKV ) for record ry ∈ Rx by applying function fj to ry.ai , denoted vi,j,y = fj(ryai ) For example , possible functions include the first two characters ( F2 ) , exact value ( Ext ) and a Soundex encoding ( Sdx ) [ 7 ] .
+To illustrate this using the example in Table 1 , we consider the following blocking keys : the first two characters of the F irstN ame attribute hF N , F2i , a Soundex encoding of the Surname attribute hSN , Sdxi and the exact value of the P ostcode attribute hP C , Exti . The BKV of hF N , F2i applied to r1 is ‘Jo’ ( the first two characters of ‘John’ ) , the BKV of hSN , Sdxi applied to r1 is ‘S530’ ( the Soundex encoding of ‘Smith’ ) and the BKV of hP C , Exti applied to r1 is ‘2000’ .
+To split a set of records Rx into blocks we use a blocking key ki,j to generate a BKV vi,j,y for each ry ∈ Rx and we create one block for each unique BKV generated . We insert each record into the block corresponding to its BKV . This means two records ry , rz ∈ Rx will be inserted into the same block if and only if they generate the same BKV using blocking key ki,j , ie fj(ry.ai ) = fj(rzai ) During our approaches we also need to merge blocks . This results in a single block being associated with multiple BKVs . We denote the set of BKVs associated with block bi as V ( bi ) . Based on a pre defined list of blocking keys K = hki,j , kl,m , . . .i , we aim to adaptively split R into to a set of blocks B by using the BKVs generated by one or more blocking keys in K . However , we also want to control the size of the blocks we produce . The size of a block b , denoted as |b| , is the number of records in the block . To control the size of blocks , we use two size parameters : smin and smax with smin ≤ smax , to specify the minimum and maximum block sizes that are permitted , respectively .
+Problem statement . Given a data set R , two size parameters smin and smax , and a list of blocking keys K = hki,j , kl,m , . . .i , the problem we study is to use K to partition the records in R into a set B of non overlapping blocks such that for each b ∈ B , smin ≤ |b| ≤ smax , and within each block the number of true matches is maximised and the number of true non matches is minimised .
+In practice , smin and smax can be set in accordance with operational requirements such as computational limitations , real time efficiency requirements , or privacy preserving requirements . As is common with other blocking techniques , we can also improve the robustness of our approaches by running them multiple times with different lists of blocking keys for a single ER task [ 3 ] . This reduces the impact that a single typographical error or incorrect value has on the ER process [ 2 ] . In future work we intend to further investigate the impact of different blocking keys and whether the optimal list of keys can be discovered automically .
+4 . CLUSTERING APPROACHES
+We propose two recursive clustering approaches for generating blocks within a specified size range . The idea behind our approaches was illustrated in Figure 1 . We iteratively split and merge blocks until the size parameters smin and smax are satisfied . The first approach processes blocks in order of decreasing block similarity ( ie , similarity based ) , and the second approach in order of increasing block size ( ie , size based ) . In Section 4.1 we briefly describe the way we calculate the similarity between BKVs as well as between blocks ( clusters ) during clustering , then in Sections 4.2 and 4.3 we describe our two approaches , and in Section 4.4 we discuss their respective advantages and disadvantages .
+4.1 Similarity Functions
+During clustering we aim to merge blocks with similar BKVs together , since this is more likely to bring true matches
+281 Algorithm 1 : SimilarityBasedClustering( R , K , ς , n , smin , smax ) Input : Set of records : R List of blocking keys : K Block similarity function : ς Current recursion depth : n Minimum block size : smin Maximum block size : smax Output : Set of correct sized blocks : B∗
+// Set as n = 1 for first call to algorithm
+1 : 2 : 3 : 4 : 5 : 6 : 7 : 8 : 9 : 10 : 11 : 12 : 13 : 14 : 15 : 16 : 17 : 18 : 19 :
+B = GenerateBlocks(R , K[n ] ) B− , B∗ , B+ = SizePartition(B , smin , smax ) Q = GeneratePriorityQueue( ) for bi in B− ∪ B∗ do : for bj in B− ∪ B∗ \ bi do : if |bi| + |bj | ≤ smax then : Q.Insert(ς(bi , bj ) , bi , bj ) while Q 6= ∅ do : sim , bi , bj = Q.Pop( ) bij = MergeBlocks(bi , bj ) for bk in B− ∪ B∗ : if |bij | + |bk| < smax then :
+Q.Insert(ς(bij , bk ) , bij , bk ) if |bij | < smax then :
+B∗ = B∗ ∪ bij for bi in B+ do :
+// Generate blocks using the nth blocking key in K // Partition B into too small , correct size , too large blocks // Create empty queue , ordered by similarity
+// Insert correct sized pairs into the queue
+// Get the first pair from the queue
+// Put back in queue with new block similarity
+// Add to correct size blocks // Process the too large blocks
+Bi = SimilarityBasedClustering(bi , K , ς , n + 1 , smin , smax ) B∗ = B∗ ∪ Bi return B∗
+// Call recursively with n + 1 together into the same block . This requires a way of measuring the similarity between two BKVs . In addition , once blocks are merged , each block can be associated with multiple BKVs as shown in Figure 1 , so we also require a way of combining the pairwise similarities between BKVs into an overall block similarity measure .
+To calculate the similarity between two BKVs v1 and v2 , denoted as ζ(v1 , v2 ) we use traditional string comparison functions such as Jaro Winkler or Jaccard similarity [ 2 ] . However , this does not always give good results for blocking keys using functions such as Soundex encodings or the first two characters of an attribute . For example , none of the above similarity functions give a good indication of the similarity between the Soundex codes ‘S530’ and ‘S550.’ In order to obtain a better similarity measure , we use the original unencoded attribute values and apply a traditional string comparison function on them instead . For the above example we take the values that encode to ‘S530’ ( such as ‘Smith’ and ‘Smythe’ ) and compute their similarity with values that encode to ‘S550’ ( such as ‘Simon’ and ‘Simeon’ ) . If possible , we calculate all pairwise combinations of all values in a data set with these encodings to get a weighted average similarity between pairs of Soundex codes .
+However , if the full pairwise calculation is computationally infeasible , we randomly sample a selection of original values for each code and take the average similarity between these . In practice we found that even small sample sizes still produced results that were nearly identical to those of the complete calculation . We discuss this further in Section 6 . To combine the pairwise similarity between BKVs into an overall block similarity measure , denoted as ς(b1 , b2 ) , we make use of three traditional approaches [ 24 ] : ( 1 ) single link ς(b1 , b2 ) = max(T ) , ( 2 ) average link ς(b1 , b2 ) = mean(T ) and ( 3 ) complete link ς(b1 , b2 ) = min(T ) , where T = {ζ(v1 , v2 ) : v1 ∈ V ( b1 ) and v2 ∈ V ( b2)} .
+4.2 Similarity Based Blocking Approach
+The similarity based blocking approach is described in Algorithm 1 . To begin , we set n = 1 and take the set of records as R . We generate a set B of blocks using the nth blocking key in K ( line 1 ) . One block is created for each unique BKV . Next , B is partitioned into three disjoint sets B− , B∗ and B+ , with bi ∈ B− if |bi| < smin , bi ∈ B∗ if smin ≤ |bi| ≤ smax and bi ∈ B+ if |bi| > smax ( line 2 ) . We place each pair of blocks in B− ∪ B∗ into a priority queue Q , in order of their decreasing block similarity ( lines 4 7 ) . We retrieve from Q the pair of blocks ( bi , bj ) with maximum ς(bi , bj ) ( line 9 ) . We merge bi and bj into bij where V ( bij ) = V ( bi ) ∪ V ( bj ) . We then calculate ς(bij , bk ) for all bk st |bk| + |bij| ≤ smax and reinsert these new pairs of blocks into Q ( line 13 ) . We then proceed with the pair of blocks with the second highest block similarity ( loop back to line 9 ) , and continue this process until no more merges are possible . For each bi ∈ B+ ( ie blocks that are too large , |bi| > smax ) we call the algorithm recursively with bi as the new set of records and using the next blocking key in K to generate new BKVs ( lines 16 18 ) .
+Figure 1 illustrates this process applied to the example data set in Table 1 with K = hhF N , F2i , hSN , Sdxii and smin = 2 and smax = 3 . We start by splitting the records into blocks using the first blocking key hF N , F2i ( the first two characters of F irstN ame ) . The blocks that have a size smaller than 2 ( smin ) are clustered and merged . Any blocks with size greater than 3 ( smax ) are split using the second blocking key hSN , Sdxi ( the Soundex encoding of Surname ) . Then , in a second merging phase , blocks that are smaller than size 2 ( smin ) are again clustered . In this case this finishes the algorithm since all blocks are now in the correct size range . However , if there were still blocks with size greater than 3 they would be split using a third blocking key , for example hP C , Exti , any resulting small blocks would again be clustered and merged , and so forth . This continues until no blocks remain with size greater than 3 or we run out of blocking keys in K .
+The main drawback of the similarity based approach is the need to calculate ς(bi , bj ) for each pair of blocks in B− ∪ B∗ and store them in Q . In addition , as blocks are merged , the block similarity needs to be calculated between the new
+282 Algorithm 2 : SizeBasedClustering( R , K , ς , n , smin , smax ) Input : Set of records : R List of blocking keys : K Block similarity function : ς Current recursion depth : n Minimum block size : smin Maximum block size : smax Output : Set of correct sized blocks : B∗
+// Set as n = 1 for first call to algorithm
+1 : 2 : 3 : 4 : 5 : 6 : 7 : 8 : 9 : 10 : 11 : 12 : 13 : 14 : 15 : 16 : 17 :
+B = GenerateBlocks(R , K[n ] ) B− , B∗ , B+ = SizePartition(B , smin , smax ) Q = GeneratePriorityQueue( ) for bi in B− do :
+Q.Insert(bi ) while Q 6= ∅ do :
+// Generate blocks using the nth blocking key in K // Partition B into too small , correct size , too large blocks // Create empty queue , ordered by block size
+// Put the small blocks into the queue bi = Q.Pop( ) bj = Argmax(ς(bi , bk) ) , ∀bk ∈ B− ∪ B∗ such that |bi| + |bk| ≤ smax bij = MergeBlocks(bi , bj ) if |bij | < smin then :
+// Get the first block from the queue
+// Get nearest block of correct size
+Q.Insert(bij ) else :
+B∗ = B∗ ∪ bij for bi in B+ do :
+// Put new block back into the queue
+// Add to correct size blocks // Process the too large blocks
+Bi = SizeBasedClustering(bi , K , ς , n + 1 , smin , smax ) B∗ = B∗ ∪ Bi return B∗
+// Call recursively with n + 1 block and all remaining blocks . This reduces the scalability of the approach and also leads to high memory overhead since Q can become large , O(|B|2 ) . Next we present an alternative approach with better scalability that removes the need to store all pairwise combinations of blocks in memory .
+4.3 Size Based Blocking Approach
+The size based blocking approach is described in Algorithm 2 . The initial setup for this approach is identical to that of the similarity based blocking approach . However , in the size based case the priority queue Q contains individual blocks , which are ordered by increasing block size ( line 5 ) . This is an important distinction since it significantly reduces the size of Q from O(|B|2 ) to O(|B| ) . In the main loop of the algorithm ( lines 6 13 ) we remove the smallest block bi from Q ( line 7 ) , determine the block bj such that |bi| + |bj| ≤ smax and ς1(bi , bj ) is maximised ( line 8 ) . Essentially we find the most similar block to bi such that their combined size would be less than smax . We merge bi and bj into bij ( line 9 ) and if |bij| ≤ smin , we reinsert bij into Q . We then proceed to the next smallest block ( loop back to line 6 ) and continue this process until no blocks remain with size less than smin . As with the similarity based approach , for each block in B+ the algorithm is called recursively with n = n + 1 and using the next blocking key in K .
+4.4 Discussion and Algorithm Complexities
+We now discuss the characteristics of the two approaches and present their computational complexities . Depending on the settings of smin and smax , it is possible that our approaches may generate some blocks that are outside the desired size range . For example , if smin = 0.8 ∗ smax , some blocks may have a size in the range 0.5 ∗ smax to 0.8 ∗ smax . Merging any two of these blocks would result in a block size greater than smax , so none of them end up being merged . However , if smin and smax satisfy smax ≥ 2 ∗ smin then we are guaranteed that at most one block at the end will be smaller than smin because if two blocks were left , they could be merged as their combined size would still be below smax . If blocks are left at the end of either algorithm which are larger than smax , then there must exist some unique combination of BKVs that occurs more frequently than smax and our only option is to add another blocking key to K .
+The similarity based blocking approach ensures that pairs of blocks with high block similarity are merged together . In practice , the approach often creates many blocks that are close in size to smax which makes it effective for load balancing in parellel ER applications [ 14 ] . However , if there is a block left at the end which is too small , it may be quite small in comparison to smin , which may make this approach less suitable in applications where smin is important . The running time of the similarity based approach is also typically longer than that of the size based approach .
+In practice , if smax ≥ 2 ∗ smin , the size based approach tends to produce blocks that are more evenly distributed within the size range , with potentially a single block that is too small . Since the merging is done iteratively from smallest to largest , if there is a block that is smaller than smin , its size is typically close to smin , although this closeness is not mathematically guaranteed . This means that for situations where minimum block size is important the size based approach is a good candidate . However , the size based blocking approach is not as successful when there are multiple large blocks with different BKVs from values that are quite similar . For example , depending on the blocking keys used , the first names ‘John’ and ‘Johnathon’ may generate different BKVs but we would prefer to combine them into the same block . However , because blocks are processed in order of size and both blocks may be quite large , neither block will be considered until late in the merging process . As a result , by the time they are compared one of them may have already grown too large ( due to other merges ) for them to be merged . This situation can be partially overcome by the penalty function detailed in the next section .
+The selection of the blocking keys in K is important for both approaches and has a significant effect on the running time and the blocking quality . At present we rely on domain expertise to select the blocking keys , taking into account such factors as completeness , size of the domain , distribution of values and general data quality . As part of our future work we intend to investigate methods for automatically se
+283 ( a ) Penalty function varying
+α
+α = 1.05
+α = 1.2
+α = 2
+α = 10
+α = 100 sscale
+1.0
+0.8
+0.6
+0.4
+0.2 d l o h s e r h t y t i r a l i m i S
+1.0
+0.8
+0.6
+0.4
+0.2 d l o h s e r h t y t i r a l i m i S
+( b ) Penalty function varying
+β
+β = 2
+β = 1
+β = 0
+β = 1
+β = 2 sscale
+1.0
+0.8
+0.6
+0.4
+0.2 d l o h s e r h t y t i r a l i m i S
+( c ) Penalty function combinations
+α = 1.50 , β = 2
+α = 1.05 , β = 20
+α = 2.00 , β = 0
+α = 100 , β = 0.8 sscale
+0.0
+0
+1000
+2000
+3000
+4000
+5000
+0.0
+0
+1000
+2000
+3000
+4000
+5000
+0.0
+0
+1000
+2000
+3000
+4000
+5000
+Size of combined block
+Size of combined block
+Size of combined block
+Figure 2 : Penalty function example configurations where the vertical dotted line in each plot is sscale . lecting blocking keys , such as those developed by Kejriwal and Miranker [ 13 ] and Ramadan and Christen [ 17 ] .
+In the worst case , the time complexity of the similaritybased approach is O(|R|3log(|R|) ) , while the size based approach is O(|R|3 ) . For the similarity based approach , Q can contain O(|R|2 ) blocks ( line 7 ) and during the loop ( lines 8 15 ) we have to perform O(|R| ) insertions into Q of time complexity O(log(|R| ) ) ( line 13 ) . For the size based approach the size of Q is at most O(|R| ) ( line 5 ) but calculating Argmax(ς(bi , bk ) ) ( line 8 ) is potentially O(|R|2 ) so we end up with an overall complexity of O(|R|3 ) .
+In practice the similarity based approach is significantly slower than the size based approach . In addition the running time of both approaches is much more dependent on the number of unique BKVs generated by the blocking keys in K rather than the size of R . This is because we create one block for each BKV during clustering so the running time of the similarity based approach becomes O(|B|3log(|B| ) ) and the size based approach becomes O(|B|3 ) . In the worst case , each record generates a unique BKV and we end up with the asymptotic complexity above . Phonetic encodings such as Soundex and Double Metaphone [ 7 ] , which have hard limits on the maximum number of unique BKVs they can create , can be particularly effective in this regard . Similarly , selecting just the first one or two characters from an attribute also restricts the maximum number of blocks that can be created at each step . In addition , some optimisation techniques such as pre calculating and caching similarity values can be performed to improve the efficiency of both techniques .
+5 . PENALTY FUNCTION
+If two blocks have similar BKVs , then it may be preferable to merge them even if they are large , and use the next blocking key in K to split them and enforce the size restrictions . We now present a penalty function that replaces the hard size restrictions ( smin and smax ) on merging blocks in our approaches with a sliding scale , that combines block size and block similarity to determine whether or not to merge two blocks . The penalty function Φ is as follows :
+Φ ( bi , bj ) = 1 − α
+− |bi|+|bj | sscale
+−β for α ≥ 1 and β ∈ R .
+Two blocks bi and bj will be merged if they satisfy the inequality ς(bi , bj ) ≥ Φ(bi , bj ) . As the combined block size gets larger , the similarity threshold required for merging also increases , and vice versa .
+The penalty function involves two parameters , α and β , which together with sscale ( related to smin and smax ) , produce the desired merging behaviour .
+• α determines the trade off between similarity and size . Higher values of α produce a stricter similarity threshold as the block size increases . In the limit as α → ∞ , Φ becomes a hard size restriction . In this case block similarity does not affect the merging decisions .
+• β constrains the clustering by enforcing either a minimum block size ( β > 0 ) or a minimum similarity threshold ( β < 0 ) . If β = 0 then there are no size or similarity restrictions on the merging . We note that β can only create one of these two types of restrictions for a given clustering problem , since there may be no solution if both a minimum block size and a minimum similarity threshold are specified .
+• sscale is a scaling parameter that is useful for computational reasons . In practice , including sscale removes the need to repeatedly calculate extremely large exponents of numbers very close to 1 when computing Φ(bi , bj ) . Eliminating sscale by changing α and β gives a mathematically identical function , but with α extremely close to 1 in practice . Including sscale improves computational performance and prevents machine precision from influencing results . We explain how to set sscale below .
+We next provide the idea behind the penalty function with reference to the examples in Figure 2 . In each example sscale is set to 1,000 ( the vertical dashed line ) . Consider the case where α = 2 and β = 0 represented by the curved dashed line from ( 0 , 0 ) to the top right corner in each example . Before merging two blocks bi and bj where |bi| + |bj| = sscale ( ie |bi| + |bj| = 1,000 ) , the similarity between the blocks must be at least 1 − 1 21 = 05 Before merging two blocks with a combined size of 2 ∗ sscale , the similarity must be at least 1 − 1 22 = 075 A size of 3 ∗ sscale requires similarity greater than 0.875 , and so on .
+The value of α determines the rate at which the required similarity approaches 1.0 , with higher values approaching more quickly than lower values as shown in Figure 2(a ) . Changing the value of β has the effect of moving the curve to the left or right as shown in Figure 2(b ) . For example , β = −1 and α = 2 set a minimum similarity for merging to be 1 − 1 21 = 05 If β = 1 and α = 2 , then blocks will be merged regardless of similarity until the combined size
+284 )
+%
+( s s e n e t e l p m o C s r i a P e z i s k c o l B
+100
+90
+80
+70
+60
+50
+40
+140
+120
+100
+80
+60
+40
+20
+0
+( a ) : PC Cora , UKCD , NCVR 450 d t S x d S h n S e z i S m S i
+Cora d t S h n S x e z d i S S UKCD m S i d t S x d S h n S e z i S m S i
+NCVR 450
+( d ) : Block size distribution Cora
+Standard
+Soundex
+Size based
+Sim based
+)
+%
+( o i t a R n o i t c u d e R
+100
+95
+90
+85
+80
+104
+103 e z i s k c o l B
+102
+101
+100
+( b ) : RR Cora , UKCD , NCVR 450 d t S x d S h n S e z i S m S i
+Cora d t S h n S x e z d i S S UKCD m S i d t S x d S h n S e z i S m S i
+NCVR 450
+( e ) : Block size distribution UKCD
+Standard
+Soundex
+Size based
+Sim based
+)
+%
+( e r u s a e M F
+100
+95
+90
+85
+80
+75
+70
+65
+60
+104
+103 e z i s k c o l B
+102
+101
+100
+( c ) : FM Cora , UKCD , NCVR 450 d t S x d S h n S e z i S m S i
+Cora d t S h n S x e z d i S S UKCD m S i d t S x d S h n S e z i S m S i
+NCVR 450
+( f ) : Block size distribution NCVR 450
+Standard
+Soundex
+Size based
+Sim based
+Figure 3 : 3(a ) Pairs Completeness , 3(b ) Reduction Ratio , and 3(c ) F Measure results for standard blocking ( Std ) , Soundex encoding ( Sdx ) , sorted neighbourhood ( Snh ) , our proposed size based approach ( Size ) , and our proposed similarity based approach ( Sim ) . Block size distributions for 3(d ) Cora , 3(e ) UKCD , and 3(f ) NCVR 450 . We do not include block size distributions for the sorted neighbourhood approach since this technique uses a window of constant size . is at least 1,000 ( equal to sscale ) . By combining different values of α and β we can obtain a wide variety of merging conditions as shown in Figure 2(c ) .
+We now explain how best to choose the values of α , β and sscale in order to achieve the desired merging behaviour . If minimum block size is not critical , the default we use on a data set is sscale = 0.5 ∗ smax , α = 2 and β = 0 . This sets a similarity threshold of 0.75 to merge blocks with combined size greater than smax and prevents blocks with very low similarity from being merged regardless of size . If minimum block size is important , then the default parameters we use are sscale = smin , α = ( 2 ∗ smax)/(smax − smin ) and β = 1 . This causes blocks to be merged regardless of similarity up to a combined size of smin , and sets a similarity threshold of 0.75 to merge blocks with a combined size larger than smax . In both cases , with some knowledge of the data , the value of α can be scaled to increase or decrease the similarity threshold of 0.75 as desired .
+To incorporate the penalty function , both Algorithm 1 and 2 have to be slightly modified . In Algorithm 1 , we replace the size restrictions on bi and bj in lines 4 6 with the penalty function condition , and the same for bk and bij in lines 11 and 12 . In Algorithm 2 , all blocks are inserted into Q in line 5 , not just blocks with size less than smin . Similarly bij is always reinserted into Q in line 11 , regardless of size . Additionally , in line 8 , we replace the size restriction on bk with the penalty function condition on bi and bk . papers that has previously been used to evaluate ER techniques [ 20 ] . This data set contains 1,295 records and truth data is available . ( 2 ) UKCD : This data set consists of census data for the years 1851 to 1901 in 10 year intervals for the town of Rawtenstall and surrounds in the United Kingdom . It contains approximately 150,000 individual records of 32,000 households . A portion of this data ( nearly 5,000 records ) has been manually linked by domain experts . Fu et al . [ 9 ] have used this data set for household based group linkage where the task is to link households across time . ( 3 ) NCVR : This data set consists of voter registration data for the state of North Carolina in the USA [ 4].1 It contains 8.2 million records consisting of the full name , address , age and other personal information of voters registered in the state . For most of our experiments we make use of a subset of this data set containing 447,898 records , named NCVR 450 . We use the full data set to test the scalability of our approaches . To evaluate our approaches we compared performance with standard blocking [ 8 ] , Soundex encoding [ 7 ] , and sorted neighbourhood based indexing [ 11 ] . For evaluation measures we used pairs completeness and reduction ratio [ 2 ] and a combination of the two measures similar to F Measure : Pairs Completeness ( PC ) = sM , Reduction Ratio ( RR ) = nM 1 − sM +sN and the combined F Measure ( FM ) = 2∗P C ∗RR P C+RR , nM +nN where nM , nN , sM , sN correspond to the total number of matched pairs , the total number of non matched pairs , the number of true matched candidate record pairs and the number of true non matched candidate pairs , respectively .
+6 . EXPERIMENTAL EVALUATION
+We have evaluated our approaches on three data sets . ( 1 ) Cora : This is a public bibliographic data set of scientific
+1ftp://altncsbegov/data/
+285 smin smax Block similarity measure ς
+Size based
+Similarity based
+PC RR FM PC RR FM smin smax Block similarity measure ς
+Size based
+Similarity based
+PC RR FM PC RR FM smin smax Block similarity measure ς
+Size based
+Similarity based
+PC RR FM PC RR FM
+20 50
+20 100
+50 100
+Cora
+Single Average Complete 83.45 96.86 89.66 87.77 96.51 91.93
+84.19 97.03 90.16 88.27 96.61 92.25
+80.90 97.01 88.23 85.52 96.71 90.77
+Single Average Complete 92.95 96.20 94.55 92.95 95.64 94.28
+81.95 96.50 88.63 92.95 96.14 94.52
+92.24 96.35 94.25 92.95 96.09 94.49
+Single Average Complete 92.95 93.64 93.29 93.07 92.80 92.93
+85.90 93.63 89.60 92.95 93.55 93.25
+91.55 93.61 92.57 92.97 93.28 93.12
+50 100
+100 200
+500 1,000
+UKCD
+Single Average Complete 89.64 99.95 94.51 90.43 99.94 94.95
+88.72 99.95 94.00 90.24 99.94 94.84
+87.49 99.95 93.31 89.33 99.95 94.34
+Single Average Complete 93.65 99.89 96.67 93.76 99.88 96.72 NCVR 450
+91.57 99.90 95.55 93.18 99.89 96.42
+93.32 99.89 96.49 93.82 99.89 96.76
+Single Average Complete 97.44 99.47 98.44 97.32 99.38 98.34
+95.92 99.48 97.67 97.42 99.45 98.42
+96.77 99.48 98.11 97.27 99.44 98.34
+500 1,000
+2,500 5,000
+5,000 10,000
+Single Average Complete 96.17 99.81 97.96 96.17 99.79 97.95
+96.25 99.82 98.00 96.35 99.80 98.04
+96.15 99.82 97.95 96.32 99.81 98.03
+Single Average Complete 96.49 99.07 97.76 96.50 98.96 97.71
+96.53 99.08 97.79 96.57 99.01 97.77
+96.48 99.09 97.77 96.55 99.07 97.79
+Single Average Complete 96.63 98.19 97.40 96.67 98.00 97.33
+96.64 98.16 97.39 96.68 98.03 97.35
+96.63 98.19 97.40 96.66 98.05 97.35
+Table 2 : Effects of parameter settings on PC , RR and F Measure for Cora , UKCD , and NCVR 450 , showing different configurations of smin , smax and the three different block similarity measures ( ς ) single link , average link , and complete link . The best value(s ) in each row is shown in bold .
+We do not explicitly model block quality . However , since merging blocks can only improve improve PC , we merge blocks until smax is reached , regardless of block quality . If higher quality blocks are preferred over larger blocks , this can be achieved by using the penalty function , where a minimum similarity threshold will prevent blocks with a low likelihood of containing true matches from being merged , regardless of block size .
+All our experiments were performed on a server with 6core 64 bit Intel Xeon 2.4 GHz CPUs , 128 GBytes of memory and running Ubuntu 1404 All programs were written in Python 3 . For similarity functions we used Jaro Winkler for single proper name attributes ( ie first name or last name ) and q gram based Jaccard similarity for other string attributes with q = 2 [ 2 ] .
+Each of our experiments uses a single list of blocking keys . As with many blocking techniques , the overall results could be improved by combining the blocks generated from multiple lists of blocking keys , with a corresponding reduction in smax so as to maintain any efficiency requirements . In future work we plan to investigate the automatic selection of blocking keys to reduce the need for domain expertise .
+The experimental results on the Cora , UKCD , and NCVR450 data sets are shown in Figure 3(a ) 3(c ) . For Cora we set smin = 50 , smax = 100 and K = hhT itle , Exti , hAuthor , Extii . For UKCD we set smin = 500 , smax = 1 , 000 and K = hhSurname , Exti , hF irst N ame , Exti , hBirth P arish , Extii . For NCVR 450 we set smin = 500 , smax = 1 , 000 and K = hhSurname , F2i , hF irst N ame , F2ii .
+On all three data sets , we achieve equal or better FMeasure values than the three baseline approaches . This indicates that our approaches achieve comparable blocking quality to other common blocking techniques . However , the main focus of our approaches was to satisfy the block size restrictions while achieving high quality blocking . We also show the distribution of block sizes generated by our approaches in Figure 3(d ) 3(f ) . As can be seen from the results , both our approaches produce blocks in the required size range , 500 1,000 records for UKCD and NCVR 450 , and 50 100 records for Cora . While the size based approach tends to distribute the block sizes throughout the interval [ smin , smax ] , the similarity based approach tends to generate the majority of blocks with size close to smax . This means it creates fewer blocks overall and makes it appropriate for parallel ER applications .
+We tested different parameter settings for our approaches to examine how sensitive they are to changing smin , smax , and the block similarity measure ς , and the results are shown in Table 2 . In most cases , the choice of block similarity measure ς has minimal effect on the results . However , complete link did not work well with the size based approach , particularly on the Cora data set . Changing smin and smax affects the trade off between PC and RR as expected .
+We tested the penalty function and the results are shown in Figure 4 . For Cora we set sscale = 50 and smax = 100 , and for UKCD and NCVR 450 we set sscale = 500 and smax = 1 , 000 . When β = 0 ( no minimum block size or minimum similarity threshold ) , the penalty function generally achieves the best combination of PC and RR values ,
+286 )
+%
+( e r u s a e M F
+100
+95
+90
+85
+80
+75
+70
+( a ) Penalty function size based Cora
+( b ) Penalty function size based UKCD
+100
+( c ) Penalty function size based NCVR 450 100
+α = 1.1
+α = 1.5
+α = 2
+α = 5
+α = 15
+−4
+−2
+0 β
+2
+4
+)
+%
+( e r u s a e M F
+90
+80
+70
+60
+50
+α = 1.1
+α = 1.5
+α = 2
+α = 5
+α = 15
+−4
+−2
+0 β
+2
+4
+)
+%
+( e r u s a e M F
+99
+98
+97
+96
+95
+α = 1.1
+α = 1.5
+α = 2
+α = 5
+α = 15
+−4
+−2
+0 β
+2
+4
+( d ) Penalty function similarity based Cora 100
+( e ) Penalty function similarity based UKCD 100
+( e ) Penalty function similarity based NCVR 450
+100
+)
+%
+( e r u s a e M F
+95
+90
+85
+80
+75
+70
+α = 1.1
+α = 1.5
+α = 2
+α = 5
+α = 15
+−4
+−2
+0 β
+2
+4
+)
+%
+( e r u s a e M F
+90
+80
+70
+60
+50
+α = 1.1
+α = 1.5
+α = 2
+α = 5
+α = 15
+−4
+−2
+0 β
+2
+4
+)
+%
+( e r u s a e M F
+99
+98
+97
+96
+95
+α = 1.1
+α = 1.5
+α = 2
+α = 5
+α = 15
+−4
+−2
+0 β
+2
+4
+Figure 4 : Penalty function results for Cora 4(a ) and 4(d ) , UKCD 4(b ) and 4(e ) , and NCVR 450 4(c ) and 4(f ) . For each data set we display how different combinations of α and β affect the F Measure values .
+( a ) Scalability NCVR
+Standard
+Soundex Sorted neighbourhood
+Size based Similarity based
+1400
+1200
+1000
+800
+600
+400
+200 s d n o c e S e m T i
+1011
+1010
+109 s r i a p e t a d i d n a C
+( b ) Candidate pairs generated NCVR
+( c ) Largest block NCVR
+105
+104
+103
+) s d r o c e r f o r e b m u N
+( k c o l b t s e g r a L
+Standard
+Soundex Sorted neighbourhood
+Size based Similarity based
+Standard
+Soundex Sorted neighbourhood
+Size based/Sim based
+0
+0
+1000
+2000
+3000
+4000
+5000
+6000
+7000
+8000
+9000
+108
+0
+1000
+2000
+3000
+4000
+5000
+6000
+7000
+8000
+9000
+0
+1000
+2000
+3000
+4000
+5000
+6000
+7000
+8000
+9000
+Size Number of records ( ’000s )
+Size Number of records ( ’000s )
+Size Number of records ( ’000s )
+Figure 5 : The scalability of the different approaches on the full NCVR data set . the exception being for low values of α where the similarity threshold is very low , even for large blocks which results in poor RR values . High values of α and negative values of β mean the similarity threshold to perform any merging is high . This essentially negates the clustering steps of the algorithms , which results in poor PC values for data sets with lower data quality . High values of α in combination with positive values of β produce generally balanced blocks . We note that for the UKCD data set , setting α = 1.1 performs very poorly . It repeatedly merges many blocks in each iteration of the algorithm and either runs out of blocking keys ( resulting in poor RR values ) , or has to use attributes that have poor data quality ( resulting in poor PC values ) . For the NCVR 450 data set , the penalty function produces very similar results regardless of the settings for α and β . The merging of blocks has less impact on the NCVR 450 data set , since it is relatively clean so merges do not increase PC values substantially , and also large enough that it requires many merges to reduce RR values significantly .
+We also tested the scalability of our approaches using subsets of different sizes of the entire NCVR data set . We set smin = 500 , smax = 1 , 000 and K = hhSurname , F2i , hF irst N ame , F2ii and the results are shown in Figure 5(a ) . As can be seen , even though the asymptotic complexity of each approach is cubic or worse , because functions such as F2 or Sdx generate a limited number of BKVs the scalability is still nearly linear in practice . However , in the future we plan to optimise both approaches to improve their scalability .
+We compared the total number of candidate pairs generated as well as the largest block generated by the different approaches and the results are shown in Figure 5(b ) and Figure 5(c ) . Controlling the maximum block size ensures that the total number of candidate pairs increases linearly with the size of the data set which means that once the data set becomes large , our techniques generate fewer candidate pairs than the traditional and Soundex based approaches . As a result , even though our approaches increase the time required for blocking compared to the baseline approachs ,
+287 in general this will be more than made up for by a reduction in the time required to perform the matching .
+In addition , the worst case block size is also controlled by our approaches . This means that if the blocking is being performed as a pre processing step for an ER technique with scalability worse than quadratic , such as Markov logic networks [ 20 ] , or privacy preserving record linkage [ 22 ] , then the time saving will be even greater than that indicated by the reduction in the number of candidate pairs . Controlling the worst case block size means that our techniques are suitable for real time ER , where operational requirements limit the number of comparisons that can be performed [ 18 ] .
+Finally , we investigated the impact of the sample size in the similarity calculations on the NCVR 450 data set using Soundex encodings . Even with a sample size of 1 , the clustering still produced similar results to the complete calculation and the reduction in F Measure was less than 0.1 % in all cases . As a result , we conclude that the sample size does not significantly affect the performance .
+7 . CONCLUSIONS AND FUTURE WORK
+In this paper we have developed two novel recursive clustering approaches which can generate blocks for ER within a given size range . We have also proposed a penalty function which allows us to control the trade off between block size and block quality , and fine tune either approach . We have evaluated our approaches on three data sets . Our experimental results show that both our techniques perform well in comparison to the baseline approaches and create blocks in the required size range .
+In the future , we intend to extend the current work in several directions . First , we hope to investigate the possibility of automatically selecting the blocking keys using techniques similar to Kejriwal and Miranker [ 13 ] . We also aim to investigate optimisations to the algorithms and the use of different clustering techniques , to improve the quality of the results and the scalability of our approaches .
+Acknowledgements This work was partially funded by the Australian Research Council , Veda , and Funnelback Pty . Ltd . , under Linkage Project LP100200079 .
+8 . REFERENCES [ 1 ] I . Bhattacharya and L . Getoor . Collective entity resolution in relational data . ACM TKDD , 1(1 ) , 2007 .
+[ 2 ] P . Christen . Data matching : concepts and techniques for record linkage , entity resolution , and duplicate detection . Springer , 2012 .
+[ 3 ] P . Christen . A survey of indexing techniques for scalable record linkage and deduplication . IEEE TKDE , 24(9 ) , 2012 .
+[ 4 ] P . Christen . Preparation of a real temporal voter data set for record linkage and duplicate detection research . Technical report , Australian National University , 2014 .
+[ 5 ] A . Das Sarma , A . Jain , A . Machanavajjhala , and
+P . Bohannon . An automatic blocking mechanism for large scale de duplication tasks . In ACM CIKM , pages 1055–1064 , 2012 .
+[ 6 ] X . Dong , A . Halevy , and J . Madhavan . Reference reconciliation in complex information spaces . In ACM SIGMOD , pages 85–96 , 2005 .
+[ 7 ] A . K . Elmagarmid , P . G . Ipeirotis , and V . S . Verykios .
+Duplicate record detection : A survey . IEEE TKDE , 19(1):1–16 , 2007 .
+[ 8 ] I . P . Fellegi and A . B . Sunter . A theory for record linkage . JASA , 64(328):1183–1210 , 1969 .
+[ 9 ] Z . Fu , P . Christen , and J . Zhou . A graph matching method for historical census household linkage . In PAKDD , Springer LNAI vol . 8443 , pages 485–496 . 2014 .
+[ 10 ] N . Ganganath , C T Cheng , and C . Tse . Data clustering with cluster size constraints using a modified k means algorithm . In CyberC , pages 158–161 , Oct 2014 .
+[ 11 ] M . A . Hernandez and S . J . Stolfo . Real world data is dirty : Data cleansing and the merge/purge problem . Springer DMKD , 2(1):9–37 , 1998 .
+[ 12 ] D . Kalashnikov and S . Mehrotra . Domain independent data cleaning via analysis of entity relationship graph . ACM TODS , 31(2):716–767 , 2006 .
+[ 13 ] M . Kejriwal and D . P . Miranker . An unsupervised algorithm for learning blocking schemes . In IEEE ICDM , pages 340–349 , 2013 .
+[ 14 ] H . Kim and D . Lee . Parallel linkage . In ACM CIKM , pages 283–292 , 2007 .
+[ 15 ] H . K¨opcke and E . Rahm . Frameworks for entity matching : A comparison . Elsevier DKE , 69(2):197–210 , 2010 .
+[ 16 ] M . Malinen and P . Fr¨anti . Balanced k means for clustering . In SSSPR , Springer LNCS vol . 8621 , pages 32–41 . 2014 .
+[ 17 ] B . Ramadan and P . Christen . Unsupervised blocking key selection for real time entity resolution . In PAKDD , Springer LNAI vol . 9078 , pages 574–585 , 2015 .
+[ 18 ] B . Ramadan , P . Christen , and H . Liang . Dynamic sorted neighborhood indexing for real time entity resolution . In ADC , Springer LNCS vol . 8506 , pages 1–12 . 2014 .
+[ 19 ] D . Rebollo Monedero , M . Sol´e , J . Nin , and J . Forn´e . A modification of the k means method for quasi unsupervised learning . Elsevier KBS , 37(0):176 – 185 , 2013 .
+[ 20 ] P . Singla and P . Domingos . Entity resolution with
+Markov logic . In IEEE ICDM , pages 572–582 , 2006 .
+[ 21 ] D . Vatsalan and P . Christen . Sorted nearest neighborhood clustering for efficient private blocking . In PAKDD , volume 7819 of LNCS , pages 341–352 . Springer , 2013 .
+[ 22 ] D . Vatsalan , P . Christen , and V . S . Verykios . A taxonomy of privacy preserving record linkage techniques . Elsevier IS , 38(6):946–969 , 2013 .
+[ 23 ] S . E . Whang , D . Menestrina , G . Koutrika ,
+M . Theobald , and H . Garcia Molina . Entity resolution with iterative blocking . In ACM SIGMOD , pages 219–232 , 2009 .
+[ 24 ] R . Xu and I . Wunsch , D . Survey of clustering algorithms . IEEE TNN , 16(3):645–678 , May 2005 .
+[ 25 ] S . Zhu , D . Wang , and T . Li . Data clustering with size constraints . Elsevier KBS , 23(8):883–889 , 2010 .
+288

@@ -1,0 +1,323 @@
+Large Scale Distributed Bayesian Matrix Factorization using Stochastic Gradient MCMC
+∗
+Sungjin Ahn
+University of California , Irvine sungjia@icsuciedu
+†
+Anoop Korattikara
+Google kbanoop@google.com
+Nathan Liu Yahoo Labs nanliu@yahoo inc.com
+Suju Rajan Yahoo Labs suju@yahoo inc.com
+ABSTRACT Despite having various attractive qualities such as high prediction accuracy and the ability to quantify uncertainty and avoid overfitting , Bayesian Matrix Factorization has not been widely adopted because of the prohibitive cost of inference . In this paper , we propose a scalable distributed Bayesian matrix factorization algorithm using stochastic gradient MCMC . Our algorithm , based on Distributed Stochastic Gradient Langevin Dynamics , can not only match the prediction accuracy of standard MCMC methods like Gibbs sampling , but at the same time is as fast and simple as stochastic gradient descent . In our experiments , we show that our algorithm can achieve the same level of prediction accuracy as Gibbs sampling an order of magnitude faster . We also show that our method reduces the prediction error as fast as distributed stochastic gradient descent , achieving a 4.1 % improvement in RMSE for the Netflix dataset and an 1.8 % for the Yahoo music dataset .
+Categories and Subject Descriptors G.4 [ Mathematical Software ] : Algorithm design and analysis ; Parallel and vector implementations
+Keywords Large Scale , Distributed , Matrix Factorization , MCMC , Stochastic Gradient , Bayesian Inference
+∗Part of the work was performed while S . Ahn was an intern researcher at Yahoo Labs . †A . Korattikara contributed to this work while he was at the UC Irvine . ‡M . Welling also has a part time position at the UC Irvine and is an associate fellow of the Canadian Institute for Advanced Research .
+‡
+Max Welling
+University of Amsterdam mwelling@uvanl
+1 .
+INTRODUCTION
+Recommender systems have become a pervasive tool in industry to understand customers and their interests in products . Examples range between music recommendation ( Pandora ) , book recommendation ( Amazon ) , movie recommendation ( Netflix ) , news recommendation ( Yahoo ) to partner recommendation ( eHarmony ) . Recommender systems represent a personalized technology that can help filter at an individual level the enormous amounts of information that is available to us . Given the exponential growth of data , recommender systems are likely to play an increasingly important role to manage our information streams .
+During 2006 2011 Netflix [ 6 ] ran a competition where teams around the world could develop and test new recommender technology on Netflix movie rating data . A few valuable lessons were learnt from that exercise . First , matrix factorization methods work very well compared to nearest neighbor type models . Second , averaging over many different models pays off in terms of prediction accuracy . One particularly effective model was Bayesian probabilistic matrix factorization ( BPMF ) [ 26 ] where predictions are averaged over samples from the posterior distribution . Besides improved prediction accuracy , a full Bayesian analysis also comes with additional advantages such as probabilities over models , confidence intervals , robustness against overfitting , and incorporating prior knowledge and side information [ 2 , 23 ] .
+Unfortunately , since the number of user product interactions can easily run into the billions , posterior inference is usually too expensive to be practical . Learning at that scale requires data and computation to be distributed over many machines and learning updates to only depend on small minibatches of the data . Effective distributed learning algorithms have been devised for alternating least squares ( ALS ) and stochastic gradient descent ( SGD ) [ 12 , 24 , 29 , 27 , 21 , 14 , 18 , 17 , 30 ] . In particular , Distributed Stochastic Gradient Descent ( DSGD ) [ 12 ] has achieved a significant speedup by assigning partitioned rating matrix blocks to workers and then by updating some “ orthogonal ” blocks in parallel using “ stratified ” SGD . DSGD outperformed other parallel SGD approaches such as PSGD [ 14 , 18 ] and ISGD [ 17 , 30 ] where SGD is applied also on some subsets of the ratings while synchronizing globally after each sub epoch ( PSGD ) or once at the end of the training ( ISGD ) . Unfortunately , so far it has proven difficult to apply these advances in distributed learning to posterior sampling in Bayesian matrix factorization models . For instance , for BPMF which requires O((L + M )D3 ) computation per iteration ( with L and M are number of users and items , and D is latent feature dimension ) , distributed computation has not nearly been as effective .
+9 In this paper , we propose a scalable and distributed Bayesian matrix factorization method which combines the predictive accuracy of Bayesian inference and the learning efficiency of stochastic gradient updates . To this end , we extend a recently developed MCMC method , called Stochastic Gradient Langevin Dynamics ( SGLD ) [ 28 ] , so that the updates become efficient in the setting of distributed , large scale matrix factorization . We adapt the SGLD updates to make them suitable for distributed learning on subsets of users and products ( or blocks ) . Each worker manages only a small block of the rating matrix , and updates and communicates only a small subset of the parameters in a fully asynchronous or weaklysynchronous fashion . Unlike distributed SGD where a single model is learnt , our method deploys multiple parallel chains over workers . Consequently , samples are collected at a much faster rate than ordinary MCMC and the multiple parallel chains can explore different modes of parameter space . Both features are reducing the variance and increasing the accuracies of our predictions .
+In the experiments on the Netflix and Yahoo music datasets ( the latter being one of the largest publicly available dataset for recommendation problems ) , we show that our method achieves the same level of accuracy as BPMF but an order of magnitude faster . Conversely , at almost the same efficiency as distributed SGD , our method achieves much better accuracy ( 4.1 % RMSE improvement for the Netflix dataset and 1.8 % for Yahoo music dataset ) . As such we believe that the method proposed in this paper is currently the most competitive matrix factorization method for industry scale problems .
+2 . PRELIMINARIES
+Algorithm 1 Gibbs Sampling for BPMF 1 : Initialize model parameters U(1 ) , V(1 ) 2 : for t = 1 : T do 3 :
+// Sample hyperparameters U ∼ p(ΘU|U(t ) , Θ0 ) , Θ(t ) Θ(t ) for i = 1 : L in parallel do ∼ p(Ui|R , V(t ) , Θ(t ) U ( t + 1 ) end for for j = 1 : M in parallel do ∼ p(Vj|R , U(t ) , Θ(t ) i
+4 : 5 : 6 : 7 : 8 : 9 : 10 : end for
+V ( t + 1 ) j end for
+V ∼ p(ΘV |V(t ) , Θ0 ) U ) // sample user features
+V ) // sample item features p(ΘU|Θ0 ) = N ( µU|µ0 , ( β0ΛU ) p(ΘV |Θ0 ) = N ( µV |µ0 , ( β0ΛV )
+We further place Gaussian Wishart hyper priors on the user and item hyperparameters ΘU = {µU , ΛU} and ΘV = {µV , ΛV } : −1)W(ΛU|W0 , ν0 ) , ( 4 ) −1)W(ΛV |W0 , ν0 ) , ( 5 ) where ν0 is the number of degrees of freedom and W0 is a D × D scale matrix . We collectively denote the parameters of the hyperprior by Θ0 = {µ0 , β0 , ν0 , W0} . At test time , the predictive distribution of an unknown rating R∗ ij can be obtained by marginalizing over both model parameters U , V and hyper parameters ΘU , ΘV , ij|R , Θ0 ) = ∗ p(R p(R ij|Ui , Vj)p(U , V|R , ΘU , ΘV ) ∗ ( 6 ) p(ΘU , ΘV |Θ0)d{U , V}d{ΘU , ΘV }
+2.1 Bayesian Matrix Factorization Suppose we have L users and M items . Our goal is to learn latent feature vectors Ui , Vj ∈ RD such that the rating Rij for item j by user i can be predicted as Rij ≈ U i Vj . We denote the entire rating matrix by R ∈ RL×M , and the latent feature matrices by U ∈ RD×L and V ∈ RD×M , so that R ≈ UV . Assuming a Gaussian error model , the likelihood of the parameters U and V can be written as : p(R|U , V , τ ) = i Vj , τ
+−1 )
+.
+( 1 )
+N ( Rij|U
+L
+M i=1 j=1
+Iij where Iij is equal to 1 if user i rated item j and 0 otherwise . Throughout the paper , we fixed τ = 1 for simplicity1 . Although , in theory , U and V can be learned by maximizing the likelihood above , this results in severe over fitting because only a few ratings are known ( ie R is very sparse ) .
+Therefore , a Bayesian Probabilistic Matrix Factorization ( BPMF ) model was proposed to overcome this problem [ 26 ] . In addition to controlling over fitting through posterior averaging , BPMF also provides estimates of uncertainty through the posterior predictive distribution . The BPMF model as proposed in [ 26 ] is as follows . We place priors on U and V as :
+L M i=1 p(U|µU , ΛU ) = p(V|µV , ΛV ) =
+N ( Ui|µU , Λ
+−1 U ) ,
+N ( Vj|µV , Λ
+−1 V ) .
+( 2 )
+( 3 )
+1All update equations are derived with τ = 1 . j=1
+T
+We can estimate this using a Monte Carlo approximation : p(R where(U ( t ) i , V ( t ) j ij|R , Θ0 ) ≈ 1 ∗ T
+) is the t th sample from the posterior distribution : ij|U ( t ) ∗ i , V ( t ) j ) . p(R
+( 7 ) t=1 p(U , V , ΘU , ΘV |R , Θ0 ) .
+( 8 )
+These samples can be generated using Gibbs sampling ( Algorithm 1 ) , since by conjugacy the conditional distributions of Ui and Vj are Gaussian , and those of ΘU and ΘV are Gaussian Wishart . However , sampling from the conditional distribution of Ui or Vj involves O(D3 ) computations ( for inverting a D × D precision matrix ) and since this has to be done for each user and item , results in a total of O((L + M )D3 ) computations per iteration . Thus , BPMF using Gibbs sampling cannot scale up to real world recommender systems with millions of users and / or items .
+Although it is possible to parallelize BPMF using MapReduce style synchronous global updates , the cubic order complexity still limits its applicability to small D . Also , we require a large number of workers to effectively distribute the L + M cubic order computations . Furthermore , since running the Gibbs sampler from scratch is too expensive , a separate SGD optimizer is usually deployed to reach near the Maximum a Posteriori ( MAP ) state before starting the Gibbs sampler . However , running two different large scale distributed algorithms , each of which requires different optimal settings for the distribution of data and parameters , as well as cluster architectures , adds another considerable level of complexity . 2.2 Stochastic Gradient Langevin Dynamics Assume we have a dataset of N iid data points , denoted by X = {xn}N n=1 , which we model using a distribution p(x|θ ) parameterized by θ ∈ RD . We choose a prior distribution p(θ ) and
+10 our goal is to sample from the posterior distribution p(θ|X ) ∝ p(X|θ)p(θ ) using MCMC .
+One way of obtaining efficient MCMC proposals is to use the gradient of the target density [ 25 , 11 , 20 , 13 ] , eg Langevin Dynamics [ 25 ] is an MCMC algorithm which proposes candidate states according to :
+θt+1 ← θt + t 2
+∇θt log p(θt ) + x∈X g(θ ; x )
++ νt where νt ∼ N ( 0 , tI )
+( 9 ) In the above , t is the step size and g(θ ; x ) = ∇θ log p(x|θ ) is the score . A Metropolis Hastings ( MH ) test is then used to decide whether to accept or reject the proposal . The gradient information allows the Langevin algorithm to make proposals to high density regions and therefore have a high probability of acceptance . However , in large scale problems where N = |X| can be very large , the O(N ) computations per update , required for computing the gradient as well as for the MH test , is infeasible .
+Stochastic Gradient Langevin Dynamics ( SGLD ) [ 28 ] is the first in a line of recently developed approximate MCMC algorithms [ 3 , 22 , 8 , 9 , 4 ] that try to address this issue using noisy gradients that can be cheaply computed from a mini batch of n N data points . SGLD uses the following update rule :
+θt+1 ← θt + t 2
+{∇θt log p(θt ) + N ¯g(θt;Mt)} + νt . n x∈Mt
+Here ¯g(θt;Mt ) = 1 g(x ; θt ) , the mean score computed from a mini batch Mt . SGLD converges to the true posterior distribution if the step size is annealed to zero at a rate that satisfies the following conditions : t = ∞ ,
+∞
+∞ t < ∞ . 2
+( 11 )
+( 10 ) t=1 t=1
+SGLD does not use accept reject tests because the acceptance rate tends to one as the step size goes to zero . Therefore , unlike traditional MCMC algorithms which require O(N ) computations per iteration , SGLD requires only O(n ) computations . More generally , it is valid to replace ¯g(θt;Mt ) in eqn . 10 with any estimator f ( θ , Z ; X ) that satisfies the following conditions : ( i ) it is an unbiased estimator of the true gradient ie EZ [ f ( θ , Z;X ) ] = ¯g(θ;X ) ( ii ) it has finite variance VZ [ f ( θ , Z;X ) ] < ∞ . Here , the expectation and variance are wrt the distribution p(Z;X ) of the auxiliary random variable Z .
+Distributed SGLD ( DSGLD ) [ 4 ] further extends the power of stochastic gradient MCMC using distributed computing . In DSGLD , the dataset is first partitioned and distributed to S workers . Then , multiple chains collect samples in parallel by sampling for the length of a round ( called a trajectory ) at a worker . After a round , each chain switches to a different worker . In [ 4 ] , it is shown that using the following valid SGLD update rule , we can collect samples from the posterior using the distributed datasets : θt+1 ← θt +
+N ( s ) v(s ) ¯g(θt;M(s ) normalized visiting rate to worker s such that
+Here , s is the index of the worker where a chain resides at iteration t , N ( s ) is the size of the local dataset at worker s , and v(s ) is the s ν(s ) = 1 and ν(s ) ∈ ( 0 , 1 ) . The mini batch M(s ) is sampled only from the local dataset of worker s .
+∇θt log p(θt ) +
++ νt . ( 12 ) fl t 2 t ) t
+L M i=1
+3 . BAYESIAN MATRIX FACTORIZATION
+USING SGLD
+3.1 Model
+We will now show how DSGLD can be used for BPMF . Instead of the model described in Section 2.1 , we will use a slightly simplified model [ 19 , 8 ] . We use the same likelihood as in eqn . 1 , but choose simpler priors : p(U|ΛU ) = p(V|ΛV ) =
+N ( Ui|0 , Λ
+−1 U ) ,
+N ( Vj|0 , Λ
+−1 V ) .
+( 13 )
+( 14 ) j=1
+Here , ΛU and ΛV are D dimension diagonal matrices whose d th diagonal elements are λUd and λVd respectively . We also choose the following hyper priors :
+λUd , λVd ∼ Gamma(α0 , β0 ) .
+( 15 ) We choose this simplified model because the proposed method benefits mainly from performing a large number of inexpensive updates ( ie collecting many samples ) per unit time rather than very expensive but high quality updates . The above model is well suited for this because each latent vector can be updated in linear ( O(D ) ) time . At the same time , we still benefit from the power of Bayesian inference through marginalization of the important regularization parameters Λ = {ΛU , ΛV } as well as U and V .
+Although it is possible to apply our method to the model in Section 2.1 , updating the full covariance matrix is more expensive ( O(D2 ) time per update ) and therefore requires more time to converge without significant gain in accuracy ( as per our pilot experiments ) . 3.2 Inference
+In the following section , we first present our algorithm in a single machine setting and later extend it for distributed inference . We alternate between sampling from p(U , V|R , Λ ) using SGLD and sampling from p(Λ|R , U , V ) using Gibbs . 321 Since , usually only N M × L ratings are observed , the rating matrix R is stored using a sparse representation as X = {xn = ( pn , qn , rn)}N n=1 , where each xn is a ( user , item , rating ) tuple and N is the number of observed ratings . The gradient of the log posterior wrt2 Ui is :
+Sampling U , V | Λ , R using SGLD
+G(X ) = gn(Ui;X ) − ΛU Ui
+( 16 ) n=1 where pn Vqn )Vqn gn(Ui;X ) = I[pn = i|X ](rn − U
+( 17 ) Here I[pn = i|X ] is an indicator function that equals 1 if the n th tuple in X pertains to user i and 0 otherwise . To use SGLD , we need an unbiased estimate of this gradient that can be computed cheaply from a mini batch . One way to obtain this is by subsampling a mini batch M = n=1 of m tuples from X and computing the follow{(pn , qn , rn)}m ing stochastic approximation of the gradient :
+G1(M ) = N ¯g(Ui;M ) − ΛU Ui
+( 18 ) 2We derive only wrt Ui . Update rules for other parameters can be obtained by the same procedure .
+N
+11 m n=1 gn(Ui;M ) . Note that the miniwhere , ¯g(Ui;M ) = 1 batch is subsampled from the complete dataset X and not just from the tuples associated with user i . The expectation of G1 over all possible mini batches is : m
+EM[G1(M ) ] = EM [ N ¯g(Ui;M ) ] − ΛU Ui
+N
+= = G(X ) . n=1 gn(Ui;X ) − ΛU Ui
+Since G1 is an unbiased estimator of the true gradient , we can use it for computing SGLD updates . However , note that G1 is nonzero even for users that are not in the mini batch M , because of the prior gradient term −ΛU Ui . Therefore , we have to update the parameters for all users in every iteration , which is very expensive . If we were to update only the parameters of users who have ratings in the mini batch M , the estimator can be written as :
+G2(M ) = N ¯g(Ui;M ) − I[i ∈ Mp]ΛU Ui
+( 19 ) where I[i ∈ Mp ] is equal to 1 if M contains a tuple associated with user i and 0 otherwise . However , G2 is not an unbiased estimator of the true gradient :
+EM[G2(M ) ] = gn(Ui;X ) − hi∗ΛU Ui .
+( 20 ) where hi∗ = EM[I[i ∈ Mp] ] , ie the fraction of mini batches that contains at least one tuple associated with user i ( among all possible mini batches ) . If the mini batches are sampled with replacement , we can compute this as : m hi∗ = 1 −
+1 − Ni∗ N
+( 21 ) where Ni∗ =N n=1
+I[pn = i|X ] , the number of ratings by user i in the complete dataset X . Thus , we can remove the bias in G2 by multiplying the gradient of the prior term with h −1 i∗ ΛU Ui .
+G3(M ) = N ¯g(Ui;M ) − I[i ∈ Mp]h
+−1 i∗ as follows :
+( 22 )
+G3 is an unbiased estimator of the true gradient G and is non zero only for users that have at least one rating in M . Thus we need to update only a subset of user features in each iteration . The SGLD update rule ( for users with ratings in Mt ) is :
+Ui,t+1 ← Ui,t + t 2
+N ¯g(Ui,t;Mt ) − ΛU Ui,t hi∗
++ νt
+( 23 )
+322 Sampling Λ|U , V We can easily sample from the conditional p(Λ|U , V ) , because fl by conjugacy :
+N n=1
+λUd|U , V ∼ Gamma
+λVd|U , V ∼ Gamma
+α0 +
+L 2
+, β0 +
+α0 +
+M 2
+, β0 +
+L M i=1 i=1
+1 2
+1 2
+U 2 di
+V 2 dj
+,
+.
+( 24 )
+( 25 )
+If this is computationally demanding , we can also consider updating Λ using SGLD or mini batch Metropolis Hastings [ 15 , 5 ] . 3.3 Distributed Inference
+For distributed inference , we partition the rating matrix R into a number of blocks . Fig 1 shows a few different ways of partitioning R . Two blocks are said to be orthogonal to each other if the users
+( a ) square
+( b ) column
+( c ) hybrid
+Figure 1 : Block split schemes . and items in one block do not appear in the other block . A set of two or more mutually orthogonal blocks is called an orthogonal block group ( or simply , orthogonal group ) . For example , the two gray colored blocks ( 1 and 4 ) in Fig 1 ( a ) are orthogonal to each other and thus form an orthogonal group . In Fig 1 ( b ) , the blocks are not orthogonal because all columns are shared . In this case , we say that each block by itself is an orthogonal group .
+The blocks are then distributed to workers in such a way that all blocks are assigned and a worker has at least one block . In the following , we assume for simplicity that each worker is a single core machine . However , it is easy to generalize our algorithm to take advantage of multi core ( or threads ) workers with shared memory support .
+We will now describe our distributed algorithm for BPMF . First , imagine that there is only one Markov chain c ( but the dataset is distributed across multiple workers ) . A central parameter server holds the global parameters Uc and Vc of chain c . Since Λ depends only on Uc and Vc , it is easy to update Λ at the parameter server using Gibbs as per Eqns . 25 and 24 . Thus , we will focus on the DSGLD part of the chain that samples from p(U , V|R , Λ ) .
+Each sampling round consists of the following steps : ( 1 ) The parameter server picks a block s via a block scheduler and sends the corresponding sub parameter U(c , s ) and V(c , s ) to the block ’s worker . ( 2 ) The worker updates the sub parameter by running DSGLD ( see section 331 for update equations ) for a number of iterations using its local block of ratings . ( 3 ) The worker sends the final sub parameter state back to the parameter server . ( 4 ) The parameter server updates its global copy to the new sub parameter state . the corresponding workers and updates the sub parameters associated with the block chosen in each round . Since each iteration of local DSGLD updates requires only a mini batch of data , sampling is very fast . Also , communication overhead is low because a ) the multiple local updates ( iterations ) performed within a round do not require any communication b ) only a small sub parameter associated with a specific block is transferred in each round . There are two levels of parallelization that we use to further speed up sampling .
+1 Parallel updates within a chain : . A chain can update subparameters U(c , s1 ) and U(c , s2 ) in parallel if the blocks s1 and s2 are orthogonal to each other . For example , in Fig 1 ( a ) , updating block 1 and then block 4 produces the same result as updating both in parallel . This makes the algorithm progress faster in terms of number of updated parameters per round . The actual performance improvement is dependent on the size of the orthogonal group . For instance , with a 4×4 split , the algorithm will update the parameters faster than with a 2 × 2 split because more parameter blocks can be updated in parallel . However , updates in smaller blocks can be noisier , because the gradients computed from smaller blocks will have higher variance . Therefore , at some point the loss in performance caused by noisier updates on small blocks can exceed the gain obtained by faster updating of the parameters .
+Thus , the Markov chain jumps among the distributed blocks through
+1 2 3 4 1 2 3 4 1 2 3 4 5 6 7 8 12 for t = 1 : γ do
+Algorithm 3 DSGLD at worker s 1 : Initialize ¯hi∗ , ¯h∗j , round length γ , mini batch size m 2 : function WKR_ROUND(U(c , s ) , V(c , s ) , Λ(c ) , t ) 3 : 4 : 5 : 6 : 7 : 8 : 9 : 10 : end function
+Sample a mini batch Mt from X ( s ) for each user i and item j in Mt parallel do end for Send updated U(c , s ) and V(c , s ) to the parameter server
+Update Ui , Vj using Eqn . ( 29 ) and ( 30 ) end for
+√
+√ S chains in parallel squared split as in Fig 1 ( a ) , we can run where each chain updates S blocks in parallel . This way we maximize the within chain parallelism . On the other hand , by reducing the size of orthogonal groups , we can decrease the within chain parallelism in order to increase the between chain parallelization , ie number of parallel chains . At an extreme of this approach , we can let each block become an orthogonal group by itself as in Fig 1 ( b ) and run S independent chains in parallel . Note that in this case , we can choose not only the column splitting but any splitting scheme . Our experiment results suggest to maximize the within chain parallelism as the dataset size increases . For smaller datasets , we may benefit more from the generalization performance of a large number of parallel chains than from a smaller number of chains using the block orthogonality . 331 Distributed SGLD Since X ( the sparse representation of R ) is partitioned into S blocks X ( 1 ) , . . . ,X ( S ) , each worker uses only one of the X ( s ) for computing updates . Thus , we need to modify the bias correctors in Eqn . ( 21 ) so that the gradient estimator remains unbiased under this constraint . If we assume ∪S s=1X ( s ) = ∅ , and that worker s is visited with normalized frequency v(s ) , the correction factors for users and items can be shown to be , respectively : s=1X ( s ) = X and ∩S m
+( 26 )
+( 27 ) where : i∗ = 1 − h(s ) N(s )
+N ( s ) i∗ =
+1 − N ( s)∗j N ( s ) here N ( s ) = |X ( s)| , the total number of ratings in s , and
+1 − N ( s ) i∗ N ( s )
+, h(s)∗j = 1 − N(s )
+I[pn = i|X ( s) ] , N ( s)∗j =
+I[qn = j|X ( s) ] .
+( 28 ) n=1 n=1 ie the number of ratings by user i and of item j respectively in s . Therefore , the local DSGLD update rule using block X ( s ) is : Ui,t+1 ← Ui,t + fl N ( s ) fl N ( s ) v(s ) ¯g(Ui,t;M(s ) v(s ) ¯g(Vj,t;M(s ) t ) − ΛU Ui,t ¯hi∗ t ) − ΛV Vj,t ¯h∗j
+Vj,t+1 ← Vj,t + t 2
++ νt .
+( 29 )
+( 30 )
++ νt t 2
+The above rule updates only the sub parameter associated with block s using only rating tuples in s .
+¯hi∗ = v(s)h(s ) i∗ ,
+¯h∗j = v(s)h(s)∗j
+S s=1 m
+S s=1
+Figure 2 : An example illustration . On the left , a matrix R is partitioned into 2 × 2 blocks , B11,··· , B22 . There are two orthogonal groups ( the gray ( B11 , B22 ) group and the white ( B12 , B21 ) group ) . We run two independent chains , chain a with parameters Ua and Va ( solid line rectangles ) and chain b , with parameters Ub and Vb ( dotted line rectangles ) . Given four workers , we assign a block to each worker . At round t = 1 , chain a updates using the gray orthogonal group and chain b using the white orthogonal group . Note that the entire U and V matrices of both chains are updated in this single round . In the next round , the chains are assigned to the next orthogonal groups by the block scheduler .
+Algorithm 2 DSGLD at parameter server 1 : Initialize model parameters of each chain {Uc
+1 , Vc
+1 , Λc
+1}C c=1 , step sizes { t} t+1 , V(c , s ) for t=1:max_iter do
+2 : for each chain c parallel do 3 : 4 : 5 : 6 : 7 : 8 : 9 : 10 : 11 : 12 : 13 : end for
+U(c , s ) end for if not burn in then t+1 , V(c ) t+1|U(c )
+Store U(c ) Sample Λ(c ) end if end for
+Bc ← GET_ORTHO_BLOCK_GROUP(c , t ) for worker s ∈ Bc do t+1 ← WKR_ROUND(U(c , s ) t
+, V(c , s ) t
+, Λ(c ) t , t ) t+1 as a sample of chain c t+1 , V(c ) t+1 using Eqn . ( 24 ) and ( 25 )
+2 Multiple parallel chains : We can run as many chains in parallel as we like , subject to only computational resource constraints . Each chain can update its parameters in parallel independent of other chains . Hence , the chains are asynchronous in the sense that the status of a chain does not block other chains unless the chains conflict for computation resources . For the split in Fig 1 ( a ) , one chain can update using the gray block group while another chain is using the white block group . Or both chains can use the same block if we assume a shared memory multi threaded implementation . By running multiple chains in parallel , we effectively multiply the number of collected samples by the number of parallel chains . Since the variance of an MCMC estimator is inversely proportional to the number of samples , fast sample generation will compensate for the low mixing rate of SGLD . Also , by initializing the different chains in different places of parameter space , we can explore multiple local minima . This is especially important for large scale high dimensional problems where the time budget is usually not enough for a single chain to mix between different local minima .
+An illustration of these ideas is given in Fig 2 . Algorithms 2 and 3 describe the operations at the parameter server and workers respectively .
+A proper block splitting scheme can be chosen according to the characteristics of the problem and available resources . In other words , we can trade off within chain parallelization and betweenchain parallelization . For example , given S workers , by using a worker 1 t = 1 Ua1 Ua2 Ub1 Ub2 Va1 Va2 Vb1 Vb2 B11 B12 B22 B21 Ua1 Va1 Ua2 Va2 Ub1 Vb2 Ub2 Vb1 worker 2 worker 3 worker 4 t = 2 B11 B22 B21 B12 Ub1 Vb1 Ub2 Vb2 Ua1 Va2 Ua2 Va1 B11 B22 B21 B12 R 13 4 . EXPERIMENTS 4.1 Algorithms and Models
+Single Machine
+Distributed
+Optimization
+MCMC
+SGD DSGD
+SGLD , Gibbs
+DSGLD
+Table 1 : Algorithms .
+√
+We compared five algorithms : SGD , DSGD , SGLD , DSGLD , and Gibbs sampling . As shown in Table 1 , each algorithm can be classified based on whether it is running on a single machine or a distributed architecture , and also based on whether it is an optimization or MCMC algorithm . Since Gibbs sampling was very slow , we update user/item features in parallel ( as suggested in [ 26 ] ) using multiple cores of a single machine . Thus , by Gibbs sampling we will mean the parallelized ( but not distributed ) version from now on .
+√ S parallel chains , where each chain updates
+For DSGLD , we tested two block splitting schemes . Given S S × √ workers , DSGLD S ( ‘S’ stands for square ) partitions R into S blocks as in Fig 1 ( a ) , ie DSGLD S tries to maximize the √ within chain parallelism by using as many orthogonal blocks as √ possible . We run S sub parameter blocks in parallel using S workers . Therefore , all chains can update all parameter at every round . The second splitting scheme , called DSGLD C ( ‘C’ stands for column blocks ) divides R into S blocks as shown in Fig 1(b ) . We split R along the rows because in our experiments we have many more users than items . The blocks in DSGLD C are not orthogonal because all columns are shared , so we just run S independent parallel chains . For Gibbs sampling , we use the original BPMF model3 described in section 21 For the other algorithms , we slightly extend the model described in section 3.1 ( as in [ 8 , 16] ) . The extension includes user and item specific bias terms ai and bj respectively so that the predictions are modeled as :
+Rij ≈ U i Vj + ai + bj
+( 31 )
+We use the following priors and hyper priors for ai and bj : ai ∼ N ( 0 , λ−1 a ) , bj ∼ N ( 0 , λ λa , λb ∼ Gamma(α0 , β0 ) .
+−1 b ) ,
+For U and V , we use the same priors and hyper priors as described in Section 31 Note that , in the new model , we have to sample ai , bj , λa , λb in addition to U , V , ΛU , ΛV . The DSGLD update rules for ai and bj are : ai,t+1 ← ai,t +
+( 32 ) fl N ( s ) fl N ( s ) v(s ) ¯g(ai,t;M(s ) v(s ) ¯g(bj,t;M(s ) t ) − λaai,t ¯hi∗ t ) − λbbj,t ¯h∗j bj,t+1 ← bj,t + t 2
++ νt . t 2
++ νt
+( 33 )
+The main goal of our experiments is to answer the following questions :
+• Accuracy : How does DSGLD compare to other methods in terms of prediction RMSE ?
+• Speed : How fast can DSGLD achieve the RMSE obtained by 1 ) optimization algorithms ( SGD , DSGLD ) 2 ) Gibbs sampling ?
+3Using the simplified model does not reduce the computation complexity of the Gibbs sampling .
+• Factors which affect the above : The number of workers , number of chains , block splitting schemes and the latent factor dimension . 4.2 Setup
+Dataset Netflix Yahoo
+# users 480K 1.8M
+# items 18K 136K
+# ratings 100M 700M
+Table 2 : Datasets .
+We compare all 5 algorithms on two large datasets , Netflix movie ratings [ 6 ] and Yahoo music ratings [ 1 ] ( details in Table 2)4 . To the best of our knowledge , the Yahoo dataset was one of the largest publicly available datasets when we performed the experiments . Note that the Yahoo dataset we use here is different from the one used in the KDD’11 Cup [ 10 ] ( which has ∼250M music ratings and is often referred to by the same name ) . For the Netflix dataset , we use 80 % of the ratings for training and the remaining 20 % for testing as in [ 9 ] . For the Yahoo dataset , the memory footprint was around 17GB for the train and test ratings , and around 1GB for U and V with D = 60 in our 64 bit float based implementation . The memory footprint of the Netflix dataset was relatively small .
+We used Julia [ 7 ] to configure the cluster and execute the core routines of the algorithms . The core routines were implemented in C for high performance . For distributed computing , we used Amazon EC2 instances of type “ r3" which were equipped with Intel Xeon 2.5 GHz CPUs and had memory configurable up to 244GB . Although the instances had multiple cores , we restricted all algorithms , except Gibbs sampling , to run on a single core . For Gibbs sampling , we used a 12 core machine with the same CPU speed . All algorithms were implemented as an in memory execution model and thus no disk I/O overheads were considered . We annealed the step size according to the schedule t = 0(1 + t/κ)−γ , ( as in [ 3 , 22 ] ) which satisfies the convergence conditions in Eqn . ( 11 ) . We found κ , which controls the decay rate , over the range κ = [ 10 , 50 , 100 , 500 , 1000 , 1500 ] . The initial step size 0 was also selected from [ 9e 6,1e 6 ] for Netflix and [ 3e 6,8e 7 ] for Yahoo . More detailed settings are given in the Appendix . We decreased the stepsize after every round which we set to 50 updates . We used γ = 0.51 in all experiments .
+We set the hyperparameters τ = 2.0 and α0 = 1.0 for all experiments . We used β0 = 1.0 for all algorithms except SGLD and DSGLD . For SGLD and DSGLD , the scale of the prior gradients sometimes became large due to multiplication by the bias correctors 1/hi∗ and 1/h∗j . In this case , instead of increasing the mini batch size to reduce the scale of the correctors , we used a more appropriate scale parameter for the Gamma prior distribution ( β0 = 300 ) , to stabilize the scale of precisions sampled from the posterior Gamma distribution .
+Mini batch sizes were set to 50K data points for Netflix and 100K for Yahoo . The initial values for the precisions Λ were all chosen to be 2.0 after testing over a range [ 10 , 5 , 2 , 1 , 0.1 , 001 ] In SGLD and DSGLD , the precision parameters were sampled every 50 rounds after burn in . We discarded ( burned ) samples until the RMSE reached 0.85 for Netflix and 1.08 for Yahoo . For DSGLD , which deploys multiple chains , we used the arithmetic mean of the RMSE of all chains to determine whether burn in has completed . We set the thinning interval to 10 rounds , ie we use only every 10th sample to compute the average prediction . The Gibbs sam
+4Both datasets have integer ratings between 1 to 5 .
+14 Figure 3 : Netflix dataset ( D = 30 ) .
+Figure 4 : Yahoo Music Rating dataset ( D = 30 ) . pler in our experiments was initialized near a MAP state which we found using SGD during burn in .
+Running DSGLD requires a block scheduler ( line 4 in Algorithm 2 ) that determines which blocks ( workers ) are used by each chain in a round . In our experiments , the blocks and the orthogonal groups were chosen beforehand and were assigned to chains deterministically using a cyclic shift ( rotation ) at every round with equal visiting frequency . This scheduling policy is illustrated in Fig 2 .
+4.3 Results
+431 Convergence and wall clock time We first compare the RMSE of the algorithms as a function of computational time . In this experiment , we set D=30 for both datasets and used 9 workers for Netflix and 16 workers for Yahoo . S block split for DSGLD S , Given S workers , we used a S × 1 split for DSGLD C and S × S split for DSGD . The total runtime was set to 50K seconds ( ≈14 hours ) for Netflix and 100K seconds ( ≈27 hours ) for Yahoo . In both Figs . 3 and 4 , the x axis is in log scale for the figure on the left and in linear scale for the figure on the right .
+S × √
+√
+In Fig 3 , we show results on the Netflix dataset ( which is smaller than the Yahoo dataset ) . We see that in the early ( burn in ) stage , all algorithms except Gibbs reduce error at a similar rate . Even though DSGLD S and DSGD uses block orthogonality to update the sub parameters of a chain in parallel , because of communication overheads , the gain in speed up is not enough to outperform a non distributed algorithm like SGLD which is able to reduce the error at a similar rate ( because the dataset size is not very large ) without any communication overhead . Note that because there are many chains for DSGLD , we plot the RMSE from only one chain during burn in . The variance of RMSE across the chains was small during burn in .
+When the burn in phase ends at around 500 700 seconds , MCMC algorithms ( SGLD , DSGLD , and Gibbs ) begin to collect samples and average their predictions over the samples , while DSGD does not and begins to overfit . Interestingly , at this point , we see a remarkably steep decrease in error for both DSGLD S and DSGLDC . In particular , we see the largest decrease for DSGLD C which deploys 9 independent chains ( whereas DSGLD S uses 3 chains ) . Note that this is not solely a consequence of collecting a larger number of samples from multiple chains . We believe that the averaged prediction using many independent chains provides better generalization because many modes are likely to be explored ( or , a large area of a single broad mode can be covered quickly if many chains reside there ) . After more investigation , we indeed observed that the same number of samples collected from a single chain ( eg SGLD ) cannot achieve the same level of accuracy obtained with multiple randomly initialized chains . Furthermore , we observed that given a lot more computational time , SGLD and DSGLD S can approach the RMSE obtained by DSGLD C as they also get a chance to explore other modes or to cover a larger area of a single mode . We will revisit the effect of multiple chains in more detail in the next section . Finally , note that Gibbs sampling achieves lower RMSE than DGSLD C after around 20K seconds ( 5.5 hours ) as shown in Fig 3 left ( but the difference to DSGLD C is very small ) . Note that for this dataset , D and L + M were not too large and we used 12 core single machine for parallel Gibbs sampling . Therefore the computational cost of each iteration was not extremely high .
+We present our results on the Yahoo dataset in Fig 4 with S = 16 workers . A remarkable point is that , here , unlike with the Net
+102103104Sec 082084086088090092RMSEDSGLD S ( 3x3)DSGLD C ( 9x1)DSGD ( 9x9)SGLDGibbsSGD0200040006000800010000Sec 081082083084085086RMSEDSGLD S ( 3x3)DSGLD C ( 9x1)DSGD ( 9x9)SGLDGibbsSGD102103104105Sec 103113123133143RMSEDSGLD S ( 4x4)DSGLD C ( 16x1)DSGD ( 16x16)SGLDGibbsSGD020000400006000080000100000Sec 104105106107108109RMSEDSGLD S ( 4x4)DSGLD C ( 16x1)DSGD ( 16x16)SGLDGibbsSGD15 ( a ) DSGLD C on the Netflix dataset
+( b ) DSGLD S on the Yahoo dataset
+Figure 5 : The effect of the number of chains , number of workers , and block split . flix dataset , DSGLD S outperforms DSGLD C . This is because using orthogonal blocks increases the number of parameters updated per round , resulting in increased convergence speed even after offsetting the communication overhead . As expected , a similar effect is observed for DSGD . The progress of parameter updates in DSGLD C is relatively slow , requiring S = 16 rounds to update all the parameters . Besides , DSGLD C has a much larger communication overhead because the full matrix V has to be transferred between the parameter server and each of the workers , whereas only a small block of V is transferred in DSGLD S . Specifically , in DSGLD C the parameter server sends and receives packets of total size O((L + SM )D ) per round whereas in DSGLD S the total packet size is only O((L + M )D ) . Although DSGLD C is rather slow during burn in , after burn in we still see a faster decrease in RMSE compared to SGLD because multiple chains can mix better . Gibbs sampling converges slower than it does on the Netflix dataset because for the Yahoo dataset the number of latent vectors to update , ie L + M , increases by a factor of four , and the number of ratings , N , by a factor of seven .
+For the Netflix dataset , after 1K seconds , DSGLD C achieved the RMSE ( 0.8145 ) that the Gibbs sampler obtains at 10K seconds . Similarly , for the Yahoo dataset , after 11K seconds,DSGLDS achieved the RMSE ( 1.0454 ) that the Gibbs sampler obtains at 100K seconds . Therefore , the proposed method converges an order of magnitude faster than Gibbs sampling on both datasets , which is especially important when we only have a limited computational budget .
+DSGD converges to a prediction RMSE of 0.8462 on Netflix and 1.0576 on Yahoo after 1K seconds and 10K seconds respectively . Given the same amount of computational time , DSGLD achieves an error of 0.8161 on Netflix and 1.0465 on Yahoo , a relative improvement of 3.7 % and 11 % After convergence , the RI increases to 4.1 % for Netflix and 1.8 % for Yahoo ( See Table . 3 ) . 432 Number of chains and workers We also investigated the effect of the number of chains and the number of workers . The results are presented in Fig 5 . According to the observations from the previous experiment , we used DSGLD C for Netflix and DSGD S for Yahoo to study this effect . The latent feature dimension was set to D=30 .
+In Fig 5 ( a ) , we compare DSGLD C with [ 1 , 3 , 6 , 9 ] chains ( and workers ) and in each case we evenly split the rows of the rating matrix between the chains . Note that DSGLD C ( 1x1 ) is the same as SGLD running on a single machine . We see that during burn in DSGLD C ( 1x1 ) converges faster than the other splits be cause there is no communication overhead . After burn in , when the chains start averaging predictions , we see a sharp decrease in error for the other splits . Although splits with more chains decrease error much faster , they all eventually converge to a similar value . Due to poor mixing , a single chain ( ie SGLD ) converges very slowly .
+In Fig 5 ( b ) , we show results for DSGLD S on the Yahoo dataset . We increased the number of workers to [ 1 , 4 , 16 , 36 ] to compare [ 1 , 2 , 4 , 6 ] parallel chains . Again DSGLD S ( 1x1 ) denotes SGLD running on a single machine . We see that SGLD converges much more slowly because the dataset is larger than Netflix and SGLD has to update more parameters sequentially . Using more orthogonal blocks , DSGLD S can update more parameters in parallel and we see more speed up as we increase the number of workers . Although we increase the number of workers quadratically between the experiments , the packet size transferred between the parameter server and the workers stays constant at O((L+M )D ) because the block size also reduces accordingly . Even after burn in ( horizontal dotted black line at 1.08 RMSE ) we see that with more chains we can decrease the error faster . This is because ( i ) multiple chains help to mix better by exploring a broader space ( ii ) each chain can mix faster by updating orthogonal blocks in parallel . 433 Latent feature dimension In Fig 6 , we show how the latent feature dimension affects the final RMSE . The final RMSE on Netflix is measured after 50K seconds ( 14 hours ) of computational time , because by then all algorithms had converged ( except Gibbs sampling which is expected to take much longer ) . On the Yahoo dataset , we increased the computational time to 100K secs ( 1 day ) , 200K secs ( 2.3 days ) , and 300K secs ( 3.5 days ) for D=[30,60,100 ] , respectively , to give the Gibbs sampler more time to converge . In table 3 , we show the RMSEs of the different algorithms and the relative improvement ( or deterioration ) compared to DSGLD . The Relative Improvement ( RI ) of an algorithm x is defined as RI(x ) = ( rd − rx)/rd , where rx is the RMSE achieved by algorithm x and rd is the RMSE obtained using DSGLD .
+In both Fig 6 ( a ) and ( b ) , we see a large difference in performance between SG MCMC ( SGLD and DSGLD ) and the optimization methods ( SGD and DSGD ) . The RI is 3.6 % − 4.6 % on Netflix and 18%−39 % on the Yahoo dataset . As observed in [ 26 ] , we see that the optimization methods do not consistently improve with increasing D . One reason is that optimization methods are highly sensitive to the hyperparameter values which become difficult to tune as the model becomes more complex . However , our method consistently improves as we increase D , because the hyper
+102103104Sec 082084086088090092RMSEDSGLD C ( 1x1)DSGLD C ( 3x1)DSGLD C ( 6x1)DSGLD C ( 9x1)102103104105Sec 103113123133143RMSEDSGLD S ( 1x1 , S=1)DSGLD S ( 2x2 , S=4)DSGLD S ( 4x4 , S=16)DSGLD S ( 6x6 , S=36)16 ( a ) RMSE on Netflix
+( b ) RMSE on Yahoo
+( c ) Required time per sample
+Figure 6 : The effect of the latent feature dimension . ( a ) and ( b ) show RMSE for D = [ 30 , 60 , 100 ] on ( a ) the Neflix dataset and ( b ) the Yahoo music ratings dataset . The maximum computational time was set to 50K seconds for Netflix and 100K ( D=30 ) , 200K ( D=60 ) , and 300K ( D=100 ) seconds for Yahoo . ( c ) shows time ( in seconds ) required to draw a single sample on the Yahoo dataset .
+D 30
+60
+100
+0.8126
+DSGD 0.8462
+SGLD DSGLD C SGD 0.8421 0.8143 3.63 % 4.13 % 0.21 % 0.8447 0.8097 4.62 % 4.38 % 0.28 % 0.8415 0.8082 4.63 % 4.37 % 0.48 %
+0.8074
+0.8043
+0.8428
+0.8395
+Gibbs 0.8118 +0.09 % 0.8259 2.29 % 0.8339 3.68 %
+D 30
+60
+100
+DSGD 1.0576
+SGLD SGD 1.0578 1.0448 1.83 % 1.82 % 0.58 % 1.0548 1.0351 2.73 % 3.13 % 0.82 % 1.0567 1.0335 3.30 % 3.93 % 1.04 %
+1.0588
+1.0631
+DSGLD S
+1.0387
+1.0267
+1.0229
+Gibbs 1.0454 0.64 % 1.0364 0.94 % 1.0339 1.08 %
+Table 3 : RMSE and relative improvement ( RI ) . Left : Netflix . Right : Yahoo . The percentage shown below each RMSE value is the relative improvement . parameters are sampled from their posterior distributions . We also see that the performance of Gibbs sampling on Netflix gets worse as D increases , because we used the same amount of computational budget for all D although the computation complexity increases as D does . On the Yahoo dataset on which we increase computational time as we increase D , we see that the RMSE for Gibbs increases as D increases , but is still lower than that of DSGLD .
+In Fig 6 ( c ) , we compare the time ( in seconds ) required to draw a single sample for the three sampling algorithms at different values of D on the Yahoo dataset . We see that Gibbs sampling is almost two orders of magnitude slower than SGLD . For D=100 , SGLD , DSGLD S , and Gibbs generated 688 , 460 , and 8 samples respectively in 300K seconds of computational time . For Netflix , Gibbs generated around 100 samples in 50K seconds for D=30 . Thus , even though the Gibbs sampler can produce higher quality samples ( in terms of lower auto correlation ) , the sampling speed is so slow that it cannot satisfactorily handle large scale datasets .
+5 . CONCLUSION
+Most applications of matrix factorization to recommender systems are based on stochastic gradient optimization algorithms because these are the only ones that can computationally handle very large datasets . However , by restricting ourselves to such simple algorithms , we miss out on all the advantages of Bayesian modelling such as quantifying uncertainty , controlling over fitting , incorporating prior information and better prediction accuracy . In this paper , we introduced a novel algorithm for scalable distributed Bayesian matrix factorization that achieves the best of both worlds , ie it inherits all the advantages of Bayesian inference at the speed of stochastic gradient optimization .
+Our algorithm , based on Distributed Stochastic Gradient Langevin Dynamics , uses only a mini batch of ratings to make each update as in Stochastic Gradient Descent optimization . By running mul tiple chains in parallel , and also using multiple workers within a chain to update orthogonal blocks , we can scale up Bayesian Matrix Factorization to very large datasets . Parallel chains with different random initializations also help us to average predictions from multiple modes and improve accuracy . Moreover , our algorithm can effectively handle datasets that are distributed across multiple machines unlike traditional MCMC algorithms .
+We believe that our method is just one example of a much larger class of scalable distributed Bayesian matrix factorization methods . For example , we can consider using more sophisticated stochastic gradient algorithms [ 3 , 22 , 8 , 9 ] in place of SGLD to further improve the mixing rate .
+Acknowledgments We thank Tianqi Chen and members of Yahoo labs personalization team for useful comments and discussions . This work is supported by NSF grant IIS 1216045 , Amazon AWS in Education Grant award , Yahoo , Google , and Facebook .
+References [ 1 ] R2 yahoo! music user ratings of songs with artist , album , and genre meta information , v . 1.0 ( 1.4 gbyte and 1.1 gbyte ) . http://webscopesandboxyahoocom/
+[ 2 ] R . Adams , G . Dahl , and I . Murray . Incorporating side information in probabilistic matrix factorization with gaussian processes . In Proceedings of the 26th Conference on Uncertainty in Artificial Intelligence , 2010 .
+[ 3 ] S . Ahn , A . Korattikara , and M . Welling . Bayesian posterior sampling via stochastic gradient fisher scoring . In International Conference on Machine Learning , 2012 .
+3060100D080081082083084085RMSESGDDSGDSGLDDSGLD CGibbs3060100D10221032104210521062RMSESGDDSGDSGLDDSGLD SGibbs3060100D102103104105SecondsSGLDDSGLD SGibbs17 [ 4 ] S . Ahn , B . Shahbaba , and M . Welling . Distributed stochastic gradient mcmc . In International Conference on Machine Learning ( ICML ) , 2014 .
+[ 20 ] R . Neal . Mcmc using hamiltonian dynamics . In S . Brooks ,
+A . Gelman , G . Jones , and X . Meng , editors , Handbook of Markov Chain Monte Carlo . Chapman&Hall/CRC , 2011 .
+[ 5 ] R . Bardenet , A . Doucet , and C . Holmes . Towards scaling up markov chain monte carlo : an adaptive subsampling approach . In International Conference on Machine Learning , 2014 .
+[ 6 ] J . Bennett and S . Lanning . The netflix prize . In KDD Cup and Workshop in conjunction with KDD , 2007 .
+[ 7 ] J . Bezanson , A . Edelman , S . Karpinski , and V . B . Shah . Julia : A fresh approach to numerical computing . CoRR , 2014 . http://dblpunitrierde/rec/bib/journals/corr/BezansonEKS14
+[ 8 ] T . Chen , E . Fox , and C . Guestrin . Stochastic gradient hamiltonian monte carlo . In International Conference on Machine Learning ( ICML ) , 2014 .
+[ 9 ] N . Ding , Y . Fang , R . Babbush , C . Chen , R . Skeel , and H . Neven . Bayesian sampling using stochastic gradient thermostats . In Advances in Neural Information Processing Systems ( NIPS ) , 2014 .
+[ 10 ] G . Dror , N . Koenigstein , Y . Koren , and M . Weimer . The yahoo! music dataset and kdd cup’11 . In Proceedings of KDD Cup 2011 competition , 2012 .
+[ 11 ] S . Duane , A . Kennedy , B . Pendleton , and D . Roweth . Hybrid monte carlo . Physics letters B , 195(2):216–222 , 1987 .
+[ 12 ] R . Gemulla , E . Nijkamp , P . Haas , and Y . Sismanis .
+Large scale matrix factorization with distributed stochastic gradient descent . In Proceedings of the 17th ACM SIGKDD international conference on Knowledge discovery and data mining , 2011 .
+[ 13 ] M . Girolami and B . Calderhead . Riemann manifold langevin and hamiltonian monte carlo . Journal of the Royal Statistical Society B , 73 ( 2):1–37 , 2010 .
+[ 14 ] K . B . Hall , S . Gilpin , and G . Mann . Mapreduce/bigtable for distributed optimization . In NIPS LCCC Workshop , 2010 .
+[ 15 ] A . Korattikara , Y . Chen , and M . Welling . Austerity in mcmc land : Cutting the metropolis hastings budget . In International Conference on Machine Learning ( ICML ) , 2014 .
+[ 21 ] F . Niu , B . Recht , C . Ré , and S . J . Wright . Hogwild! : A lock free approach to parallelizing stochastic gradient descent . arXiv preprint arXiv:1106.5730 , 2011 .
+[ 22 ] S . Patterson and Y . W . Teh . Stochastic gradient riemannian langevin dynamics on the probability simplex . In Advances in Neural Information Processing Systems , 2013 .
+[ 23 ] I . Porteous , A . Ascuncion , and M . Welling . Bayesian matrix factorization with side information and dirichlet process mixtures . In AAAI Conference on Artificial Intelligence , 2010 .
+[ 24 ] B . Recht and C . Re . Parallel stochastic gradient algorithms for large scale matrix completion . In Mathematical Programming Computation , 2013 .
+[ 25 ] P . Rossky , J . Doll , and H . Friedman . Brownian dynamics as smart monte carlo simulation . In The Journal of Chemical Physics , 1978 .
+[ 26 ] R . Salakhutdinov and A . Mnih . Bayesian probabilistic matrix factorization using markov chain monte carlo . In Proceedings of the 25th International Conference on Machine Learning ( ICML ) , 2008 .
+[ 27 ] C . Teflioudi , F . Makari , and R . Gemulla . Distributed matrix completion . In IEEE 12th International Conference on Data Mining , 2012 .
+[ 28 ] M . Welling and Y . W . Teh . Bayesian learning via stochastic gradient langevin dynamics . In International Conference on Machine Learning ( ICML ) , 2011 .
+[ 29 ] Y . Zhuang , W . S . Chin , Y . C . Juan , and C . J . Lin . A fast parallel sgd for matrix factorizatio in shared memory systems . In Proceedings of the 7th ACM conference on Recommender systems , 2013 .
+[ 30 ] M . Zinkevich , M . Weimer , and A . Smola . Parallelized stochastic gradient descent . In Neural Information Processing Systems , 2010 .
+APPENDIX A . STEP SIZE PARAMETERS
+[ 16 ] Y . Koren , R . Bell , and C . Volinsky . Matrix factorization techniques for recommender systems . In IEEE Computer , 2009 .
+0 κ
+1e 6 10
+SGD DSGD SGLD DSGLD C DSGLD S 9e 6 50
+9e 6 1000
+9e 6 1000
+3e 6 500
+[ 17 ] G . Mann , R . McDonald , M . Mohri , N . Silberman , and D . Walker . Efficient large scale distributed training of conditional maximum entropy models . In Neural Information Processing Systems , 2009 .
+[ 18 ] R . McDonald , K . Hall , and G . Mann . Distributed training strategies for the structured perceptron . In HLT , 2010 .
+[ 19 ] A . Mnih and R . Salakhutdinov . Probabilistic matrix factorization . In Advances in Neural Information Processing Systems , 2007 .
+Table 4 : Stepsize parameters for Netflix D=30 and 9 workers
+SGD 1.5e 6 500
+0 κ
+DSGD SGLD DSGLD C DSGLD S 3e 7 100
+1.5e 6 1000
+1.5e 6 500
+9e 7 1000
+Table 5 : Stepsize parameters for Yahoo D=30 and 16 workers
+18

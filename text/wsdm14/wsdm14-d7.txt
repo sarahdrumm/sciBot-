@@ -1,0 +1,476 @@
+FENNEL : Streaming Graph Partitioning for Massive Scale Graphs
+Charalampos E . Tsourakakis , Christos Gkantsidis , Boˇzidar Radunovi´c , Milan Vojnovi´c1
+November 2012
+Technical Report MSR TR 2012 113
+Microsoft Research
+Microsoft Corporation
+One Microsoft Way Redmond , WA 98052 http://wwwresearchmicrosoftcom
+1C . E . Tsourakakis is with Carnegie Mellon University , Pittsburgh , PA , USA ( ctsourak@mathcmuedu ) work performed while an intern with Microsoft Research . C . Gkantsidis ( chrisgk@microsoft.com ) , B . Radunovi´c ( bozidar@microsoft.com ) , and M . Vojnovi´c ( milanv@microsoft.com ) are with Microsoft Research , Cambridge , United Kingdom .
+Abstract – Graph partitioning is a key problem to enable efficient solving of a wide range of computational tasks and querying over large scale graph data , such as computing node centralities using iterative computations , and personalized recommendations . In this work , we introduce a unifying framework for graph partitioning which enables a well principled design of scalable , streaming graph partitioning algorithms that are amenable to distributed implementation . We show that many previously proposed methods are special instances of this framework , we derive a novel onepass , streaming graph partitioning algorithm and show that it yields significant benefits over previous approaches , using a large set of real world and synthetic graphs .
+Surprisingly , despite the fact that our algorithm is a onepass streaming algorithm , we found its performance to be overall comparable to the de facto standard offline software METIS , and it even outperforms it on numerous real world graphs . For instance , for the Twitter graph with more than 1.4 billion of edges , our method partitions the graph in about 40 minutes achieving a balanced partition that cuts as few as 6.8 % of edges , whereas it took more than 8 1 2 hours by METIS to produce a balanced partition that cuts 11.98 % of edges . Furthermore , modularity–a popular measure for community detection [ 21 , 47 , 46]–is also a special instance of our framework . We establish the first rigorous approximation algorithm , achieving a guarantee of O(log(k)/k ) for partitioning into k clusters .
+Finally , we evaluate the performance gains by using our graph partitioner while solving standard PageRank computation in a graph processing platform , and observe significant gains in terms of the communication cost and runtime .
+Keywords Graph partitioning , Clustering , Streaming , Distributed Computing , Community Detection
+1 .
+INTRODUCTION
+Nowadays , the scale of graph data that needs to be processed is massive . For example , in the context of online services , the Web graph amounts to at least one trillion of links [ 1 ] , Facebook recently reported more than 1 billion of users and 140 billion of friend connections [ 2 ] , and , in 2009 , Twitter reported more than 40 million of users and about 1.5 billion of social relations [ 39 ] . The unprecedented proliferation of data provides us with new opportunities and benefits but also poses hard computational challenges . Frequent graph computations such as community detection [ 18 ] , finding connected components [ 25 ] , counting triangles [ 43 ] , iterative computations using graph input data such as computing PageRank and its variations [ 48 ] , shortest path and radius computations [ 11 , 26 ] become challenging computational tasks in the realm of big graph data . An appealing solution to improve upon scalability is to partition massive graphs into smaller partitions and then use a large distributed system to process them . The sizes of the partitions have to be balanced to exploit the speedup of parallel computing over different partitions . Furthermore , it is critical that the number of edges between distinct partitions is small in order to minimize the communication cost incurred due to messages that are exchanged among different partitions . Many popular graph processing platforms such as Pregel [ 42 ] that builds on MapReduce [ 15 ] , and its open source cousin Apache Giraph , PEGASUS [ 25 ] and GraphLab [ 41 ] use as a default partitioner Hash Partition of vertices , which corresponds to assigning each vertex to one of the k partitions uniformly at random . This heuristic would balance the number of vertices over different clusters , but being entirely oblivious to the graph structure , it may well result in suboptimal edge cuts . In fact , the expected fraction of edges cut by a random partition of vertices into k ≥ 1 clusters is equal to 1− 1/k . Given the fact that real world graphs tend to have sparser cuts [ 9 ] , it is important to discover methods that are computationally efficient , practical , and yet yield high quality graph partitioning .
+The problem of finding a balanced graph partition that minimizes the number of edges cut is known as the balanced graph partitioning problem , which has a rich history in the context of theoretical computer science . This problem is known to be NP hard [ 37 ] and several approximation algorithms have been derived in previous work , which we review in Section 2 . In practice , systems aim at providing good partitions in order to enhance their performance , eg , [ 42 , 50 ] . It is worth emphasizing that the balanced graph partitioning problem appears in various guises in numerous domains . For instance , it is critical for efficiently solving large scale computational fluid dynamics and computational mechanics problems [ 59 ] and sparse linear systems [ 31 ] .
+Another major challenge in the area of big graph data is efficient processing of dynamic graphs . For example , new accounts are created and deleted every day in online services such as Facebook , Skype and Twitter . Furthermore , graphs created upon post processing datasets such as Twitter posts are also dynamic , see for instance [ 7 ] . It is crucial to have efficient graph partitioners of dynamic graphs . For example , in the Skype service , each time a user logs in , his/her online contacts get notified . It is expensive when messages have to be sent across different graph partitions since this would typically involve using network infrastructure . The balanced graph partitioning problem in the dynamic setting is known as streaming graph partitioning [ 54 ] . Vertices ( or edges ) arrive and the decision of the placement of each vertex ( edge ) has to be done “ on the fly ” in order to incur as little computational overhead as possible .
+It is worth noting that the state of the art work on graph partitioning seems to roughly divide in two main lines of research . Rigorous mathematically work and algorithms that do not scale to massive graphs , eg , [ 38 ] , and heuristics that are used in practice [ 29 , 30 , 49 , 54 ] . Our work contributes towards bridging the gap between theory and practice . can be summarized in the following points :
+Summary of our Contributions . Our contributions • We introduce a framework for graph partitioning that overcomes the computational complexity of the traditional balanced graph partitioning problem . Specifically , in the traditional balanced graph partitioning problem , the goal is to minimize the number of edges cut subject to hard constraints on the number of vertices in a cluster [ 8 , 38 ] . We relax the hard cardinality constraints by formulating the graph partitioning objective function to consist of two elements : an element that accounts for the cost of edges cut and an element that that accounts for the cost related to the sizes of individual clusters . • Our formulation provides a unifying framework that accommodates many of previously proposed heuristics as special cases . For example , the folklore heuristic of [ 49 ] which
+# Clusters ( k )
+2 4 8
+Fennel λ
+ρ 6.8 % 1.1 29 % 1.1 48 % 1.1
+Best competitor Hash Partition
+λ
+34.3 % 55.0 % 66.4 %
+ρ
+1.04 1.07 1.10
+λ
+50 % 75 % 87.5 %
+ρ 1 1 1
+METIS λ
+ρ
+11.98 % 1.02 24.39 % 1.03 35.96 % 1.03
+Table 1 : Fraction of edges cut λ and the maximum load ρ for Fennel , the previously best known heuristic ( linear weighted degrees [ 54 ] ) and hash partitioning of vertices for the Twitter graph with approximately 1.5 billion edges . Fennel and best competitor require around 40 minutes , METIS more than 8 1
+2 hours . k places a vertex to the cluster with the fewest non neighbors , and the degree based heuristic of [ 54 ] , which serves as the current state of the art method with respect to performance . • We show that interpolating between the non neighbors heuristic [ 49 ] and the neighbors heuristic [ 54 ] provides improved performance for the balanced partitioning problem . • A special case of interest is that of a modularity objective [ 21 , 46 , 5 ] for which we provide the first rigorous approximation guarantee . Specifically , we provide a O( log ( k ) ) approximation algorithm , for given number k of clusters . It is noteworthy that this result stands in a stark contrast to the best known approximation ratio for the traditional balanced graph partition , which becomes worse with the total number of vertices [ 38 ] . • We evaluate our proposed streaming graph partitioning method , Fennel , on a wide range of graph datasets , both realworld and synthetic graphs , showing that it produces high quality graph partitioning . Table 1 shows the performance of Fennel versus the best previously known heuristic , which is the linear weighted degrees [ 54 ] , and the baseline Hash Partition of vertices . We observe that Fennel achieves , simultaneously , significantly smaller fraction of edges cut and balanced cluster sizes . • We also demonstrate the performance gains with respect to communication cost and run time while running iterative computations over partitioned input graph data in a distributed cluster of machines . Specifically , we evaluated Fennel and other partitioning methods by computing PageRank in the graph processing platform Apache Giraph . We observe significant gains with respect to the byte count among different clusters and run time in comparison with the baseline Hash Partition of vertices , and the best performing competitor .
+Structure of the Paper . The remainder of the paper is organized as follows . Section 2 discusses the related work . In Section 3 , we introduce our graph partitioning framework and present our main theoretical result . In Section 4 , we present our scalable , streaming algorithm . In Section 5 , we evaluate our method versus the state of the art work on a broad set of real world and synthetic graphs , while in Section 6 we provide our experimental results in the Apache Giraph . In Section 7 we discuss certain aspects of Fennel . In Section 8 , we conclude .
+2 . RELATED WORK
+Graph partitioning is an NP hard problem [ 20 ] with numerous applications in various domains , with a long history and a very active present . Here , we discuss related work to graph partitioning in two major different settings . The first setting which serves as our initial motivation is the balanced graph partitioning problem [ 37 ] . The second setting is related to community detection [ 18 ] .
+Balanced graph partitioning problem : A fundamental problem in every parallel and distributed application is data placement since it typically affects significantly the execution efficiency of jobs , eg , [ 60 , 32 ] . This is particularly true for graphs , as interaction locality can easily be inferred from the graph edges . One class of examples are social graphs [ 27 , 50 ] , where operations are user interactions , defined through social engagements represented with graph edges . However , many other graph algorithms benefit from careful graph partitioning and placement , such as machine learning and data mining [ 23 , 25 , 54 ] . The goal of balanced graph partitioning is to minimize an application ’s overall runtime . This is achieved by assigning to each processor/machine an equal amount of data and concurrently minimizing the parallel/distributed overhead by minimizing the number of edges cut by the corresponding partition . Formally , the ( k , ν) balanced graph partitioning asks to divide the vertices of a graph in components each of size less than ν n k . The case k = 2 , ν = 1 is equivalent to the minimum bisection problem , an NP hard problem [ 20 ] . Several approximation algorithms , eg , [ 16 ] , and heuristics , eg , [ 17 , 33 ] exist for this problem . When ν = 1+ for any desired but fixed there exists a O( −2 log1.5 n ) approximation algorithm [ 37 ] . √ When ν = 2 there exists an O( log k log n ) approximation algorithm based on semidefinite programming ( SDP ) [ 38 ] . Due to the practical importance of k partitioning there exist several heuristics , among which METIS [ 52 ] and its parallel version [ 53 ] stand out for their fine performance . METIS is widely used in many existing systems [ 27 ] . There are also heuristics that improve efficiency and partition quality of METIS in a distributed system [ 51 ] . An extensive summary of existing heuristics can be found in [ 3 ] .
+The methods above are offline . Recently , Stanton and Kliot worked on the online partitioning problem [ 54 ] . This setting is also well adapted to dynamic graphs , where offline methods incur an expensive computational cost , requiring to repartition the entire graph . Moreover , the newly obtained partitioning can significantly differ from the old one . This in turn implies a large reshuffle of the data , which is very costly in a distributed system . Online algorithms assign vertices to components as they arrive and never reassign them later . One of the earliest online algorithm was proposed by Kernighan and Lin [ 33 ] , which is also used as a subroutine in METIS . Currently the most advanced online partitioning algorithm is by Stanton and Kliot [ 54 ] , which we extensively compare our approach against .
+It is also worth noting a separate line of work whose goal is to optimize small dynamic graph queries [ 34 , 50 , 55 ] . In this setting queries are small and are ideally executed on a single machine , and dynamic replication is used to make sure that most of the data is available locally . Our case is different as queries are large and each query is executed on many or all of the sites . We note that our partitioning algorithm can be deployed in parallel with the replication methods .
+Community Detection : Finding communities , ie , groups of vertices within which connections are dense , but between which connections are sparser , is a central problem of network science [ 44 ] . The difference between the balanced graph partitioning problem is that there exists no no restriction on the number of vertices per subset . Another difference that also arises frequently in practice is that we do not know the true number of clusters a priori , or even their existence . The notion of a community has been formalized in various ways , see [ 40 ] . Of interest to our work is the popular modularity measure [ 21 , 47 , 46 ] . Modularity measures the number of within community edges relative to a null random graph model that is usually considered to be a random graph with the same degree distribution . Despite the popularity of modularity , a few rigorous results exist . Specifically , Brandes et al . [ 10 ] proved that maximizing modularity is NP hard . Approximation algorithms without theoretical guarantees whose performance is evaluated in practice also exist [ 5 ] . We advance this line of work .
+3 . PROPOSED METHOD
+In this section we introduce our framework for graph partitioning and our main theoretical result . We first present our general graph partitioning framework in Section 3.1 , and then discuss the classic balanced graph partitioning in Section 3.2 as a special instance of our framework . We discuss the intuition behind our approach and state our main theoretical result which provides the first rigorous approximation algorithm for computing the modularity of a graph under an Erd¨os R´enyi null model .
+Notation . Throughout the paper we use the following notation . Let G(V , E ) be a simple , undirected graph . Let the number of vertices and edges be denoted as |V | = n and |E| = m . For a subset of vertices S ⊆ V , let e(S , S ) be the set of edges with both end vertices in the set S , and let e(S , V \ S ) be the set of edges whose one end vertex is in the set S and the other is not . For a given vertex v let tS(v ) be the number of triangles ( v , w , z ) such that w , z ∈ S . We define a partition of vertices P = ( S1 , . . . , Sk ) to be a family of pairwise disjoint sets vertices , ie , Si ⊆ V , Si ∩ Sj = ∅ for every i = j . We call Si to be a cluster of vertices . Finally , for a graph G = ( V , E ) and a partition P = ( S1 , S2 , . . . , Sk ) of the vertex set V , let ∂e(P ) be the set of edges that cross partition boundaries , ie ∂e(P ) = ∪k i=1e(Si , V \ Si ) . 3.1 Our Graph Partitioning Framework
+We formulate a graph partitioning framework that is based on accounting for the cost of internal edges and the cost of edges cut by a partition of vertices in a single global objective function .
+The size of individual partitions . We denote with σ(Si ) the size of the cluster of vertices Si , where σ is a mapping to the set of real numbers . Special instances of interest are ( 1 ) edge cardinality where the size of the cluster i is proportional to the total number of edges with at least one end vertex |e(Si , Si)| + |e(Si , V \ Si)| , ( 2 ) interiorin the set Si , ie edge cardinality where the size of cluster i is proportional to the number of internal edges |e(Si , Si)| , and ( 3 ) vertex cardinality where the size of partition i is proportional to the total number of vertices |Si| . The edge cardinality of a cluster is an intuitive measure of cluster size . This is of interest for computational tasks over input graph data where the computational complexity within a cluster of vertices is linear in the number of edges with at least one vertex in the given cluster . For example , this is the case for iterative computations such as solving the power iteration method . The vertex cardinality is a standard measure of the size of a cluster and for some graphs may serve as a proxy for the edge cardinality , eg for the graphs with bounded degrees . The global objective function . We define a global objective function that consists of two elements : ( 1 ) the interpartition cost cOUT : N k → R+ and ( 2 ) the intra partition cost cIN : N k → R+ . These functions are assumed to be increasing and super modular ( or convex , if extended to the set of real numbers ) . For every given partition of vertices P = ( S1 , S2 , . . . , Sk ) , we define the global cost function as f ( P ) = cOUT(|e(S1 , V \ S1)| , . . . ,|e(Sk , V \ Sk)| )
++cINT(σ(S1 ) , . . . , σ(Sk) ) .
+It is worth mentioning some particular cases of interest . Special instance of interest for the inter partition cost is the linear function in the total number of cut edges |∂e(P)| . This case is of interest in cases where an identical cost is incurred per each edge cut , eg in cases where messages are exchanged along cut edges and these messages are transmitted through some common network bottleneck . For the intra partition cost , a typical goal is to balance the cost across different partitions and this case is accommodated i=1 c(σ(Si) ) , where c(x ) is a convex increasing function such that c(0 ) = 0 . In this case , the intra partition cost function , being defined as a sum of convex functions of individual cluster sizes , would tend to balance the cluster sizes , since the minimum is attained when sizes are equal . by defining cINT(σ(S1 ) , . . . , σ(Sk ) ) =k
+We formulate the graph partitioning problem as follows .
+Optimal k Graph Partitioning
+1 , . . . , S∗
+Given a graph G = ( V , E ) , find a partition k} of the vertex set V , such P∗ = {S∗ that f ( P∗ ) ≥ f ( P ) , for all partitions P such that |P| = k . We refer to the partition P∗ as the optimal k graph partition of the graph G .
+Streaming setting . The streaming graph partitioning problem can be defined as follows . Let G = ( V , E ) be an input graph and let us assume that we want to partition the graph into k disjoint subsets of vertices . The vertices arrive in some order , each one with the set of its neighbors.We consider three different stream orders , as in [ 54 ] .
+• Random : Vertices arrive according to a random per mutation .
+• BFS : This ordering is generated by selecting a vertex uniformly at random and performing breadth first search starting from that vertex .
+• DFS : This ordering is identical to the BFS ordering , except that we perform depth first search .
+A k partitioning streaming algorithm has to decide whenever a new vertex arrives to which cluster it is going to be placed . A vertex is never moved after it has been assigned to a cluster . The formal statement of the problem follows .
+3.2 Classic Balanced Graph Partitioning
+In this section we consider the traditional instance of a graph partitioning problem that is a special case of our framework by defining the inter partition cost to be equal to the total number of edges cut and the intra partition cost defined in terms of the vertex cardinalities . The starting point in the existing literature , eg , [ 37 , 38 ] , i | ≤ ν n is to admit hard cardinality constraints , so that |S∗ for i = 1 , . . . , k , where ν ≥ 1 is a fixed constant . This set of constraints makes the problem significantly hard . Currently , √ state of the art work depends on the impressive ARV barrier log n ) approximation factor . The [ 8 ] which results in a O( typical formulation is the following : k minimizeP=(S1,,Sk ) subject to |Si| ≤ ν n k , ∀i ∈ {1 , . . . , k}
+|∂e(P)|
+Our approach : Just Relax ! The idea behind our approach is to relax the hard cardinality constraints by introducing a term in the objective cIN(P ) whose minimum is achieved k for all i ∈ {1 , . . . , k} . Therefore , our framewhen |Si| = n work is based on a well defined global graph partitioning objective function , which allows for a principled design of approximation algorithms and heuristics as shall be demonstrated in Section 4 . Our graph partitioning method is based on solving the following optimization problem : minimizeP=(S1,,Sk )
+|∂e(P)| + cIN(P )
+( 1 ) tion by cIN(P ) = k
+Intra partition cost : With the goal in mind to favor balanced partitions , we may define the intra partition cost funci=1 c(|Si| ) where c(x ) is an increasing function chosen to be super modular , so that the following increasing returns property holds c(x + 1 ) − c(x ) ≥ c(y + 1 ) − c(y ) , for every 0 ≤ y ≤ x . We shall focus our attention to the following family of functions c(x ) = αxγ , for α > 0 and γ ≥ 1 . By the choice of the parameter γ , this family of cost functions allows us to control how much the imbalance of cluster sizes is accounted for in the objective function . In one extreme case where γ = 1 , we observe that the objective corresponds to minimizing the number of cut edges , thus entirely ignoring any possible imbalance of the cluster sizes . On the other hand , by taking larger values for the parameter γ , the more weight is put on the cost of partition imbalance , and this cost may be seen to approximate hard constraints on the imbalance in the limit of large γ . Parameter α is also important . We advocate a principled choice of α independently of whether it is suboptimal compared to other choices . Specifically , we choose α = m kγ−1 nγ . This provides us a proper scaling , since for this specific choice of α , our optimization k problem is equivalent to minimizing a natural normalization i=1 e(Si,V \Si )
+|Si|
+γ k of the objective function
+.
++ 1 k i=1 m
+An equivalent maximization problem . We note that the optimal k graph partitioning problem admits an equivalent formulation as a maximization problem . It is of interest to consider this alternative formulation as it allows us to make a connection with the concept of graph modularity , which we do later in this section . For a graph G = ( V , E ) and n k
+S ⊆ V , we define the function h : 2V → R as : h(S ) = |e(S , V \ S)| − c(|S| ) where h(∅ ) = h({v} ) = 0 for every v ∈ V . Given k ≥ 1 and a partition P = {S1 , . . . , Sk} of the vertex set V , we define the function g as k i=1 g(P ) = h(Si ) .
+Now , we observe that maximizing the function g(P ) over all possible partitions P of the vertex set V such that |P| = k Indeed , corresponds to the k graph partitioning problem . this follows by noting that g(P ) =
+|e(Si , Si)| − c(|Si| ) k = ( m − k i=1
+|e(Si , V \ Si)| ) − c(|Si| ) i=1
+= m − f ( P ) .
+Thus , maximizing function g(P ) corresponds to minimizing function f ( P ) , which is precisely the objective of our k graph partitioning problem .
+Modularity : We note that when the function c(x ) is taken from the family c(x ) = αxγ , for α > 0 and γ = 2 , our objective has a combinatorial interpretation . Specifically , our problem is equivalent to maximizing the function k i=1
+[ |e(Si , Si)| − p
+|Si|
+]
+2
+In this case , each summation element where p = α/2 . admits the following interpretation : it corresponds to the difference between the realized number of edges within a cluster and the expected number of edges within the cluster under the null hypothesis that the graph is an Erd¨osR´enyi random graph with parameter p . This is intimately related to the concepts of graph modularity [ 21 , 47 , 46 ] and quasi cliques [ 4 ] . For this special case , because of the combinatorial meaning of the objective function , we design a non trivial , semidefinite programming ( SDP ) algorithm and show that it provides provides the following guarantee .
+Theorem 1 . There exists a polynomial time algorithm k ) approximation guarantee for the which provides an Ω( log k Optimal k Graph Partitioning .
+The proof is based on a partitioning algorithm that is derived by using a randomized rounding of a solution to our SDP relaxation of the original combinatorial optimization problem .
+Notice that compared to the existing literature we avoid any dependence on the number of vertices n , exactly because we avoid the hard cardinality constraints . Compared to the random assignment baseline , where a vertex is assigned randomly to a cluster , which we analyze [ 56 ] , we improve by a logarithmic factor . This suggests that the offline SDP solver will yield significantly better performance for small values of k . It is worth noting that we conjecture that our approximation factor is the best possible , see Appendixfor the grounds of this conjecture . Finally , we outline that despite the fact that semidefinite programming has been used to approximate “ in practice ” modularity [ 5 ] , to the best of our knowledge , Theorem 2 would provide the first rigorous approximation guarantee for the given problem .
+4 . ONE PASS STREAMING ALGORITHM We derive a streaming algorithm by using a greedy assignment of vertices to partitions as follows : assign each arriving vertex to a partition such that the objective function of the k graph partitioning problem , defined as a maximization problem , is increased the most . Formally , given that current vertex partition is P = ( S1 , S2 , . . . , Sk ) , a vertex v is assigned to partition i such that g(S1 , . . . , Si ∪ {v} , . . . , Sj , . . . , Sk )
+≥ g(S1 , . . . , Si , . . . , Sj ∪ {v} , . . . , Sk ) , for all j ∈ [ k ] . Defining δg(v , Si ) = g(S1 , . . . , Si ∪ {v} , . . . , Sj , . . . , Sk ) − g(S1 , . . . , Si , . . . , Sj , . . . , Sk ) , the above greedy assignment of vertices corresponds to that in the following algorithm .
+Greedy vertex assignment
+• Assign vertex v to partition i such that
+δg(v , Si ) ≥ δg(v , Sj ) , for all j ∈ [ k ]
+Special case : edge cut and balanced vertex cardinality . This is a special case of introduced that we discussed in SecIn this case , δg(v , Sl ) = |N ( v ) ∩ Sl| − δc(|Sl| ) , tion 31 where δc(x ) = c(x + 1 ) − c(x ) , for x ∈ R+ , and N ( v ) denotes the set of neighbors of vertex v . The two summation elements in the greedy index δg(v , Sl ) account for the two underlying objectives of minimizing the number of cut edges and balancing of the partition sizes . Notice that the component |N ( v)∩ Si| corresponds to the number of neighbours of vertex v that are assigned to partition Si . In other words , this corresponds to the degree of vertex v in the subgraph induced by Si . On the other hand , the component δc(|Si| ) can be interpreted as the marginal cost of increasing the partition i by one additional vertex . For our special family of cost functions c(x ) = αxγ , we have δc(x ) = αγxγ−1 . For γ = 1 , the greedy index rule corresponds to assigning a new vertex v to partition i with the largest number of neighbours in Si , i.e |N ( v)∩Si| . This is one of the greedy rules considered by Stanton and Kliot [ 54 ] , and is a greedy rule that may result in highly imbalanced partition sizes . 2 x2 , the greedy index is |N ( v)∩ Si|−|Si| , and the greedy assignment corresponds to assigning a new vertex v to partition i that minimizes the number of non neighbors of v inside Si , |Si \ N ( v)| . Hence , this yields the following heuristic : ie place a vertex to the partition with the least number of nonneighbors [ 49 ] . This assignment accounts for both the cost of cut edges and the balance of partition sizes .
+On the other hand , in case of quadratic cost c(x ) = 1
+Finally , we outline that in many applications there exist very strict constraints on the load balance . Despite the fact that we investigate the effect of the parameter γ on the load balance , one may apply the following algorithm , which enforces to consider only machines whose load is at most ν× n between the basic heuristics of [ 54 ] and [ 49 ] . The overall complexity of our algorithm is O(n + m ) . k . This algorithm for 1 ≤ γ ≤ 2 amounts to interpolating amazon0312 amazon0505 amazon0601 as 735 as Skitter as caida ca AstroPh ca CondMat ca GrQc ca HepPh ca HepTh cit HepPh cit HepTh cit Patents email Enron email EuAll epinions Epinions1 LiveJournal1 p2p Gnutella04 p2p Gnutella05 p2p Gnutella06 p2p Gnutella08 p2p Gnutella09 p2p Gnutella25 p2p Gnutella31 roadNet CA roadNet PA roadNet TX Slashdot0811 Slashdot0902 Slashdot081106 Slashdot090216 Slashdot090221 usroads wb cs stanford web BerkStan web Google web NotreDame web Stanford wiki Talk Wikipedia 20051105 Wikipedia 20060925 Twitter
+Nodes 400 727 410 236 403 364 6 474 1 694 616 26 475 17 903 21 363 4 158 11 204 8 638 34 401 27 400 3 764 117 33 696 224 832 119 070 75 877 4 843 953 10 876 8 842 8 717 6 299 8 104 22 663 62 561 1 957 027 1 087 562 1 351 137 77 360 82 168 77 258 81 776 82 052 126 146 8 929 654 782 855 802 325 729 255 265 2 388 953 1 596 970 2 935 762 41 652 230
+Description
+Edges 2 349 869 Co purchasing 2 439 437 Co purchasing 2 443 311 Co purchasing
+12 572 Auton . Sys . 11 094 209 Auton . Sys . 53 381 Auton . Sys .
+196 972 Collab . 91 286 Collab . 13 422 Collab . 117 619 Collab . 24 806 Collab .
+420 784 Citation 352 021 Citation 16 511 740 Citation
+180 811 Email 339 925 Email 701 569 Trust 405 739 Trust Social
+42 845 684
+39 994 P2P 31 837 P2P 31 525 P2P 20 776 P2P 26 008 P2P 54 693 P2P 147 878 P2P 2 760 388 Road 1 541 514 Road 1 879 201 Road Social 469 180 Social 504 230 Social 466 661 Social 495 661 498 527 Social 161 950 Road 2 6320 Web 6 581 871 Web 4 291 352 Web 1 090 108 Web 1 941 926 Web 4 656 682 Web 18 539 720 Web 35 046 792 Web
+1 468 365 182
+Social
+Table 2 : Datasets used in our experiments .
+Greedy vertex assignment with threshold ν
+• Let Iν = {i : µi ≤ ν n k } . Assign vertex v to partition i ∈ Iν such that δg(v , Si ) ≥ δg(v , Sj ) , for all j ∈ Iν
+5 . EXPERIMENTAL EVALUATION
+In this section we present results of our experimental evaluations of the quality of graph partitions created by our method and compare with alternative methods . We first describe our experimental setup in Sections 5.1 , and then present our findings using synthetic and real world graphs , in Section 5.2 and 5.3 , respectively . 5.1 Experimental Setup
+The real world graphs used in our experiments are shown in Table 2 . Multiple edges , self loops , signs and weights were removed , if any . Furthermore , we considered the largest connected component from each graph in order to ensure that there is a non zero number of edges cut . All graphs are publicly available on the Web . All algorithms have been
+Figure 1 : Fraction of edges cut λ and maximum load normalized ρ as a function of γ , ranging from 1 to 4 with a step of 0.25 , over five randomly generated power law graphs with slope 25 The straight lines show the performance of METIS .
+Method
+H
+B [ 54 ] DG [ 54 ] LDG [ 54 ] EDG [ 54 ]
+T [ 54 ] LT [ 54 ] ET [ 54 ] NN [ 49 ] Fennel
+METIS [ 29 ]
+BFS
+λ
+ρ
+96.9 % 1.01 97.3 % 1.00 32 0 % 34 % 1.01 39 % 1.04 61 % 2.11 63 % 1.23 64 % 1.05 69 % 1.00 14 % 1.10 8 % 1.00
+Random λ ρ
+96.9 % 1.01 96.8 % 1.00 43 % 1.48 40 % 1.00 48 % 1.01 78 % 1.01 78 % 1.10 79 % 1.01 55 % 1.03 14 % 1.02 8 % 1.02
+Table 3 : Performance of various existing methods on amazon0312 , k is set to 32 , illustrating the typical performance of various methods : Fennel outperforms one pass , streaming competitors and has performance inferior but comparable to METIS . implemented in java , and all experiments were performed on a single machine , with Intel Xeon cpu at 3.6GHz , and 16GB of main memory . Wall clock times include only the algorithm execution time , excluding the required time to load the graph into memory .
+In our synthetic experiments , we use two random graph models . The first model is the hidden partition model [ 13 ] . It is specified by four parameters parameters : the number of vertices n , the number of clusters k , the intercluster and intracluster edge probabilities p and q , respectively . First , each vertex is assigned to one of k clusters uniformly at random . We add an edge between two vertices of the same ( different ) cluster(s ) with probability p ( q ) independently of the other edges . We denote this model as HP(n , k , p , q ) . The second model we use is a standard model for generating random power law graphs . Specifically , we first generate a power law degree sequence with a given slope δ and use the Chung Lu random graph model to create an instance of a power law graph [ 12 ] . The model CL(n , δ ) has two parameters : the number of vertices n and the slope δ of the expected power law degree sequence .
+We evaluate our algorithms by measuring two quantities from the resulting partitions . In particular , for a fixed partition P we use the measures of the fraction of edges cut λ and the normalized maximum load ρ , defined as
+# edges cut by P # total edges maximum load
+.
+|∂e(P)| m
+=
+, and
+λ =
+ρ = n k
+Throughout this section , we also use the notation λM and µM to indicate the partitioning method M used in a particular context . In general , we omit indices whenever it is clear to which partition method we refer to . Notice that k ≥ ρ ≥ 1 since the maximum load of a cluster is at most n and there always exists at least one cluster with at least n k vertices .
+In Section 5.2 , we use the greedy vertex assignment without any threshold . Given that we are able to control ground truth , we are mainly interested in understanding the effect of the parameter γ on the tradeoff between the fraction of edges cut and the normalized maximum load . In Section 5.3 , the setting of the parameters we use throughout our experiments is γ = 3 n3/2 , and ν = 11 The choice of γ is based on our findings from Section 5.2 and of α based on Section 3 . Finally , ν = 1.1 is a reasonable load balancing factor for real world settings .
+√ k m
+2 , α =
+As our competitors we use state of the art heuristics . Specif ically , in our evaluation we consider the following heuristics from [ 54 ] , which we briefly describe here for completeness . Let v be the newly arrived vertex .
+• Balanced ( B ) : place v to the cluster Si with minimal size .
+• Hash partitioning ( H ) : place v to a cluster chosen uni formly at random .
+• Deterministic Greedy ( DG ) : place v to Si that maxi mizes |N ( v ) ∩ Si| .
+11522533540020406081γFraction of edges cut METISFENNEL1152253354246810γMax Load METISFENNEL m
+7 185 314 6 714 510 6 483 201 6 364 819 6 308 013 6 279 566 k 4 8 16 32 64 128
+Fennel λ
+ρ
+62.5 % 1.04 82.2 % 1.04 92.9 % 1.01 96.3 % 1.00 98.2 % 1.01 98.4 % 1.02
+METIS λ
+ρ
+65.2 % 1.02 81.5 % 1.02 92.2 % 1.02 96.2 % 1.02 97.9 % 1.02 98.8 % 1.02
+Table 4 : Fraction of edges cut λ and normalized maximum load ρ for Fennel and METIS [ 29 ] averaged over 5 random graphs generated according to the HP(5000,08,05 ) model . As we see , Fennel despite its small computational overhead and deciding onthe fly where each vertex should go , achieves comparable performance to METIS .
+1−exp,|Si| − n k
+• Linear Weighted Deterministic Greedy ( LDG ) : place v to Si that maximizes |N ( v ) ∩ Si| × ( 1 − |Si|
+) .
+• Exponentially Weighted Deterministic Greedy ( EDG ) :
+• Triangles ( T ) : place v to Si that maximizes tSi ( v ) . • Linear Weighted Triangles ( LT ) : place v to Si that place v to Si that maximizes |N ( v)∩Si|× maximizes tSi ( v ) × that maximizes tSi ( v ) ×
+1 − exp,|Si| − n
+• Exponentially Weighted Triangles ( ET ) : place v to Si
+.
+1 − |Si|
+. n k n k k
+• Non Neighbors ( NN ) : place v to Si that minimizes |Si\
+N ( v)| .
+In accordance with [ 54 ] , we observed that LDG is the best performing heuristic . Even if Stanton and Kliot do not compare with NN , LDG outperforms it also . Non neighbors typically have very good load balancing properties , as LDG as well , but cut significantly more edges . Table 3 shows the typical performance we observe across all datasets . Specifically , it shows λ and ρ for both BFS and random order for amazon0312 . DFS order is omitted since qualitatively it does not differ from BFS . We observe that LDG is the best competitor , Fennel outperforms all existing competitors and is inferior to METIS , but of comparable performance . In whatever follows , whenever we refer to the best competitor , unless otherwise mentioned we refer to LDG . Time wise METIS is the fastest , taking 11.4 seconds to run . Hashing follows with 12 seconds and the rest of the methods except for T , LT , ET take the same time up the integer part , ie , 13 seconds . Triangle based methods take about 10 times more time . Existing approximate counting methods can mitigate this [ 57 , 58 ] . It is also worth emphasizing that for larger graphs Fennel is faster than METIS . 5.2 Synthetic Datasets
+Before we delve into our findings , it is worth summarizing the main findings of this section . ( a ) For all synthetic graphs we generated , the value γ = 3 2 achieves the best performance pointwise , not in average . ( b ) The effect of the stream order is minimal on the results . Specifically , when γ ≥ 3 2 all orders result in the same qualitative results . When γ < 3 2
+BFS and DFS orders result in the same results which are worse with respect to load balancing –and hence better for the edge cuts– compared to the random order . ( c ) Fennel ’s performance is comparable to METIS .
+Hidden Partition : We report averages over five randomly generated graphs according to the model HP(5000 , k , 0.8 , 0.5 ) for each value of k we use . We study ( a ) the effect of the parameter γ , which parameterizes the function c(x ) = αxγ , and ( b ) the effect of the number of clusters k .
+We range γ from 1 to 4 with a step of 1/4 , for six different values of k shown in the second column of Table 4 . For all k , we observe , consistently , the following behavior : for γ = 1 we observe that λ = 0 and ρ = k . This means that one cluster receives all vertices . For any γ greater than 1 , we obtain excellent load balancing with ρ ranging from 1 to 1.05 , and the same fraction of edges cut with METIS up the the first decimal digit . This behavior was not expected a priori , since in general we expect λ shifting from small to large values and see ρ shifting from large to small values as γ grows . Given the insensitivity of Fennel to γ in this setting , we fix γ = 3 2 and present in Table 4 our findings . For each k shown in the second column we generate five random graphs . The first column shows the average number of edges . . Notice that despite the fact that we have only 5,000 vertices , we obtain graphs with several millions of edges . The four last columns show the performance of Fennel and METIS . As we see , their performance is comparable and in one case ( k=128 ) Fennel clearly outperforms METIS .
+Power Law : It is well known that power law graphs have no good cuts [ 23 ] , but they are commonly observed in practice . We examine the effect of parameter γ for k fixed to 10 . In contrast to the hidden partition experiment , we observe the expected tradeoff between λ and ρ as γ changes . We generate five random power law graphs CL(20 000,2.5 ) , since this value matches the slope of numerous real world networks [ 45 ] . Figure 1 shows the tradeoff when γ ranges from 1 to 4 with a step of 0.25 for the random stream order . The straight line shows the performance of METIS . As we see , when γ < 1.5 , ρ is unacceptably large for demanding real world applications . When γ = 1.5 we obtain essentially the same load balancing performance with METIS . Specifically , ρFennel = 1.02 , ρMETIS = 103 The corresponding cut behavior for γ = 1.5 is λFennel = 62.58 % , λMETIS = 5446 % Furthermore , we experimented with the random , BFS and DFS stream orders . We observe that the only major difference between the stream orders is obtained for γ = 125 For all other γ values the behavior is identical . For γ = 1.25 we observe that BFS and DFS stream orders result in significantly worse load balancing properties . Specifically , ρBFS = 3.81 , ρDFS = 3.73 , ρRandom = 17130 The corresponding fractions of edges cut are λBFS = 37.83 % , λDFS = 38.85 % , and λRandom = 6351 %
+5.3 Real World Datasets
+Again , before we delve into the details of the experimental results , we summarize the main points of this Section : ( 1 ) Fennel is superior to existing streaming partitioning algorithms . Specifically , it consistently , over a wide range of k values and over all datasets , performs better than the current state of the art . Fennel achieves excellent load balancing with significantly smaller edge cuts . ( 2 ) For smaller values of k ( less or equal than 64 ) the observed gain is more pronounced . ( c ) Fennel is fast . Our implementation scales
+Figure 2 : ( Left ) CDF of the relative difference ( λFennel−λc and the best competitor . ( Right ) Same but for the absolute difference ( λFennel − λc ) × 100 % .
+) × 100 % of percentages of edges cut of our method
+λc
+Relative Gain
+ρFennel − ρc k 2 4 8 16 32 64 128 256 512 1024
+25.37 % 25.07 % 26.21 % 22.07 % 16.59 % 14.33 % 13.18 % 13.76 % 12.88 % 11.24 %
+0.47 % 0.36 % 0.18 % 0.43 % 0.34 % 0.67 % 0.17 % 0.20 % 0.17 % 0.44 % ) × 100 % and Table 5 : The relative gain ( 1 − λFennel load imbalance , where subindex c stands for the best competitor , averaged over all datasets in Table 1 as a function of k . Our method consistently yields sparser edge cut the best competitor . The benefit is more pronounced for the smaller values of k .
+λc tively . Now we turn our attention to smaller bur reasonablysized datasets .
+Aggregate View .
+In Figure 2 , we show the distribution of the difference of the fraction of edges cut of our method and that of the best competitor , conditional on that the maximum observed load is at most 11 This distribution is derived from the values observed by partitioning each input graph from our set averaged over a range of values of parameter k that consists of values 2 , 4 , . . . , 1024 . These results demonstrate that the fraction of edges cut by our method is smaller than that of the best competitor in all cases . Moreover , we observe that the median difference ( relative difference ) is in the excess of 20 % ( 15% ) , thus providing appreciable performance gains .
+Detailed View . We provide a more detailed view in Figure 3 where we show the empirical distributions of the difference of the percentage of the edges cut of our method and that of the best competitor , conditional on the number of partitions k . These results provide further support that our method yields appreciable benefits for a wide range of parameter k . Several values of k are omitted for visual purposes . Interestingly , we consistently observe that the datapoints where Fennel and LDG have comparable performance , with LDG sometimes performing better by a little , are roadNet CA , roadNet PA , and roadNet TX .
+Furthermore , in Table 5 , we present the average performance gains conditional on the number of partitions k . These numerical results amount to an average relative reduction of the fraction of edges cut in the excess of 18 % . Moreover , the performance gains observed are consistent across different values of parameter k , and are more pronounced for smaller values of k .
+Bicriteria . In our presentation of experimental results so far , we focused on the fraction of edges cut by conditioning on the cases where the normalized maximum load was smaller than a fixed threshold . We now provide a closer look at both criteria and their relation . In Figure 4 , we consider the difference of the fraction of edges cut vs . the difference of normalized maximum loads of the best competitor and our method . We observe that in all the cases , the differences of normalized maximum loads are well within 10 % while the well with the size of the graph . It takes about 40 minutes to partition the Twitter graph which has more than 1 billion of edges .
+Twitter Graph . Twitter graph is the largest graph in our collection of graphs , with more than 1.4 billion edges . This feature makes it the most interesting graph from our collection , even if , admittedly , is a graph that can be loaded into the main memory . The results of Fennel on this graph are excellent . Specifically , Table 1 shows the performance of Fennel , the best competitor LDG , the baseline Hash Partition and METIS for k = 2 , 4 and 8 . All methods achieve balanced partitions , with ρ ≤ 11 Fennel , is the only method that always attains this upper bound . However , this reasonable performance comes with a high gain for λ . Specifically , we see that Fennel achieves better performance of k = 2 than METIS . Furthermore , Fennel requires 42 minutes whereas METIS requires 8 1 2 hours . Most importantly , Fennel outperforms LDG consistently . Specifically , for k = 16 , 32 and 64 , Fennel achieves the following results ( λ , ρ ) = ( 59 % , 1.1 ) , ( 67 % , 1.1 ) , and ( 73 % , 1.1 ) , respectively . Linear weighted degrees ( LDG ) achieves ( 76 % , 1.13 ) , ( 80 % , 1.15 ) , and ( 84 % , 1.14 ) , respec
+−50−40−30−20−1000020406081Relative differenceCDF−20−15−10−5050020406081Absolute differenceCDF Figure 3 : Same as in Figure 2 but conditional on the number of partitions k . Notice that the benefit is more pronounced for the smaller values of k . See Figure 6for a detailed plot , containing CDFs for all values of k we used . ever , the partitioning objective may significantly vary depending on system characteristics . One example are largescale production data centers . A typical production data center consists of large oversubscribed clusters [ 24 ] . In such an environment it is more important to balance the traffic across clusters than the traffic or the amount of computation executed within a cluster . A different example is a typical small scale cluster rented by a customer from a large cloud provider . There are anecdotal evidences that most customers of Amazon ’s Elastic MapReduce service rent clusters with up to a few tens of nodes . In such a setting it is important to minimize the network traffic across the nodes but also to balance well the computational load on each node .
+Each of these settings may require a different tunning of the partitioning objective . The distinct advantage of Fennel is that it gives a flexibility in choosing the suitable objective . We demonstrate the efficiency and flexibility of Fennel with the typical Elastic MapReduce scenario in mind1 . We set up a cluster and we vary the number of nodes to 4 , 8 and 16 nodes . Each node is equipped with Intel Xeon CPU at 2.27 GHz and 12 GB of main memory . On the cluster ,we run Giraph , a graph processing platform running on the top of Hadoop . We implemented a PageRank algorithm on Giraph and we run it on LiveJournal1 dataset2 .
+Since the complexity of PageRank depends on the number of edges and not vertices , we use a version of the Fennel objective ( Eq 1 ) that balances the number of edges per clusi=1 e(Si , Si)γ with ter . In particular , we choose cIN(P ) =k
+γ = 15
+We compare with Hash Partition of vertices , the default partitioner used by Giraph , and LDG . We look at two metrics . The first is the average duration of an iteration of the PageRank algorithm . This metric is directly proportional to the actual running time and incorporates both the processing and the communication time . The second metric is the
+Figure 5 : Fennel : time vs . number of edges . fraction of edges cut by our method is significantly smaller . These results confirm that the observed reduction of the fraction of edges cut by our method is not at the expense of an increased maximum load .
+Speed of partitioning . We now turn our attention to the efficiency of our method with respect to the running time to partition a graph . Our graph partitioning algorithm is a one pass streaming algorithm , which allows for fast graph partitioning . In order to support this claim , in Figure 5 , we show the run time it took to partition each graph from our dataset vs . the graph size in terms of the number of edges . We observe that it takes in the order of minutes to partition large graphs of tens of millions of edges . As we also mentioned before , partitioning the largest graph from our dataset collection took about 40 minutes .
+6 . SYSTEM EVALUATION
+As stated in the introduction , one of the key goals of graph partitioning is to speed up large scale computations . How
+1Exhaustive evaluation on diverse distributed graph processing platforms is out of scope of this paper . 2Twitter data set was too large to fit on a 16 node Giraph cluster .
+−80−60−40−200200020406081Relative differenceCDF 2816256−40−30−20−100100020406081Absolute differenceCDF 2816256012345x 1070100200300400Time ( secs)#Edges Figure 4 : Absolute difference δλ and Relative gain versus the maximum load imbalance δρ . average number of Megabytes transmitted by a cluster node in each iteration . This metric directly reflects the quality of a cut .
+The results are depicted in Table 6 . We see that Fennel has the best runtime in all cases . This is because it achieves the best balance between the computation and communication load . Hash Partition takes 25 % more time than Fennel and it also has a much higher traffic load . The best competitor ( LDG ) has much worse runtime . This is because its objective is to balance vertices across nodes , and the PageRank iteration complexity is proportional to the maximal number of edges per node . However , it also achieves the smallest traffic load .
+It is worth noting that in the evaluation presented in [ 54 ] , LDG partitioning outperforms Hash Partition . This is because in they used a much larger number of partitions ( 100 and 400 ) , which yield more balanced partitions but also a smaller difference in the cross cut sizes ( see Section 5 ) . Also , the evaluation in [ 54 ] is performed on a different system ( Spark ) .
+7 . DISCUSSION
+In this section we discuss some of the extensions that can be accomodated by our framework and discuss some details about distributed implementation . intra rack vs .
+Assymetric edge costs . As discussed in Section 6 , in some application scenarios some edges that cross partition boundaries may be more costly than other . For example , this is the case if individual graph partitions are assigned to machines in a data center and these machines are connected with an asymmetric network topology , so that the available network bandwidth varies across different pairs of machines , eg inter rack machines in standard data center architectures [ 24 ] . Another example are data center network topologies where the number of hops between different pairs of machines vary substantially , eg torus topologies [ 14 ] . In such scenarios , it may be beneficial to partition a graph by accounting for the aforementioned asymmetries of edge cut costs . This can be accomodated by appropriately defining the inter partition cost function in our framework . Distributed implementation . Our streaming algorithm requires computing marginal value indices that can be com puted in a distributed fashion by maintaining local views on a global state . For concretness , let us consider the traditional objective where the inter partition cost is a linear function of the total number of cut edges and the intrapartition cost is a sum of convex functions of vertex cardinalities of individual partitions . In this case , computing the marginal value indices requires to compute per each vertex arrival : ( 1 ) the number of neighbors of given vertex that were already assigned to given cluster of vertices , and ( 2 ) the number of vertices that were already assigned per cluster . The former corresponds to a set intersection query and can be efficiently implemented by standard methods , eg using data structures such as minwise hashing [ 51 ] . The latter is a simple count tracking problem . Further optimizations could be made by trading accuracy for reduction of communication overhead by updating of the local views at a smaller rate than the rate of vertex arrival . An efficient implementation of the streaming graph partitioning methods in a distributed environment is out of scope of this paper and is left as an interesting direction for future work .
+8 . CONCLUSION
+In this work we provide a new perspective on the wellstudied problem of balanced graph partitioning . Specifically , we introduce a unifying framework that subsumes state ofthe art heuristics [ 49 , 54 ] for streaming graph partitioning . Furthermore , we show that interpolating between the two state of the art heuristics [ 49 , 54 ] provides significantly enhanced performance . We evaluate our proposed framework on a large graph collection where we verify consistently over a wide range of cluster ( k ) values the superiority of our method . On the theory side , we show that a special instance of our objective is the popular modularity measure [ 21 , 46 , 5 ] with an Erd¨os R´enyi null model . We prove the first rigorous approximation guarantee for this special case of our objective . Finally , we evaluate Fennel in Apache Giraph where we verify its efficiency . In future work , we plan ( 1 ) to test other choices of cost functions and , ( 2 ) to create an offline community detection algorithm using ideas from our framework .
+−01−005000501−20−15−10−505101520δρ(%)δλ(%)−01−005000501−45−30−150153045δρ(%)Relative gain( % ) Data set
+# Clusters ( k ) Hash Best competitor
+LiveJournal1 LiveJournal1 LiveJournal1
+4 8 16
+32.27 17.26 10.64
+60.57 29.57 16.56
+Fennel 25.49 15.14 9.05
+Hash 321.41 285.35 222.28
+Best competitor
+98.3 74.25 68.79
+Fennel 196.9 180.02 148.67
+Runtime [ s ]
+Communication [ MB ]
+Table 6 : The average duration of a step and the average amount of MB exchanged per node and per step during the execution of PageRank . Our method has the shortest runtime . All variances are small , except for the variance of the communication cost of the best competitor ( where one heavily loaded node has much higher communication cost and runtime than the others ) .
+Acknowledgements We would like to thank to those who kindly helped us in getting access to some of the graph data that we used for our evaluation , including Nick Craswell , Bodo Billerbeck , Gabriel Kliot , Dushyanth Narayanan , and Isabelle Stanton . We would also like to thank Jingren Zhou for some helpful feedback .
+9 . REFERENCES [ 1 ] http://googleblogblogspotcouk/2008/07/ we knew web was bightml
+[ 2 ] http :
+//techcrunch.com/2012/10/04/facebook tops\ 1 billion monthly users ceo mark\ zuckerberg shares a personal note/ .
+[ 3 ] http://staffwebcmsgreacuk/~wc06/partition/ [ 4 ] J . Abello , M . Resende , and S . Sudarsky . Massive quasi clique detection . LATIN 2002 : Theoretical Informatics , pages 598–612 , 2002 .
+[ 5 ] G . Agarwal and D . Kempe . Modularity maximizing graph communities via mathematical programming . The European Physical Journal B Condensed Matter and Complex Systems , 66(3):409–418 , 2008 .
+[ 6 ] Farid Alizadeh . Interior point methods in semidefinite programming with applications to combinatorial optimization . SIAM Journal on Optimization , 5 , 1993 .
+[ 7 ] A . Angel , N . Sarkas , N . Koudas , and D . Srivastava . Dense subgraph maintenance under streaming edge weight updates for real time story identification . Proc . VLDB Endow . , 5(6):574–585 , February 2012 .
+[ 8 ] S . Arora , R . Satish , and U . Vazirani . Expander flows , geometric embeddings and graph partitioning . In STOC , pages 222–231 , 2004 .
+[ 9 ] D . Blandford , G . Blelloch , and I . Kash . An experimental analysis of a compact graph representation . In ALENEX , 2004 .
+[ 10 ] U . Brandes , D . Delling , M . Gaertler , R . G¨orke ,
+M . Hoefer , Z . Nikoloski , and D . Wagner . On finding graph clusterings with maximum modularity . In Graph Theoretic Concepts in Computer Science , pages 121–132 . Springer , 2007 .
+[ 11 ] B . V . Cherkassky , A . V . Goldberg , and T . Radzik .
+Shortest paths algorithms : theory and experimental evaluation . In SODA ’94 , pages 516–525 , Philadelphia , PA , USA , 1994 . Society for Industrial and Applied Mathematics .
+[ 12 ] F . R . K . Chung and L . Lu . The average distance in a random graph with given expected degrees . Internet Mathematics , 1(1):91–113 , 2003 .
+[ 13 ] A . Condon and R . M . Karp . Algorithms for graph partitioning on the planted partition model . In RANDOM APPROX , pages 221–232 , 1999 .
+[ 14 ] P . Costa , A . Donnelly , A . Rowstron , and G . O’Shea . Camdoop : exploiting in network aggregation for big data applications . In NSDI’12 , pages 3–3 , 2012 .
+[ 15 ] J . Dean and S . Ghemawat . Mapreduce : simplified data processing on large clusters . Commun . ACM , 51(1):107–113 , January 2008 .
+[ 16 ] U . Feige and R . Krauthgamer . A polylogarithmic approximation of the minimum bisection . SIAM J . Comput . , 31(4):1090–1118 , April 2002 .
+[ 17 ] C . M . Fiduccia and R . M . Mattheyses . A linear time heuristic for improving network partitions . In DAC ’82 , pages 175–181 , 1982 .
+[ 18 ] Santo Fortunato . Community detection in graphs .
+CoRR , abs/0906.0612 , 2009 .
+[ 19 ] Alan M . Frieze and Mark Jerrum . Improved approximation algorithms for max k cut and max bisection . Algorithmica , 18(1):67–81 , 1997 .
+[ 20 ] M . R . Garey , D . S . Johnson , and L . Stockmeyer . Some simplified np complete problems . In STOC ’74 , pages 47–63 , 1974 .
+[ 21 ] M . Girvan and M . E . J . Newman . Community structure in social and biological networks . Proceedings of the National Academy of Sciences , 99(12):7821–7826 , 2002 .
+[ 22 ] Michel X . Goemans and David P . Williamson .
+Improved approximation algorithms for maximum cut and satisfiability problems using semidefinite programming . J . ACM , 42(6 ) , 1995 .
+[ 23 ] J . Gonzalez , Y . Low , H . Gu , D . Bickson , and
+C . Guestrin . Powergraph : Distributed graph parallel computation on natural graphs . In OSDI , 2012 .
+[ 24 ] A . Greenberg and et al . Vl2 : a scalable and flexible data center network . In SIGCOMM ’09 , 2009 .
+[ 25 ] U . Kang , C . E . T . , and C . Faloutsos . Pegasus : A peta scale graph mining system . In ICDM , pages 229–238 , 2009 .
+[ 26 ] U . Kang , C . E . Tsourakakis , A . P . Appel ,
+C . Faloutsos , and J . Leskovec . Hadi : Mining radii of large graphs . ACM Trans . Knowl . Discov . Data , 5(2):8:1–8:24 , February 2011 .
+[ 27 ] T . Karagiannis , C . Gkantsidis , D . Narayanan , and
+A . Rowstron . Hermes : Clustering users in large scale e mail services . In ACM Symposium on Cloud Computing 2010 , 2010 .
+[ 28 ] D . Karger , R . Motwani , and M . Sudan . Approximate graph coloring by semidefinite programming . J . ACM , 45(2):246–265 , 1998 .
+[ 29 ] G . Karypis and V . Kumar . Metis unstructured graph
+[ 48 ] L . Page , S . Brin , R . Motwani , and T . Winograd . The partitioning and sparse matrix ordering system , version 20 1995 .
+PageRank citation ranking : bringing order to the web . Technical report , Stanford InfoLab , 1999 .
+[ 30 ] G . Karypis and V . Kumar . Parallel multilevel graph
+[ 49 ] V . Prabhakaran and et al . Managing large graphs on partitioning . In IPPS , pages 314–319 , 1996 .
+[ 31 ] G . Karypis and V . Kumar . A fast and high quality multilevel scheme for partitioning irregular graphs . SIAM J . Sci . Comput . , 20(1):359–392 , December 1998 .
+[ 32 ] Q . Ke , V . Prabhakaran , Y . Xie , Y . Yu , J . Wu , and
+J . Yang . Optimizing data partitioning for data parallel computing . In HotOS XIII , May 2011 .
+[ 33 ] B . W . Kernighan and S . Lin . An efficient heuristic procedure for partitioning graphs . Bell Syst . Tech . J . , 49(2):291–307 , February 1970 .
+[ 34 ] A . Khan , N . Li , X . Yan , Z . Guan , S . Chakraborty , and S . Tao . Neighborhood based fast graph search in large networks . In SIGMOD ’11 , pages 901–912 , 2011 . [ 35 ] Subhash Khot . On the unique games conjecture
+( invited survey ) . In IEEE Conference on Computational Complexity , pages 99–121 , 2010 .
+[ 36 ] Subhash Khot , Guy Kindler , Elchanan Mossel , and Ryan O’Donnell . Optimal inapproximability results for max cut and other 2 variable csps ? SIAM J . Comput . , 37(1):319–357 , April 2007 .
+[ 37 ] A . Konstantin and H . R¨acke . Balanced graph partitioning . In SPAA ’04 , pages 120–124 , 2004 . [ 38 ] R . Krauthgamer , J . ( S . ) Naor , and R . Schwartz .
+Partitioning graphs into balanced components . In SODA ’09 , pages 942–949 , 2009 .
+[ 39 ] H . Kwak , C . Lee , H . Park , and S . Moon . What is twitter , a social network or a news media ? In Proceedings of the 19th international conference on World wide web , WWW ’10 , pages 591–600 , New York , NY , USA , 2010 . ACM .
+[ 40 ] J . Leskovec , KJ Lang , A . Dasgupta , and M . W .
+Mahoney . Statistical properties of community structure in large social and information networks . In Proceeding of the 17th international conference on World Wide Web , pages 695–704 . ACM , 2008 .
+[ 41 ] Y . Low , J . Gonzalez , A . Kyrola , D . Bickson ,
+C . Guestrin , and J . M . Hellerstein . Graphlab : A new framework for parallel machine learning . In UAI , pages 340–349 , 2010 .
+[ 42 ] G . Malewicz , M . H . Austern , AJC Bik , JC Dehnert ,
+I . Horn , N . Leiser , and G . Czajkowski . Pregel : a system for large scale graph processing . In SIGMOD ’10 , pages 135–146 , 2010 .
+[ 43 ] Kolountzakis M . N . , G . L . Miller , R . Peng , and
+Tsourakakis C . E . Efficient triangle counting in large graphs via degree based vertex partitioning . Internet Mathematics , 8(1 2):161–185 , 2012 .
+[ 44 ] M . Newman . Networks : An Introduction . Oxford
+University Press , 2010 .
+[ 45 ] M . E . J . Newman . The structure and function of complex networks . SIAM review , 45(2):167–256 , 2003 .
+[ 46 ] M . E . J . Newman . Modularity and community structure in networks . Proceedings of the National Academy of Sciences , 103(23):8577–8582 , 2006 . [ 47 ] M . E . J . Newman and M . Girvan . Finding and evaluating community structure in networks . Physical review E , 69(2):026113 , 2004 . multi cores with graph awareness . In USENIX ATC’12 , 2012 .
+[ 50 ] J . Pujol and et al . The little engine(s ) that could :
+Scaling online social networks . In ACM SIGCOMM 2010 , 2010 .
+[ 51 ] V . Satuluri , S . Parthasarathy , and Y . Ruan . Local graph sparsification for scalable clustering . In SIGMOD ’11 , pages 721–732 , 2011 .
+[ 52 ] K . Schloegel , G . Karypis , and V . Kumar . Parallel multilevel algorithms for multi constraint graph partitioning ( distinguished paper ) . In Proceedings from the 6th International Euro Par Conference on Parallel Processing , Euro Par ’00 , pages 296–310 , 2000 .
+[ 53 ] K . Schloegel , G . Karypis , and V . Kumar . Parallel static and dynamic multi constraint graph partitioning . Concurrency and Computation : Practice and Experience , 14(3):219 – 240 , 2002 .
+[ 54 ] I . Stanton and G . Kliot . Streaming graph partitioning for large distributed graphs . In ACM KDD , pages 1222–1230 , 2012 .
+[ 55 ] Z . Sun and et al . Efficient subgraph matching on billion node graphs . Proc . VLDB Endow . , 5(9):788–799 , May 2012 .
+[ 56 ] C . E . Tsourakakis , C . Gkantsidis , B . Radunovic , and
+M . Vojnovic . Fennel : Streaming graph partitioning for massive distributed graphs . Microsoft Technical Report MSR TR 2012 213 , November 2012 .
+[ 57 ] Charalampos E . Tsourakakis . Fast counting of triangles in large real networks without counting : Algorithms and laws . In ICDM , pages 608–617 , 2008 . [ 58 ] Charalampos E . Tsourakakis , Mihail N . Kolountzakis , and Gary L . Miller . Triangle sparsifiers . J . Graph Algorithms Appl . , 15(6):703–726 , 2011 .
+[ 59 ] C . Walshaw , M . G . Everett , and M . Cross . Parallel dynamic graph partitioning for adaptive unstructured meshes . J . Parallel Distrib . Comput . , 47(2):102–108 , December 1997 .
+[ 60 ] J . Zhou , N . Bruno , and W . Lin . Advanced partitioning techniques for massively distributed computation . In SIGMOD ’12 , pages 13–24 , 2012 .
+APPENDIX A . APPROXIMATION GUARANTEES
+We derive hard approximation guarantees for the optimal k graph partition problem . We shall focus on the case of quadratic cost function c(x ) = α,x
+. This is a special case of
+2 interest in view of its underlying graph combinatorial meaning and relation the concept of modularity . We will derive approximation algorithms using the standard concept of an approximation guarantee .
+Definition 1 . Let P∗ be an optimal partition for the k graph partitioning problem . A partition P is said to be a ρ approximation , if the following holds : g(P ) ≥ ρg(P∗
+)
+An algorithm that guarantees to output a ρ approximation partitioning is said to be a ρ approximation algorithm .
+A.2 Random Partition
+An approximation algorithm for a maximization problem is meaningful as a notion if the optimum solution is positive . However , in our setting our function g does not results as it can easily be seen in a non negative optimum . For instance if G = En the empty graph on n vertices , any partition of G in k parts results in a negative objective ( except when k = n where the objective becomes 0 ) . Therefore , we need to shift our objective in order to come up with approximation algorithms .
+In the remainder of this section , we shall first define a shifted objective function , which ensures that the optimal value is positive . Then , we will go on with showing that uniform random partition of vertices is an Ω(1/k ) approximation algorithm . Recall that uniform random partitioning essentially corresponds to Hash Partition of vertices , a method which is commonly used in current practice . We will then show that one can do better by using an SDPbased rounding algorithm , which guarantees an Ω(log(k)/k ) approximation . A.1 Shifted Objective
+We define the following shifted objective . Definition 2 . k ≥ 1 . Also let P∗ = {S∗ k} be a partition of the vertex set V . We define the function ˜g as
+1 , . . . , S∗
+˜g(P ) =
+|e(Si , Si)| + α
+|Si|
+2
+− k i=1 n 2
+. k i=1
+Suppose each vertex is assigned to one of k partitions uniformly at random . This simple graph partition is a faithful approximation of hash partitioning of vertices that is commonly used in practice . In expectation , each of the k clusters will have n k vertices . Let S1 , . . . , Sk be the resulting k clusters . How well does this simple algorithm perform with respect to our objective ? Let P∗ be an optimal partition for the optimal k graph partition problem , ie g(P∗ ) ≥ g(P ) , for every partition P of the vertex set V into k partitions . Notice that P∗ is also an optimal partition for the optimal k graph partition problem with shifted objective function . Now , note that an edge e = ( u , v ) has probability 1 k that both its endpoints belong to the same cluster . By the linearity of expectation , we obtain by simple calculations :
+E [ ˜g(S1 , . . . , Sk ) ] = n 2 n 2
++ α m k k − 1 k
+≥ 1 k ≥ 1 k m + α
+˜g(P∗
+)
+˜g(P ) ≤ m + α,n
+for any partition P .
+2 where last inequality comes from the simple upper bound
+We can interpret the shifted objective as the expected number of edges for given partition P and given that there are e[Si ] edges within partition Si , under a null hypothesis that the underlying graph is random Erd¨os R´enyi graph with parameter α .
+A.3 An SDP Rounding Algorithm
+We define a vector variable xi for each vertex i ∈ V and we allow xi to be one of the unit vectors e1 , . . . , ek , where ej is a vector of dimension n with all elements equal to zero except for the j th element equal to 1 .
+Lemma 1 . For any partition P , ˜g(P ) ≥ 0 . Proof . The proof follows directly from the fact that for i=1 si = n , the any positive valued s1 , s2 , . . . , sk such thatk following holds n2 ≥ s2
+1 + ··· + s2 k . maximize e=(i,j ) xixj + α
+1 − xixj subject to xi ∈ {e1 , . . . , ek} , ∀i ∈ {1 , . . . , n} i<j
+( 2 )
+The approximation guarantees that hold for the shifted objective function have the following meaning for the original objective function . Suppose that P is a ρ approximation with respect to the shifted objective k graph partitioning problem , ie ˜g(P ) ≥ ρ˜g(P∗ ) . Then , it holds g(P ) ≥ ρg(P∗
+) − ( 1 − ρ)α
+Notice that this condition is equivalent to g(P ) − g(P∗
+) ≥ −(1 − ρ)[g(P∗
+) + α n 2
+. n 2
+] .
+We obtain the following semidefinite programming relaxation : maximize e=(i,j ) yij + α subject to yii = 1 , ∀i ∈ {1 , . . . , n} i<j yij ≥ 0 , ∀i = j Y 0 , Y symmetric
+1 − yij
+( 3 )
+The above SDP can be solved within an additive error of δ of the optimum in time polynomial in the size of the input and log ( 1 δ ) by interior point algorithms or the ellipsoid method [ 6 ] . In what follows , we refer to the optimal value of the integer program as OPTIP and of the semidefinite program as OPTSDP . Our algorithm is the following :
+This approximation guarantee is near to a ρ approximation if the parameter α is small enough so that the term g(P∗ ) dominates the term α,n that consists of k cliques , we have that g(P∗ ) ≥ α,n
+. For example , for an input graph cor
+2
+2 n+k n+1 , from which we conclude that it
+1−α ≤ 1 responds to α k suffices that α ≤ 1 k+1 .
+SDP Relax
+• Relaxation : Solve the semidefinite program [ 6 ] and compute a Cholesky decomposition of Y . Let v0 , v1 , . . . , vn be the resulting vectors .
+• Randomized Rounding : Randomly choose t = ( cid:100)log k unit length vectors ri ∈ Rk , i = 1 , . . . , t . These t random vectors define 2t = k possible regions in which the vectors vi can fall : one region for each distinct possibility of whether rjvi ≥ 0 or rjvi < 0 . Define a cluster by adding all vertices whose vector vi fall in a given region .
+We now state our main theoretical result , which is for the the k graph partition problem with the objective function given by Definition 2 .
+Theorem 2 . Algorithm SDP Relax is a Ω( log k k ) approximation algorithm for the optimal k graph partition problem .
+Proof . Let Ck be the score of the partition produced by our randomized rounding . Define Ai,j to be the event that vertices i and j are assigned to the same partition . Then ,
+E [ Ck ] =
+Pr [ Ai,j ] + α
+1 − Pr [ Ai,j ] e=(i,j ) i<j
+As in Goemans Williamson [ 22 ] , given a random hyperplane with normal vector r that goes through the origin , the probability of sgn(vT j r ) , ie , i and j fall on the same side of the hyperplane , is 1 − arccos(vT . Since we have t independent hyperplanes i r ) = sgn(vT i vj )
+π t
+Pr [ Ai,j ] =
+1 − arccos(vT i vj )
+.
+π
+,1 − θ
+π cos(θ )
+t
+Let us define , for t ≥ 1 , f1(θ ) = and
+Similarly , define for t ≥ 1 , f2(θ ) = and
+, θ ∈ [ 0 ,
+π 2
+) f1(θ ) .
+ρ1 = min 0≤θ< π
+2
+1 −,1 − θ
+π
+1 − cos(θ )
+t
+, θ ∈ [ 0 ,
+π 2
+)
+ρ2 = min 0≤θ< π
+2 f2(θ ) .
+We wish to find a ρ such that E [ Ck ] ≥ ρOPTSDP . Since , OPTSDP ≥ OPTIP , this would then imply E [ Ck ] ≥ ρOPTIP .
+We note that − t
+1(θ ) = f
+π
+,1 − θ
+π
+t−1 cos(θ ) +,1 − θ
+t sin(θ )
+π
+. cos2(θ )
+It follows that f
+1(θ(t ) ) = 0 is equivalent to t = ( π − θ(t ) ) tan(θ(t) ) .
+Notice that the following two hold lim t→∞ θ(t ) =
+π 2 and tan(θ(t ) ) ≤ t ≤ π tan(θ(t) ) .
+We next show that f1(θ(t ) ) ≥ 1 series of relations
+π 2
+≥ t
+1 − θ(t ) cos(θ(t ) )
+π
+( 4 ) π t2−t , by the the following t
+1 − θ(t ) π t 2
+π
+1 + tan2(θ(t))2
+−t ≥
+1 +
+−t
+2 f1(θ(t ) ) =
+=
+1 + tan2(θ(t ) )
+≥ 1 π
+−t t2 where the second equality is by the fact cos(θ ) = the first inequality is by the fact θ(t ) ≤ π inequality is by ( 4 ) .
+1+tan2(θ ) 2 , and the second
+,
+1√
+Thus , for t = log2(k ) , we conclude
+ρ1 ≥
+1 log(k )
+π log(2 ) k
+. t
+≥
+t t2
+Now , we show that ρ2 = 1 t ≥ 1 , f2(θ ) ≥ 1/2 . To this end , we note
+2 . First we show that for any
+1 −,1 − θ t1 ≤ ,1 − θ
+θ π
+π
+≥ 1 2
+⇔ 1 2
+π
+1 + cos(θ )
+1 − cos(θ )
+Notice that for all θ ∈ [ 0 , π/2 ) , if t1 ≥ t2 ≥ 1 , then
+≥ . With the use of simple calculus , the latter is true
+. Hence , it suffices 1 2
+1 + cos(θ )
+1 − θ
+1 −
+π
+.
+1 − θ π and is also tight for θ = 0 and θ = π/2 . It is worth observing the opposite trend of the values of ρ1 and ρ2 . The reason is that Pr [ Ai,j ] drops as we use more hyperplanes and , of course , 1 − Pr [ Ai,j ] grows .
+We are now in a position to establish the following lower bound on the expected score of our randomized rounding procedure . Let θi,j = arccos(vT i vj ) .
+E [ Ck ] =
+Pr [ Ai,j ] + α
+1 − Pr [ Ai,j ] e=(i,j )
+≥
+= e=(i,j )
+1 − θi,j π t i<j i<j
++ α
+1 −
+1 − θi,j π 1 − cos(θi,j ) t
+ρ1 cos(θi,j ) + α
+ρ2 e=(i,j )
+≥ min{ρ1 , ρ2}OPTSDP ≥ min{ρ1 , ρ2}OPTIP i<j
+It suffices to set ρ = min{ρ1 , ρ2} . The above analysis shows that our algorithm is a ρ approximation algorithm , where ρ = Ω( log(k )
+) . k
+A.4 An Alternative Approach
+One may ask whether the relaxation of Frieze and Jerrum [ 19 ] , Karger , Motwani and Sudan [ 28 ] can improve significantly the approximation factor . Before we go into further details , we notice that the main “ bottleneck ” in our approximation is the probability of two vertices being in the same cluster , as k grows . The probability that i , j are in the same cluster in our rounding is p(θ ) where
+Suppose θ = π log k 2 ( 1 − ) . Then , p(θ ) =
+1 − θ
+π log k 1 +
+. p(θ ) =
+π
+1 − θ 1 k
++ log k k
+=
+=
+2 + O( 2 ) . log k
+As we see from Lemma 5 in [ 19 ] , for this θ , the asymptotic expression of Nk(cos ( θ) ) , which is equal to ours p(θ ) but with their rounding scheme , matches ours :
+π
+2
+Nk(cos(θ ) ) ≈ 1 k 1 k
+=
+2 log k
++ cos
+( 1 − ) k log k k
++ π
++ O( 2 ) .
+This suggests that our approximation factor may be the best optimal assuming the unique games conjecture [ 36 , 35 ] .
+B . DETAILED DISTRIBUTION FUNCTIONS
+Figure 6 : Same as in Figure 3 but for all values of k used .
+−80−60−40−200200020406081Relative differenceCDF 2481632641282565121024−40−30−20−100100020406081Absolute differenceCDF 2481632641282565121024

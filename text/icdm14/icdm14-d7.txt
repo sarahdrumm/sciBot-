@@ -1,0 +1,374 @@
+Distributed Methods for High dimensional and Large scale Tensor Factorization
+Kijung Shin
+Dept . of Computer Science and Engineering
+Seoul National University Seoul , Republic of Korea koreaskj@snuackr
+U Kang
+Dept . of Computer Science
+KAIST
+Daejeon , Republic of Korea ukang@cskaistackr
+4 1 0 2 t c O 0 2
+]
+A N . s c [
+1 v 9 0 2 5
+.
+0 1 4 1 : v i X r a
+Abstract—Given a high dimensional and large scale tensor , how can we decompose it into latent factors ? Can we process it on commodity computers with limited memory ? These questions are closely related to recommendation systems exploiting context information such as time and location . They require tensor factorization methods scalable with both the dimension and size of a tensor . In this paper , we propose two distributed tensor factorization methods , SALS and CDTF . Both methods are scalable with all aspects of data , and they show an interesting trade off between convergence speed and memory requirements . SALS updates a subset of the columns of a factor matrix at a time , and CDTF , a special case of SALS , updates one column at a time . On our experiment , only our methods factorize a 5 dimensional tensor with 1B observable entries , 10M mode length , and 1K rank , while all other state of theart methods fail . Moreover , our methods require several orders of magnitude less memory than the competitors . We implement our methods on MAPREDUCE with two widely applicable optimization techniques : local disk caching and greedy row assignment .
+Keywords Tensor factorization ; Recommender system ; Dis tributed computing ; MapReduce
+I . INTRODUCTION AND RELATED WORK
+The recommendation problem can be viewed as completing a partially observable user item matrix whose entries are ratings . Matrix factorization ( MF ) , which decomposes the input matrix into a user factor matrix and an item factor matrix so that their multiplication approximates the input matrix , is one of the most widely used methods [ 2 ] , [ 7 ] , [ 14 ] . To handle web scale data , efforts have been made to find distributed ways for MF , including ALS [ 14 ] , DSGD [ 4 ] , and CCD++ [ 12 ] .
+On the other hand , there have been attempts to improve the accuracy of recommendation by using additional information such as time and location . A straightforward way to utilize such extra factors is to model rating data as a partially observable tensor where additional dimensions correspond to the extra factors . As in the matrix case , tensor factorization ( TF ) , which decomposes the input tensor into multiple factor matrices and a core tensor , has been used [ 5 ] , [ 9 ] , [ 13 ] .
+As the dimension of web scale recommendation problems increases , a necessity for TF algorithms scalable with the dimension as well as the size of data has arisen . A promising way to find such algorithms is to extend distributed MF
+Table I : Summary of scalability results . The factors which each method is scalable with are checked . Our proposed SALS and CDTF are the only methods scalable with all the factors .
+Dimension
+CDTF
+Observations Mode Length
+Machines
+Rank
+SALS
+ALS
+PSGD
+FLEXIFACT algorithms to higher dimensions . However , the scalability of existing methods including ALS [ 14 ] , PSGD [ 8 ] , and FLEXIFACT [ 1 ] is limited as summarized in Table I .
+In this paper , we propose SALS and CDTF , distributed tensor factorization methods scalable with all aspects of data . SALS updates a subset of the columns of a factor matrix at a time , and CDTF , a special case of SALS , updates one column at a time . Our methods have distinct advantages : SALS converges faster , and CDTF is more memory efficient . They can also be applied to any application handling large scale and partially observable tensors , including social network analysis [ 3 ] and Web search [ 11 ] .
+The main contributions of our study are as follows : • Algorithm . We propose two tensor factorization algorithms : SALS and CDTF . Their distributed versions are the only methods scalable with all the following factors : the dimension and size of data ; the number of parameters ; and the number of machines ( Table I ) .
+• Analysis . We analyze our methods and the competitors in a general N dimensional setting in the following aspects : computational complexity , communication complexity , memory requirements , and convergence speed ( Table II ) .
+• Optimization . We implement our methods on MAPREDUCE with two novel optimization techniques : local disk caching and greedy row assignment . They speed up not only our methods ( up to 98.2× ) but also their competitors ( up to 5.9× ) ( Figure 6 ) .
+• Experiment . We empirically confirm the superior scalability of our methods and their several orders of magnitude less memory requirements than their competitors . Only our methods analyze a 5 dimensional
+Table II : Summary of distributed tensor factorization algorithms . The performance bottlenecks which prevent each algorithm from handling web scale data are colored red . Only our proposed SALS and CDTF have no bottleneck . Communication complexity is measured by the number of parameters that each machine exchanges with the others . For simplicity , we assume that workload of each algorithm is equally distributed across machines , that the length of every mode is equal to I , and that Tin of SALS and CDTF is set to one .
+Algorithm
+CDTF SALS ALS [ 14 ] PSGD [ 8 ]
+FLEXIFACT [ 1 ]
+Computational complexity
+( per iteration ) O(|Ω|N 2K/M )
+O(|Ω|N K(N + C)/M + N IKC2/M ) O(|Ω|N K(N + K)/M + N IK3/M )
+O(|Ω|N K/M ) O(|Ω|N K/M ) Table III : Table of symbols .
+Symbol
+X xi1iN
+N In
+A(n ) a(n ) ink K Ω Ω(n ) in mSn
+R ri1iN
+M Tout Tin λ C η0
+Definition input tensor ( ∈ RI1×I2×IN ) ( i1 , , iN )th entry of X dimension of X length of the nth mode of X nth factor matrix ( ∈ RIn×K ) ( in , k)th entry of A(n ) rank of X set of indices of observable entries of X subset of Ω whose nth mode ’s index is equal to in set of rows of A(n ) assigned to machine m residual tensor ( ∈ RI1×I2×IN ) ( i1 , , iN )th entry of R number of machines ( reducers on MAPREDUCE ) number of outer iterations number of inner iterations regularization parameter number of parameters updated at a time initial learning rate tensor with 1B observable entries , 10M mode length , and 1K rank , while all others fail ( Figure 4(a) ) .
+The binary codes of our methods and several datasets are available at http://kdmkaistackr/sals The rest of this paper is organized as follows . Section II presents preliminaries for tensor factorization . Section III describes our proposed SALS and CDTF . Section IV presents the optimization techniques for them on MAPREDUCE . After providing experimental results in Section V , we conclude in Section VI .
+II . PRELIMINARIES : TENSOR FACTORIZATION
+In this section , we describe the preliminaries of tensor factorization and its distributed algorithms .
+A . Tensor and the Notations
+A tensor is a multi dimensional array which generalizes a vector ( 1 dimensional tensor ) and a matrix ( 2 dimensional tensor ) to higher dimensions . Like rows and columns in a matrix , an N dimensional tensor has N modes whose lengths are I1 through IN , respectively . We denote tensors with variable dimension N by boldface Euler script letters , eg , X . Matrices and vectors are denoted by boldface capitals , eg , A , and boldface lowercases , eg , a , respectively . We denote the entry of a tensor by the symbolic name of the tensor with its indices in subscript . For example , the ( i1 , i2)th entry of A is denoted by ai1i2 , and the ( i1 , , iN )th entry of X is denoted by xi1iN . The i1th
+Communication complexity Memory requirements
+( per iteration )
+Convergence speed
+O(N IK ) O(N IK ) O(N IK ) O(N IK )
+O(M N−2N IK )
+O(N I ) O(N IC ) O(N IK ) O(N IK )
+O(N IK/M )
+Fast Fastest Fastest Slow Fast row of A is denoted by ai1∗ , and the i2th column of A is denoted by a∗i2 . Table III lists the symbols used in this paper .
+B . Tensor Factorization
+There are several ways to define tensor factorization , and our definition is based on PARAFAC decomposition , which is one of the most popular decomposition methods , and nonzero squared loss with L2 regularization , whose weighted form has been successfully used in many recommendation systems [ 2 ] , [ 7 ] , [ 14 ] . Details about PARAFAC decomposition can be found in [ 6 ] . Given an N dimensional tensor X(∈ RI1×I2×IN ) with observable entries {xi1iN|(i1 , , iN ) ∈ Ω} , the rank K factorization of X is to find factor matrices {A(n ) ∈ RIn×K|1 ≤ n ≤ N} which minimize the following loss function :
+Definition 1 ( Tensor Factorization ) : xi1iN − K
+N feature vectors of nth mode instances , andK
+( i1,,iN )∈Ω Note that the loss function depends only on the observable entries . Each factor matrix A(n ) corresponds to the latent n=1 a(n ) ink
+L(A(1 ) , , A(N ) ) =
+A(n)2 F .
+N
+N
+2 corresponds to the interaction between the features . a(n ) ink k=1 n=1
++ λ
+( 1 ) k=1 n=1
+C . Distributed Methods for Tensor Factorization
+In this section , we introduce several tensor factorization algorithms suitable for distributed environments . The performances of them are summarized in Table II .
+1 ) Alternating Least Square ( ALS ) : ALS [ 14 ] updates factor matrices one by one while keeping all other matrices fixed . When all factor matrices except one are fixed , ( 1 ) becomes a quadratic problem which is analytically solvable . Due to the independence between rows , each factor matrix can be updated row by row . The update rule for the rows of A(n ) is as follows :
+[ a(n ) in1 , , a(n ) inK ]T ← arg min
+L(A(1 ) , , A(N ) )
+[ a
+( n ) in 1,,a
+( n ) inK ]T + λIK )
+= ( B(n ) in
+−1c(n )
+ l=n in
+( ∈ RK×K ) is
+ , a(l ) ilk2 a(l ) ilk1 l=n
+( 2 ) where the ( k1 , k2 ) entry of B(n ) in
+( i1,,iN )∈Ω
+( n ) in the kth entry of c(n ) in
+( ∈ RK ) is
+xi1iN
+ , l=n a(l ) ilk
+( i1,,iN )∈Ω
+( n ) in and IK is a K by K identity matrix . Ω(n ) in subset of Ω whose nth mode ’s index is equal to in . denotes the
+The proof of this update rule is as follows :
+= 0,∀k , 1 ≤ k ≤ K
+Proof :
+( i1,,iN )∈Ωn in = 0,∀k
+∂L ∂a(n ) ink
+⇔ ⇔
+=
+( i1,,iN )∈Ωn in l=1 s=1 a(l ) ilk
+ K N ils − xi1iN a(l )  K a(n )
+xi1iN
+ + λa(n )
+  + λa(n )  ,∀k a(l ) ilk a(l ) ils l=n l=n l=n ink s=1 ins a(l ) ilk ink
+( i1,,iN )∈Ωn in
+⇔ ( B(n ) in
++ λIk)[a(n ) in1 , , a(n ) l=n inK ]T = c(n ) in n=1 In ) . in
+, O(|Ω(n ) l=n a(l ) in
+Updating a row , a(n ) to calculate il1 through in∗ for example , using ( 2 ) O(|Ωin|K(N + K ) + K 3 ) , which consists of O(|Ω(n ) in takes |N K ) ilK for all the entries , O(|Ω(n ) |K ) to build in |Ω|(n ) c(n ) . Instead of calculating the in inverse , Cholesky decomposition , which also takes O(K 3 ) , can be used . Thus , updating every row of all the factor matrices once , which corresponds to a full ALS iteration , takes O(|Ω|N K(N + K ) + K 3N
+, and O(K 3 ) to invert B(n ) in
+|K 2 ) to build B(n ) l=n a(l ) in in each factor matrix A(n ) and O(KN
+In distributed environments , updating each factor matrix can be parallelized without affecting the correctness of ALS by distributing the rows of the factor matrix across machines so that they can be updated simultaneously . The parameters updated by each machine are broadcasted to all other machines so that they can be used to update the next factor matrix . The number of parameters each machine exchanges ( sends or receives ) with the others is O(KIn ) for n=1 In ) per iteration . The memory requirements of ALS cannot be distributed , however . Since the update rule ( 2 ) possibly depends on all the entries of all other factor matrices , every machine is required to load all the factor matrices into their memory . This high memory requirement of ALS , which requires n=1 In ) memory space per machine , has been noted as a bottleneck of the scalability of ALS even in matrix factorization [ 4 ] , [ 12 ] .
+O(KN
+2 ) Parallelized Stochastic Gradient Descent ( PSGD ) :
+PSGD [ 8 ] is a distributed algorithm based on stochastic gradient descent ( SGD ) . PSGD randomly divides the observable entries of X into M machines , and each machine runs SGD
+| in ink s=1 a(l ) ilk
+|Ω(n ) ils . It l=n a(l )
+− ri1iN ink ← a(n ) a(n )
+ N
+ ( 3 ) independently . The updated parameters are averaged after each iteration . For each observable entry xi1iN , a(n ) ink for all n and k , whose number is N K , are updated simultaneously by the following rule : ink − 2η
+ λa(n ) where ri1iN = xi1iN − K O(N K ) to calculate ri1iN andN they are calculated , since N l=n l=1 a(l ) takes l=1 a(l ) ilk for all k . Once ilk can be calculated as /a(n ) l=1 a(l ) ink , calculating ( 3 ) takes O(1 ) , and thus ilk updating all the N K parameters takes O(N K ) . If we assume that X entries are equally distributed across machines so that the number of X entries assigned to each machines is O(|Ω|/M ) , the computational complexity per iteration is O(N K|Ω|/M ) . Averaging parameters can also n=1 In ) parameter exchanges per machine . Like ALS , the memory requirements of PSGD cannot be distributed , and all the machines are required to load all the factor matrices into their memory , n=1 In ) memory space per machine . Moreover , PSGD tends to converge slowly due to the nonidentifiability of ( 1 ) [ 4 ] . be distributed , which incurs O(KN which requires O(KN
+3 ) Flexible Factorization of Coupled Tensors ( FlexiFaCT ) : FLEXIFACT [ 1 ] is another SGD based algorithm which generalizes matrix factorization algorithm DSGD [ 4 ] to higher dimensions . FLEXIFACT avoids the high memory requirement and slow convergence of PSGD [ 1 ] , [ 4 ] . FLEXIFACT divides X into M N blocks , and M disjoint blocks that do not share common fibers ( rows in a general nth mode ) compose a stratum . FLEXIFACT processes X stratum by stratum . For each stratum , the M blocks composing it are distributed across machines and processed independently . The update rule is the same as ( 3 ) , and the computational complexity per iteration is O(|Ω|N K/M ) as in PSGD . However , contrary to PSGD , averaging is not necessary because the sets of parameters updated by the machines are disjoint . In addition , the memory requirements of FLEXIFACT are distributed among the machines . Each machine only needs to load the parameters related to the block it processes , n=1 In)/M , into its memory at a time . FLEXIFACT suffers from high communication cost , however . After processing one stratum , each machine sends the updated parameters to the machine which updates them in the next stratum . The number of parameters exchanged n=2 In)/M per stratum n=2 In , where M N−1 is the number of strata , per iteration . Accordingly , the communication cost of FLEXIFACT increases exponentially with the dimension of X and polynomially with the number of machines . whose number is ( KN by each machine is at most ( KN and M N−2KN
+( a ) CDTF
+( b ) SALS
+( c ) ALS
+Figure 1 : Update rules of CDTF , SALS , and ALS . CDTF updates each column of factor matrices entry by entry , SALS updates each C ( 1 ≤ C ≤ K ) columns row by row , and ALS updates each K columns row by row .
+: X , K , λ
+Algorithm 1 : Serial version of SALS Input Output : A(n ) for all n initialize R and A(n ) for all n for outer iter = 1Tout do for split iter = 1(cid:100 ) K C do choose k1 , , kC ( from columns not updated yet ) compute ˆR for inner iter = 1Tin do for n = 1N do for in = 1In do update a(n ) ink1
+, , a(n ) inkC using ( 4 )
+1 2 3 4 5 6 7 8 9
+10 update R using ( 5 )
+III . PROPOSED METHODS
+In this section , we propose subset alternating least square ( SALS ) and coordinate descent for tensor factorization ( CDTF ) . They are scalable algorithms for tensor factorization , which is essentially an optimization problem whose loss function is ( 1 ) and parameters are the entries of factor matrices , A(1 ) through A(N ) . Figure 1 depicts the difference among CDTF , SALS , and ALS . Unlike ALS , which updates each K columns of factor matrices row by row , SALS updates each C ( 1 ≤ C ≤ K ) columns row by row , and CDTF updates each column entry by entry . CDTF can be seen as an extension of CCD++ [ 12 ] to higher dimensions . Since SALS contains CDTF ( C = 1 ) as well as ALS ( Tin = 1 , C = K ) as a special case , we focus on SALS and additionally explain optimization schemes for CDTF . A . Update Rule and Update Sequence k=1 n=1 a(n ) notes the residual
+Algorithm 1 describes the procedure of SALS . R detensor where ri1iN = xi1iN − ink . We initialize the entries of A(1 ) to zeros and those of all other factor matrices to random values so that the initial value of R is equal to X ( line 1 ) . In every iteration ( line 1 ) , SALS repeats choosing C columns , k1 through kC , randomly without replacement ( line 1 ) and updating them while keeping the other columns fixed , which is equivalent to the rank C factorization of ˆR where . Once ˆR is computed ( line 1 ) , updating C columns of factor matrices matrix by matrix ( line 1 ) is repeated Tin times ( line 1 ) . For each
+ˆri1iN = ri1iN +C n=1 a(n ) inkc
+N c=1
+K
+N factor matrix , since its rows are independent of each other in minimizing ( 1 ) when the other factor matrices are fixed , the entries are updated row by row ( line 1 ) as follows : L(A(1 ) , , A(N ) )
+]T ← arg min
+, , a(n )
+[ a(n ) ink1 inkC where the ( c1 , c2)th entry of B(n ) in
+( 4 )
+[ a
+,,a
+( n ) ink1 = ( B(n ) in
+( n ) in kC
+]T
++ λIC ) a(l ) ilkc1
+ ˆri1iN
+( n ) in l=n ( ∈ RC ) is
+−1c(n ) in
+, ( ∈ RC×C ) is a(l ) ilkc2 l=n
+ ,  , l=n a(l ) ilkc
+( i1,,iN )∈Ω
+( n ) in
+( i1,,iN )∈Ω the cth entry of c(n ) in and IC is a C by C identity matrix . Ω(n ) denotes the subset in of Ω whose nth mode ’s index is equal to in . The proof of this update rule is as follows :
+L(A(1 ) , , A(N ) ) = ( B(n ) in
+]T
++ λIC )
+−1c(n ) in
+Theorem 1 : arg min ( n ) in kC
+( n ) ,,a in k1 Proof :
+[ a
+( i1,,iN )∈Ωn in = 0,∀c
+∂L ∂a(n ) inkc
+⇔ ⇔
+=
+( i1,,iN )∈Ωn in
+= 0,∀c , 1 ≤ c ≤ C l=1 s=1 a(l ) ilks
+ C N − ˆri1iN a(n )  C
+ˆri1iN
+  ,∀c a(l ) ilks l=n l=n inks a(l ) ilkc s=1 l=n a(l ) ilkc a(l ) ilkc
+ + λa(n )  + λa(n ) inkc inkc
+( i1,,iN )∈Ωn in l=n
+⇔ ( B(n ) in
++ λIc)[a(n ) ink1
+, , a(n ) inkC
+]T = c(n ) in
+Since B(n ) is symmetric , Cholesky decomposition can be in used for its inversion . After this rank C factorization , the entries of R are updated by the following rule ( line 1 ) : ri1iN ← ˆri1iN − C
+N a(n ) inkc
+.
+( 5 ) c=1 n=1
+In CDTF , instead of computing ˆR before rank one factorization , containing the computation in ( 4 ) and ( 5 ) results in better performance on a disk based system like MAPREDUCE by significantly reducing disk I/O operations . Moreover , updating columns in a fixed order instead of choosing them randomly converges faster in CDTF in our experiments . B . Complexity Analysis
+1 is O(Tout|Ω|N TinK(N + C ) + ToutTinKC 2N
+Theorem 2 : The computational complexity of Algorithm n=1 In ) .
+: X , K , λ , mSn for all m and n
+Algorithm 2 : Distributed version of SALS Input Output : A(n ) for all n distribute the mΩ entries of X to each machine m Parallel ( P ) : initialize the mΩ entries of R P : initialize A(n ) for all n for outer iter = 1Tout do for split iter = 1(cid:100 ) K
+C do choose k1 , , kC ( from columns not updated yet ) P : compute mΩ entries of ˆR for inner iter = 1Tin do
+Proof : in in in l=n a(l ) ilk1 , O(|Ω(n ) through in , and O(C 3 ) to invert B(n ) in to calculate
+|C(C + N ) + C 3 ) , which consists of O(|Ω(n ) for all , O(|Ω(n )
+Computing ˆR ( line 1 ) and updating R ( line 1 ) take O(|Ω|N C ) . Updating C parameters ( line 1 ) takes |N C ) O(|Ω(n ) l=n a(l ) the ilkC entries in |Ω|(n ) |C 2 ) to build B(n ) |C ) in to build c(n ) . Thus , updating in all the entries in C columns ( lines 1 through 1 ) takes O(|Ω|C(C + N ) + InC 3 ) , and the rank C factorization n=1 In ) . As a result , an outer iteration , which repeats the rank C factorization TinK/C times and both ˆR computation and R update K/C times , takes O(|Ω|N TinK(N + C ) + n=1 In ) + O(|Ω|N K ) , where the second term is
+( lines 1 through 1 ) takes O(|Ω|N C(N +C)+C 3N TinKC 2N O(CN
+Theorem 3 : The memory requirement of Algorithm 1 is dominated . in n=1 In ) .
+Proof :
+1 2 3 4 5 6 7 8 9 10
+11
+12 for n = 1N do
+P : update {a(n ) using ( 4 ) P : broadcast {a(n ) inkc inkc
+|in ∈ mSn , 1 ≤ c ≤ C}
+|in ∈ mSn , 1 ≤ c ≤ C}
+P : update the mΩ entries of R using ( 5 ) is CN
+Since ˆR computation ( line 1 ) , rank C factorization ( lines 1 through 1 ) , and R update ( line 1 ) all depend only on the C columns of the factor matrices , the number of whose entries n=1 In , the other ( K − C ) columns do not need to be loaded into memory . Thus , the columns of the factor matrices can be loaded by turns depending on ( k1 , , kC ) values . Moreover , updating C columns ( lines 1 through 1 ) can be processed by streaming the entries of ˆR from disk and processing them one by one instead of loading them all at once because the entries of B(n ) in the update in rule are the sum of the values calculated independently from each ˆR entry . Likewise , ˆR computation and R update can also be processed by streaming R and ˆR , respectively . and c(n ) in
+C . Parallelization in Distributed Environments
+In this section , we describe how to parallelize SALS in distributed environments such as MAPREDUCE where machines do not share memory . Algorithm 2 depicts the distributed version of SALS .
+Since update rule ( 4 ) for each row ( C parameters ) of a factor matrix does not depend on the other rows in the matrix , rows in a factor matrix can be distributed across machines and updated simultaneously without affecting the correctness of SALS . Each machine m updates mSn rows of A(n ) Ω(n ) in
+( line 2 ) , and for this , the mΩ = N in∈mSn entries of X are distributed to machine m in the first stage of the algorithm ( line 2 ) . Figure 2 shows an example of work and data distribution in SALS . n=1
+( c ) Machine 3
+( a ) Machine 1
+( b ) Machine 2
+( d ) Machine 4 Figure 2 : Work and data distribution of SALS in distributed environments with a 3 dimensional tensor and 4 machines . We assume that the rows of the factor matrices are assigned to the machines sequentially . The colored region of A(n ) ( the transpose of A(n ) ) in each sub figure corresponds to the parameters updated by each machine , resp . , and that of X corresponds to the data distributed to each machine .
+Ω(n ) in in∈mSn maxm |mΩ(n)| where mΩ(n ) =
+The running time of parallel steps in Algorithm 2 depends on the longest running time among all machines . Specifically , the running time of lines 2 , 2 , and 2 is proportional to , and that of line 2 is proportional to maxm |mSn| . Therefore , it is necessary to assign the rows of the factor matrices to the machines ( ie , to decide mSn ) so that |mΩ(n)| and |mSn| are even among all the machines . The greedy assignment algorithm described in Algorithm 3 aims to minimize maxm |mΩ(n)| under the condition that maxm |mSn| is minimized ( ie , |mSn| = In/M for all n where M is the number of machines ) . For each factor matrix A(n ) , we sort its rows in the decreasing order of |Ω(n ) | and assign the rows one by one to the machine m which satisfies |mSn| < ( cid:100)In/M and has the smallest |mΩ(n)| currently . The effects of this greedy row assignment on actual running times are described in Section V E . in
+After the update , parameters updated by each machine are broadcasted to all other machines ( line 2 ) . Each machine m broadcasts C|mSn| parameters and receives C(In − |mSn| ) parameters from the other machines after each update . The total number of parameters each machine exchanges with the other machines is KTin n=1 In per outer iteration .
+N
+IV . OPTIMIZATION ON MAPREDUCE
+In this section , we describe two optimization techniques used to implement SALS and CDTF on MAPREDUCE , which is one of the most widely used distributed platforms .
+: X , M
+Algorithm 3 : Greedy row assignment in SALS Input Output : mSn for all m and n initialize |mΩ| to 0 for all m for n = 1N do initialize mSn to ∅ for all m initialize |mΩ(n)| to 0 for all m calculate |Ω(n ) foreach in ( in decreasing order of |Ω(n )
+| for all in in
+| ) do in
+M and the smallest |mΩ(n)| find m with |mSn| < ( cid:100 ) In ( in case of a tie , choose the machine with smaller |mSn| , and if still a tie , choose the one with smaller |mΩ| ) add in to mSn add |Ω(n )
+| to |mΩ(n)| and |mΩ| in
+Algorithm 4 : Parameter update in SALS without local disk caching Given : n , kc for all c , mSn for all m , a(l)∗kc Input Output : updated a(n)∗kc Map(Key k , Value v ) begin for all l and c for all c
+: ˆR
+( (i1 , , iN ) , ˆri1iN ) ← v find m where in ∈ mSn emit < ( m , in ) , ( (i1 , , iN ) , ˆri1iN ) >
+1 2 3 4 5 6 7 8
+9 10
+1 2 3 4 5 6
+7 8 9 10 11
+12 13 14 15 16 17 end Partitioner(Key k , Value v ) begin
+( m , in ) ← k assign < k , v > to machine m end Reduce(Key k , Value v[1r ] ) begin
+( m , in ) ← k in entries of ˆR ← v Ω(n ) update and emit a(n ) inkc for all c end
+A . Local Disk Caching
+Typical MAPREDUCE implementations of SALS and CDTF without local disk caching run each parallel step as a separate MAPREDUCE job . Algorithms 4 and 5 describe the MAPREDUCE implementations of parameter update ( update of a(n)∗kc for all c ) and R update , respectively . ˆR computation can be implemented by the similar way with R update , and broadcasting updated parameters is not necessary in this implementation because reducers terminate after updating their assigned parameters . Instead , the updated parameters are saved in the distributed file system and are read at the next step ( a separate job ) . Since SALS repeats both R update and ˆR computation TinK/C times and parameter update ToutKTinN/C times at every outer iteration , this implementation repeats distributing R or ˆR across machines ( the mapper stage of Algorithms 4 and 5 ) ToutK(TinN +
+Algorithm 5 : R update in SALS without local disk caching Given : kc for all c , mS1 for all m , a(l)∗kc Input Output : updated R Map(Key k , Value v ) begin for all l and c
+: ˆR
+1 2 3 4 5 6
+7 8 9 10 11
+12 13 14 15 16
+( (i1 , , iN ) , ˆri1iN ) ← v find m where i1 ∈ mS1 emit < m , ( (i1 , , iN ) , ˆri1iN ) > end Partitioner(Key k , Value v ) begin m ← k assign < k , v > to machine m end Reduce(Key k , Value v[1r ] ) begin foreach ( (i1 , , iN ) , ˆri1iN ) ∈ v[1r ] do update ri1iN emit ( (i1 , , iN ) , ri1iN )
+17 end
+Algorithm 6 : Data distribution in SALS with local disk caching Input Output : mΩ(n ) entries of R(= X ) for all m and n Map(Key k , Value v ) ; begin
+: X , mSn for all m and n
+( (i1 , , iN ) , xi1iN ) ← v for n = 1,,N do find m where in ∈ mSn emit < ( m , n ) , ( (i1 , , iN ) , xi1iN ) >
+1 2 3 4 5 6
+7
+8 9 10 11 12
+13 14 15 16 17 18 end Partitioner(Key k , Value v ) ; begin
+( m , n ) ← k assign < k , v > to machine m end Reduce(Key k , Value v[1r] ) ; begin
+( m , n ) ← k open a file on the local disk to cache mΩ(n ) entries of R foreach ( (i1 , , iN ) , xi1iN ) ∈ v[1r ] do write ( (i1 , , iN ) , xi1iN ) to the file
+19 end
+2)/C times , which is inefficient .
+Our implementation reduces this inefficiency by caching data to local disk once they are distributed . In the SALS implementation with local disk caching , X entries are distributed across machines and cached in the local disk during the map and reduce stage ( Algorithm 6 ) ; and the rest part of CDTF runs in the close stage ( cleanup stage in Hadoop ) using cached data . Our implementation streams the cached data , mΩ(n ) entries of R for example , from the local disk instead of distributing entire R from the distributed file
+Algorithm 7 : Parameter broadcast in SALS Input : ma(n)∗kc Output : a(n)∗kc begin for all c ( parameters to broadcast ) ,∀c ( parameters received from others ) create a data file mA on the distributed file system ( DFS ) write ma(n)∗k on the datafile create a dummy file mD on DFS while not all data files are read do get the list of dummy files from DFS foreach m D in the list do if m A are not read then read m a(n)∗k from m A
+1 2 3 4 5 6 7 8 9
+10 end system when updating the columns of A(n ) . The effect of this local disk caching on actual running time is described in Section V E .
+B . Direct Communication
+In MAPREDUCE , it is generally assumed that reducers run independently and do not communicate directly with each other . However , we adapt the direct communication method using the distributed file system in [ 1 ] to broadcast parameters among reducers efficiently . The implementation of parameter broadcast ( broadcast of a(n)∗kc for all c ) in SALS based on this method is described in Algorithm 7 where ma(n)∗kc denotes {a(n )
+|in ∈ mSn} . inkc
+V . EXPERIMENTS
+To evaluate SALS and CDTF , we design and conduct experiments to answer the following questions :
+• Q1 : Data scalability ( Section V B ) . How do CDTF , SALS , and other methods scale with regard to the following properties of an input tensor : dimension , the number of observations , mode length , and rank ?
+• Q2 : Machine scalability ( Section V C ) . How do CDTF , SALS , and other methods scale with regard to the number of machines ?
+• Q3 : Convergence ( Section V D ) . How quickly and accurately do CDTF , SALS , and other methods factorize real world tensors ?
+• Q4 : Optimization ( Section V E ) . How much do local disk caching and greedy row assignment improve the speed of SALS and CDTF ? Can these optimization techniques be applied to other methods ?
+• Q5 : Effects of Tin ( Section V F ) How do different numbers of inner iterations ( Tin ) affect the convergence of CDTF ?
+• Q6 : Effects of C ( Section V G ) How do different numbers of columns updated at a time ( C ) affect the convergence of SALS ?
+Other methods include ALS , FLEXIFACT , and PSGD . All experiments are focused on the distributed version of each
+Table IV : Summary of real world datasets .
+Movielens4
+Netflix3
+Yahoo music4
+N I1 I2 I3 I4 |Ω| |Ω|test
+K λ η0
+4
+715,670 65,133
+169 24
+20 0.01 0.01
+2,649,429
+17,770
+3
+74
+40 0.02 0.01
+93,012,740 6,987,800
+99,072,112 1,408,395
+252,800,275 4,003,960
+4
+1,000,990 624,961
+133 24
+80 1.0
+10−5 ( FLEXIFACT )
+10−4 ( PSGD )
+Table V : Scale of synthetic datasets . B : billion , M : million , K : thousand . The length of every mode is equal to I .
+S1 2
+300K 30M 30
+N I |Ω| K
+S2 ( default )
+3 1M 100M 100
+S3 4 3M 300M 300
+S4 5
+10M 1B 1K method , which is the most suitable to achieve our purpose of handling large scale data . A . Experimental Settings
+1 ) Cluster : We run experiments on a 40 node Hadoop cluster . Each node has an Intel Xeon E5620 2.4GHz CPU . The maximum heap memory size per reducer is set to 8GB . 2 ) Data : We use both real world and synthetic datasets most of which are available at http://kdmkaistackr/sals The real world tensor data used in our experiments are summarized in Table IV with the following details :
+• Netflix3
+• Movielens4
+1 : Movie rating data from MovieLens , an online movie recommender service . We convert them into a four dimensional tensor where the third mode and the fourth mode correspond to ( year , month ) and hour of day when the movie is rated , respectively . The rates range from 1 to 5 .
+2 : Movie rating data used in Netflix prize . We regard them as a three dimensional tensor where the third mode corresponds to ( year , month ) when the movie is rated . The rates range from 1 to 5 .
+3 : Music rating data used in KDD CUP 2011 . We convert them into a four dimensional tensor by the same way in Movielens4 . Since exact year and month are not provided , we use the values obtained by dividing the provided data ( the number of days passed from an unrevealed date ) with 30 . The rates range from 0 to 100 .
+• Yahoo music4
+For reproducibility , we use the original training/test split offered by the data providers . Synthetic tensors are created by the procedure used in [ 10 ] to create Jumbo dataset . The scales of the synthetic datasets used are summarized in Table V .
+1http://grouplens.org/datasets/movielens 2http://wwwnetflixprizecom 3http://webscopesandboxyahoocom/catalogphp?datatype=c
+( a ) Dimension
+( b ) Number of observations
+( c ) Mode length
+( d ) Rank
+Figure 3 : Scalability on each aspect of data . oom : out of memory . Only SALS and CDTF scale with all the aspects .
+3 ) Implementation and Parameter Settings : All methods in Table II are implemented using Java with Hadoop 103 Local disk caching , direct communication , and greedy row assignment are applied to all the methods if possible . All our implementations use weighted λ regularization [ 14 ] . For SALS and CDTF , Tin is set to 1 , and C is set to 10 , unless otherwise stated . The learning rate of FLEXIFACT and PSGD at tth iteration is set to 2η0/(1 + t ) , which follows the open sourced FLEXIFACT implementation ( http : //alexbeutelcom/l/flexifact/ ) The number of reducers is set to 5 for FLEXIFACT , 20 for PSGD , and 40 for the other methods , each of which leads to the best performance on the machine scalability test in Section V C , unless otherwise stated .
+B . Data Scalability
+1 ) Scalability on Each Factor ( Figure 3 ) : We measure the scalability of CDTF , SALS , and the competitors with regard to the dimension , number of observations , mode length , and rank of an input tensor . When measuring the scalability with regard to a factor , the factor is scaled up from S1 to S4 while all other factors are fixed at S2 as summarized in Table V . As seen in Figure 3(a ) , FLEXIFACT does not scale with dimension because of its communication cost , which increases exponentially with dimension . ALS and PSGD are not scalable with mode length and rank due to their high memory requirements as Figures 3(c ) and 3(d ) show . They require up to 11.2GB , which is 48× of 234MB that CDTF requires and 10× of 1,147MB that SALS requires . Moreover , the running time of ALS increases rapidly with rank owing to its cubically increasing computational cost . Only SALS and CDTF are scalable with all the factors as summarized in Table I . Their running times increase linearly with all the factors except dimension , with which they increase slightly faster due to the quadratically increasing computational cost .
+2 ) Overall Scalability ( Figure 4(a) ) : We measure the scalability of the methods by scaling up all the factors together from S1 to S4 . The scalability of ALS and PSGD , and FLEXIFACT with 5 machines is limited owing to their high memory requirements . ALS and PSGD require almost 186GB to handle S4 , which is 493× of 387MB that CDTF requires and 100× of 1,912MB that SALS requires . FLEXIFACT with 40 machines does not scale over S2 due to
+( a ) Overall scalability
+( b ) Machine scalability
+Figure 4 : ( a ) Overall scalability . oom : out of memory , oot : out of time ( takes more than a week ) . Only SALS and CDTF scale up to the largest scale S4 . ( b ) Machine scalability . Computations of SALS and CDTF are efficiently distributed across machines . its rapidly increasing communication cost . Only SALS and CDTF scale up to S4 , and there is a trade off between them : SALS runs faster , and CDTF is more memory efficient .
+C . Machine Scalability ( Figure 4(b ) )
+We measure the speed ups ( T5/TM where TM is the running time with M reducers ) of the methods on the S2 scale dataset by increasing the number of reducers . The speed ups of CDTF , SALS , and ALS increase linearly at the beginning and then flatten out slowly owing to their fixed communication cost which does not depend on the number of reducers . The speed up of PSGD flattens out fast , and PSGD even slightly slows down in 40 reducers because of increased overhead . FLEXIFACT slows down as the number of reducers increases because of its rapidly increasing communication cost .
+D . Convergence ( Figure 5 )
+We compare how quickly and accurately each method factorizes real world tensors . Accuracies are calculated at each iteration by root mean square error ( RMSE ) on a held out test set , which is a measure commonly used by recommendation systems . Table IV describes K , λ , and η0 values used for each dataset . They are determined by cross validation . Owing to the non convexity of ( 1 ) , each algorithm may converge to local minima with different accuracies . In all datasets ( results on the Movielens4 dataset are omitted for space reasons ) , SALS is comparable with ALS , which converges the fastest to the best solution , and CDTF follows them . PSGD converges the slowest to the worst solution due to the non identifiability of ( 1 ) [ 4 ] .
+0 20 40 60 80 100 120 140 2 3 4 5Running time / iter ( min)DimensionCDTFSALSALSFlexiFaCTPSGD 0 10 20 30 40 50 60 0 200 400 600 800 1000Running time / iter ( min)Number of obsevations ( million)CDTFSALSALSFlexiFaCTPSGD 0 10 20 30 40 50 60 0 2 4 6 8 10Running time / iter ( min)Mode length ( million)oomoomCDTFSALSALSFlexiFaCTPSGD 0 10 20 30 40 50 60 70 80 0 200 400 600 800 1000Running time / iter ( min)RankoomoomCDTFSALSALSFlexiFaCTPSGD10 1100101102103S1S2S3S4Running time / iter ( min)ScaleoomoomoomootCDTFSALSALSFlexiFaCT(M=5)FlexiFaCT(M=40)PSGD 0 1 2 3 4 5 6 0 5 10 15 20 25 30 35 40Speed up ( T5 / TM)Number of reducersCDTFSALSALSFlexiFaCTPSGD ( a ) Netflix3
+( b ) Yahoo music4
+( a ) Netflix3
+( b ) Yahoo music4
+Figure 5 : Convergence speed on real world datasets . SALS is comparable with ALS , which converges fastest to the best solution , and CDTF follows them .
+Figure 7 : Effects of inner iterations ( Tin ) on the convergence of CDTF . CDTF tends to converge stably to better solutions as Tin increases .
+( a ) Netflix3
+( b ) Yahoo music4
+Figure 6 : Effects of optimization techniques on running times . NC : no caching , LC : local disk caching , SEQ : sequential row assignment4 , RAN : random row assignment , GRE : greedy row assignment . Our proposed optimization techniques ( LC+GRE ) significantly accelerate CDTF , SALS , and also their competitors .
+E . Optimization ( Figure 6 )
+We measure how our proposed optimization techniques , local disk caching and greedy row assignment , affect the running time of CDTF , SALS , and the competitors on realworld datasets . The direct communication method explained in Section IV B is applied to all the implementations if necessary . Local disk caching speeds up CDTF up to 65.7× , SALS up to 15.5× , and the competitors up to 48× The speed ups of SALS and CDTF are the most significant because of the highly iterative nature of SALS and CDTF . Additionally , greedy row assignment speeds up CDTF up to 1.5× ; SALS up to 1.3× ; and the competitors up to 1.2× compared with the second best one . It is not applicable to PSGD , which does not distribute parameters row by row .
+F . Effects of Inner Iterations ( Tin )
+Figure 7 compares the convergence properties of CDTF with different Tin values . As Tin increases , CDTF tends to converge more stably to better solutions ( with lower test RMSE ) . However , there is an exception , Tin = 1 in the Netflix3 dataset , which converges to the best solution .
+G . Effects of the Number of Columns Updated at a Time ( C )
+The convergence properties of SALS with different C values are compared in Figure 8 . Tin is fixed to 1 in all cases . As C increases , CDTF tends to converge faster to better
+4 mSn = {in ∈ N| In×(m−1 )
+M
+< in ≤ In×m M }
+( a ) Netflix3
+( b ) Yahoo music4
+Figure 8 : Effects of the number of columns updated at a time ( C ) on the convergence of SALS . SALS tends to converge faster to better solutions as C increases . However , its convergence speed decreases at C above 20 .
+( a ) Netflix3
+( b ) Yahoo music4
+Figure 9 : Effects of the number of columns updated at a time ( C ) on the running time of SALS . At low C values , running time per iteration decreases as C increases . However , this trend reverses at C greater than 20 . solutions ( with lower test RMSE ) although it requires more memory space as explained in the Theorem 3 . With C above 20 , however , convergence speed decreases as C increases . These changes in convergence speed are closely related to those in running time per iteration . As seen Figure 9 , running time per iteration against C is a V shaped curve with a minimum value at C = 20 . As C increases , the amount of disk I/O declines since it depends on the number of times that the entries of R are streamed from disk , which is inversely proportional to C . Conversely , computational cost increases quadratically with regard to C . At low C values , the decrease in the amount of disk I/O is greater and leads to a downward trend of running time per iteration . At high C values , however , the increase in the computational cost is greater and results in an upward trend of running time per iteration .
+0.95 1 1.05 1.1 1.15 0 5 10 15 20 25 30 35Test RMSEElapsed time ( min)CDTF(Tin=5)SALSALSFFPSGD 25 30 35 40 0 20 40 60 80 100 120 140Test RMSEElapsed time ( min)CDTF(Tin=5)SALSALSFFPSGD 0 100 200 300 400 500 600DGSPSLASLASFTDCRunning time / iter ( sec)14480 1600TCaFixelFNC+SEQLC+SEQLC+RANLC+GRE NC LC 0 500 1000 1500 2000Running time / iter ( sec)DGSPTCaFixelFSLASLASFTDCNC+SEQLC+SEQLC+RANLC+GRE NC LC43680 4822 0.94 0.95 0.96 0.97 0.98 0.99 1 0 10 20 30 40 50 60 70Test RMSEElapsed time ( min)Tin=12510 24 25 26 27 28 29 30 31 32 33 0 50 100 150 200 250 300 350 400 450Test RMSEElapsed time ( min)Tin=12510 0.94 0.96 0.98 1 1.02 1.04 1.06 1.08 0 5 10 15 20 25 30 35Test RMSEElapsed time ( min)C=125102040 22 24 26 28 30 32 0 20 40 60 80 100 120 140Test RMSEElapsed time ( min)C=12510204080 0 5 10 15 20 25 30 35 40 45 50 0 5 10 15 20 25 30 35 40Running time / iter ( min)Number of parameters updated at a time ( C ) 0 5 10 15 20 25 30 35 0 10 20 30 40 50 60 70 80Running time / iter ( min)Number of parameters updated at a time ( C ) [ 12 ] C J H . S . S . Yu , Hsiang Fu and I . S . Dhillon . Parallel matrix factorization for recommender systems . Knowl . Inf . Syst . , pages 1–27 , 2013 .
+[ 13 ] V . W . Zheng , B . Cao , Y . Zheng , X . Xie , and Q . Yang . Collaborative filtering meets mobile recommendation : A usercentered approach . In AAAI , 2010 .
+[ 14 ] Y . Zhou , D . Wilkinson , R . Schreiber , and R . Pan . Large scale parallel collaborative filtering for the netflix prize . In AAIM , pages 337–348 . 2008 .
+VI . CONCLUSION
+In this paper , we propose SALS and CDTF , distributed algorithms for high dimensional and large scale tensor factorization . They are scalable with all aspects of data ( dimension , the number of observable entries , mode length , and rank ) and show a trade off : SALS has an advantage in terms of convergence speed , and CDTF has one in terms of memory usage . Local disk caching and greedy row assignment , two proposed optimization schemes , significantly accelerate not only SALS and CDTF but also their competitors .
+ACKNOWLEDGMENTS
+This work was supported by AFOSR/AOARD under the Grant No . FA2386 14 1 4036 , and by the National Research Foundation of Korea ( NRF ) Grant funded by the Korean Government ( MSIP ) ( No . 2013R1A1A1064409 )
+REFERENCES
+[ 1 ] A . Beutel , A . Kumar , E . E . Papalexakis , P . P . Talukdar , C . Faloutsos , and E . P . Xing . Flexifact : Scalable flexible factorization of coupled tensors on hadoop . In SDM , 2014 .
+[ 2 ] P L Chen , C T Tsai , Y N Chen , K C Chou , C L Li , CH Tsai , K W Wu , Y C Chou , C Y Li , W S Lin , et al . A linear ensemble of individual and blended models for music rating prediction . KDDCup 2011 Workshop , 2011 .
+[ 3 ] D . M . Dunlavy , T . G . Kolda , and E . Acar . Temporal link ACM prediction using matrix and tensor factorizations . TKDD , 5(2):10 , 2011 .
+[ 4 ] R . Gemulla , E . Nijkamp , P . Haas , and Y . Sismanis . Largescale matrix factorization with distributed stochastic gradient descent . In KDD , 2011 .
+[ 5 ] A . Karatzoglou , X . Amatriain , L . Baltrunas , and N . Oliver . Multiverse recommendation : N dimensional tensor factorization for context aware collaborative filtering . In RecSys , 2010 .
+[ 6 ] T . Kolda and B . Bader . Tensor decompositions and applica tions . SIAM review , 51(3 ) , 2009 .
+[ 7 ] Y . Koren , R . Bell , and C . Volinsky . Matrix factorization techniques for recommender systems . Computer , 42(8):30– 37 , 2009 .
+[ 8 ] R . McDonald , K . Hall , and G . Mann . Distributed training strategies for the structured perceptron . In HLT NAACL , 2010 .
+[ 9 ] A . Nanopoulos , D . Rafailidis , P . Symeonidis ,
+Y . Manolopoulos . recommendation based on cubic analysis of social IEEE TASLP , 18(2):407–412 , 2010 . and Musicbox : Personalized music tags .
+[ 10 ] F . Niu , B . Recht , C . R´e , and S . J . Wright . Hogwild! : A lockfree approach to parallelizing stochastic gradient descent . NIPS , 2011 .
+[ 11 ] J T Sun , H J Zeng , H . Liu , Y . Lu , and Z . Chen . Cubesvd : a novel approach to personalized web search . In WWW , 2005 .

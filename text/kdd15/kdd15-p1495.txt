@@ -1,0 +1,181 @@
+SAME but Different : Fast and High Quality Gibbs
+Parameter Estimation
+Huasha Zhao
+Biye Jiang
+University of California Berkeley , CA 94720
+{hzhao,bjiang}@berkeley.edu
+John Canny
+University of California ,
+Berkeley and Yahoo Research Labs canny@berkeley.edu
+Bobby Jaros
+Yahoo Research Labs
+701 First Ave
+Sunnyvale , CA 94089 bjaros@yahoo inc.com
+ABSTRACT Gibbs sampling is a workhorse for Bayesian inference but has several limitations when used for parameter estimation , and is often much slower than non sampling inference methods . SAME ( State Augmentation for Marginal Estimation ) [ 15 , 8 ] is an approach to MAP parameter estimation which gives improved parameter estimates over direct Gibbs sampling . SAME can be viewed as cooling the posterior parameter distribution and allows annealed search for the MAP parameters , often yielding very high quality estimates . But it does so at the expense of additional samples per iteration and generally slower performance . On the other hand , SAME dramatically increases the parallelism in the sampling schedule , and is an excellent match for modern ( SIMD ) hardware . In this paper we explore the application of SAME to graphical model inference on modern hardware . We show that combining SAME with factored sample representation ( or approximation ) gives throughput competitive with the fastest symbolic methods , but with potentially better quality . We describe experiments on Latent Dirichlet Allocation , achieving speeds similar to the fastest reported methods ( online Variational Bayes ) and lower cross validated loss than other LDA implementations . The method is simple to implement and should be applicable to many other models .
+Categories and Subject Descriptors G.4 [ MATHEMATICAL SOFTWARE ] : Algorithm design and analysis ; Parallel and vector implementations ; Efficiency ; I26 [ ARTIFICIAL INTELLIGENCE ] : Learning—Parameter Learning
+Keywords Gibbs sampling ; Latent Dirichlet Allocation ; Simulated Annealing
+1 .
+INTRODUCTION
+Many learning problems can be formulated as inference on a joint distribution P ( X , Z , Θ ) where X represents observed data , Θ a set of parameters , and Z are latent variables . One generally wants to optimize over Θ while marginalizing over Z . The output of the algorithm is typically a value or symbolic distribution over Θ while the Z are often discarded . Gibbs sampling is a very general approach to posterior estimation for P ( X , Z , Θ ) , but it provides samples only rather than MAP estimates . But therein lies a problem : sampling is a sensible approach to marginal estimation , but can be a very inefficient approach to optimization . This is particularly true when the dimension of Θ is large compared to X ( which is true eg in Latent Dirichlet Allocation and probabilistic recommendation algorithms ) . Such models have been observed to require many samples ( thousands to hundreds of thousands ) to provide good parameter estimates . Hybrid approaches such as Monte Carlo EM have been developed to address this issue a Monte Carlo method such as Gibbs sampling is used to estimate the expected values in the E step while an optimization method is applied to the parameters in the M step . But this requires a separate optimization strategy ( usually gradient based ) , a way to compute the dependence on the parameters symbolically , and analysis of the accuracy of the E step estimates .
+SAME ( State Augmentation for Marginal Estimation ) [ 15 , 8 ] is a simple approach to MAP parameter estimation that remains within the Gibbs framework1 . SAME replicates the latent state Z with additional states . This has the effect of “ cooling ” the marginal distribution on Θ , which sharpens its peaks and causes Θ samples to approach local optima . The conditional distribution P ( Z|X , Θ ) remains the same , so we are still marginalizing over a full distribution on Z . By making the temperature a controllable parameter , the parameter estimates can be annealed to reach better local optima . In both [ 15 , 8 ] and the present paper we find that this approach gives better estimates than conventional Gibbs sampling . The novelty of the present paper is showing that SAME estimation can be very fast , and competitive with the fastest symbolic methods . Thus it holds the potential to be the method of choice for many inference problems .
+To begin , we define a new joint distribution m
+P
+( X , Θ , Z ( 1 ) , . . . , Z ( m ) ) =
+P ( X , Θ , Z ( j ) )
+( 1 ) j=1
+1SAME is a general approach to MCMC MAP estimation , but in this paper we will focus on its realization in Gibbs samplers
+1495 which models m copies of the original system with tied parameters Θ and independent blocks of latent variables Z ( 1 ) , . . . , Z ( m ) . The marginalized conditional P ( Θ|X ) = P ( X , Θ)/P ( X ) . And m
+Z(m ) j=1
+P ( X , Θ , Z ( j ) ) dZ ( 1 ) ··· dZ ( m )
+( 2 )
+( X , Θ )
+···
+Z(1 )
+P
+= m
+P ( X , Θ ) = P m(X , Θ )
+= where P ( X , Θ ) = j=1
+Z P ( X , Θ , Z ) dZ .
+So P ( Θ|X ) = P m(X , Θ)/P ( X ) which is up to a constant factor equal to P m(Θ|X ) , a power of the original marginal parameter distribution . Thus it has the same optima , including the global optimum , but its peaks are considerably sharpened . In what follows we will often demote X to a subscript since it fixed , writing P ( Θ|Z , X ) as PX ( Θ|Z ) etc . This new distribution can be written as a Gibbs distribu tion on Θ , as
+P m(Θ , X ) = exp(−mgX ( Θ ) ) = exp(−gX ( Θ)/(kT ) )
+( 3 ) from which we see that m = 1/(kT ) is an inverse temperature parameter ( k is Boltzmann ’s constant ) . Increasing m amounts to cooling the distribution .
+Gibbs sampling from the new distribution is straightforward given a sampler for the original , since the new model has the same form with a larger number of parameters . It is perhaps not obvious why sampling from a more complex system could improve performance , but we have added considerable parallelism since we can sample various “ copies ” of the system concurrently . It will turn out this approach is complementary to using a factored form for the posterior . Together these methods gives us orders of magnitude speedup over other samplers for LDA .
+The rest of the paper is organized as follows . Section 2 summarizes related work on parameter inference for probabilistic models and their limitations . Section 3 introduces the SAME sampler . We discuss in Section 4 a factored approximation that considerably accelerates sampling . A hardware optimized implementation of the algorithm for LDA is described in Section 5 . Section 6 presents the experimental results and section 7 describes a generalization to the nested CRP processes . Finally Section 8 concludes the paper .
+2 . RELATED WORK 2.1 EM and related Algorithms
+The Expectation Maximization ( EM ) algorithm [ 7 ] is a popular method for parameter estimation of graphical models of the form we are interested in . The EM algorithm alternates between updates in the expectation ( E ) step and maximization ( M ) step . The E step marginalizes out the latent variables and computes the expectation of the likelihood as a function of the parameters . The E step computes a Q function Q(Θ|Θ ) = EZ|Θ(log PX ( Z , Θ ) ) to be optimized in the M step . For EM to work , one has to compute the expectation ( over Z|Θ ) of the sufficient statistics of the likelihood function . One also needs a method to optimize the Q function . In practice , the iterative update equations can be hard to derive . Moreover , the EM algorithm is a gradient based method , and therefore is only able to find locally optimal solutions .
+Variational Bayes ( VB ) [ 13 ] is an EM like algorithm that uses a parametric approximation to the posterior distribution of both parameters and other latent variables , and attempts to optimize the fit ( eg using KL divergence ) to the observed data . VB typically uses a coordinate factored form for the approximate posterior . The factored form simplifies inference , but makes strong assumptions about the distribution ( effectively eliminating interactions ) . While fast to compute , it often yields biased models . 2.2 Gibbs Sampling
+Gibbs samplers [ 9 ] are an excellent match to inference on graphical models since they support simple , local simulation of each node conditioned by its Markov blanket . Gibbs sampling can give good ( unbiased ) parameter estimates for models like LDA [ 10 , 12 ] but are typically much slower than competing methods ( this is certainly true for LDA and related models ) . Our results suggest this slow convergence is due in part to large variance in the parameters in conventional samplers .
+Another part of the slow speed of Gibbs sampling for LDA has been the high cost of generating multinomial samples . This was addressed in [ 20 ] , who used “ Alias Sampling ” and Metropolis Hastings to generate k similarly distributed samples in O(m + k ) time , where m is the multinomial dimension . In our work , by using replicated ( SAME ) sampling in blocks , we are able to compute counts of k samples directly in time O(m ) in fully parallel fashion . As reported in the experiments section , this approach is substantially faster than [ 20 ] . Based on reported perplexity , analytical arguments , and our attempts to replicate [ 20 ] , SAME sampling generates more accurate parameter estimates as well . 2.3 Monte Carlo EM
+Monte Carlo EM [ 16 ] is a hybrid approach that uses MCMC ( eg Gibbs sampling ) to approximate the expected value EZ|Θ(log PX ( Z , Θ ) ) with the mean of the log likelihood of the samples . The method has to optimize Q(Θ|Θ ) using a numerical method ( conjugate gradient etc ) Like standard EM , it can suffer from convergence problems , and may only find a local optimum of likelihood . 2.4 Message Passing Methods
+Belief propagation [ 17 ] and Expectation propagation [ 14 ] use local ( node wise ) updates to infer posterior parameters in graphical models in a manner reminiscent of Gibbs sampling . But they are exact only for a limited class of models . Recently variational message passing [ 18 ] has extended the class of models for which parametric inference is possible to conjugate exponential family graphical models . However similar to standard VB , the method uses a coordinatefactored approximation to the posterior which effectively eliminates interactions ( although they can be added at high computational cost by using a factor graph ) . It also finds only local optima of the posterior parameters .
+3 . SAME PARAMETER ESTIMATION
+SAME estimation involves sampling multiple Z ’s indepen dently and inferring Θ using the aggregate of Z ’s .
+1496 3.1 Method
+We use the notation Z−i = Z1 , . . . , Zi−1 , Zi+1 , . . . , Zn and similarly for Θ−i .
+Algorithm 1 Standard Gibbs Parameter Estimation
+1 : initialize parameters Θ randomly , then in some order : 2 : Sample Zi ∼ PX ( Zi|Z−i , Θ ) 3 : Sample Θi ∼ PX ( Θi|Θ−i , Z )
+Algorithm 2 SAME Parameter Estimation
+1 : initialize parameters Θ randomly , and in some order : 2 : Sample Z ( j ) 3 : Sample Θi ∼ PX ( Θi|Θ−i , Z ( 1 ) , . . . , Z ( m ) ) i ∼ PX ( Z ( j )
+|Z ( j)−i , Θ ) i i
+Sampling Z ( j ) in the SAME sampler is exactly the same as for the standard sampler . Since the groups Z ( j ) are independent of each other , we can use the sampling function for the original distribution , conditioned only on the other components of the same group : Z ( j)−i .
+Sampling Θi is only slightly more complicated . We want to sample from PX ( Θi|Θ−i , Z ( 1 ) , . . . , Z ( m ) ) = PX ( Θ , Z)/PX ( Θ−i , Z )
+( 4 ) where Z = Z ( 1 ) , . . . , Z ( m ) and if we ignore the normalizing constants :
+PX ( Θ , Z)/PX ( Θ−i , Z ) ∝ PX ( Θ , Z )
+( 5 ) m
+PX ( Θ , Z ( j ) ) ∝ m
+=
+PX ( Θi|Θ−i , Z ( j ) ) j=1 j=1 which is now expressed as a product of conditionals from the original sampler PX ( Θi|Θ−i , Z ( j) ) . Inference in the new model will be tractable if we are able to sample from a product of the distributions PX ( Θi|Θ−i , Z ( j) ) . This will be true for many distributions . eg for exponential family distributions in canonical form , the product is still an exponential family member . A product of Dirichlet distributions is Dirichlet etc . , and in general this distribution represents the parameter estimate obtained by combining evidence from independent observations . The normalizing constant will usually be implied from the closed form parameters of this distribution . Adjusting sample number m at different iterations allows annealing of the estimate .
+4 . COORDINATE FACTORED APPROXIMA
+TION
+Certain distributions ( including LDA ) have the property that the latent variables Zi are independent given X and Θ . That is P ( Zi|Z−i , X , Θ ) = P ( Zi|X , Θ ) . Therefore the Zi ’s can be sampled ( without approximation ) in parallel . Furthermore , rather than a single sample from P ( Zi|X , Θ ) ( eg a categorical sample for a discrete Zi ) we can construct a SAME Gibbs sampler by taking m samples . These samples will now have a multinomial distribution with count m and probability vector P ( Zi|X , Θ ) . Let ˆZi(v ) denote the count for Zi = v among the m samples , and P ( Zi = v|X , Θ ) denote the conditional probability that Zi = v .
+We can introduce still more parallelism by randomizing the order in which we choose which Zi from which to sample . The count m for variable Zi is then replaced by random variable ˆm ∼ Poisson(m ) and the coordinate wise distributions of ˆZi become independent Poisson variables :
+ˆZi(v ) ∼ Poisson(mP ( Zi = v|X , Θ ) )
+( 6 ) when the Zi are independent given X , Θ , the counts ˆZi(v ) fully capture the results of taking the m ( independent ) samples . These samples can be generated very fast , and completely in parallel . m is no longer constrained to be an integer , or even to be > 1 . Indeed , each sample no longer corresponds to execution of a block of code , but is simply an increment in the value m of the Poisson random number generator . In LDA , it is almost as fast to generate all m samples for a single word for a large m ( up to about 100 ) as it is to generate one sample . This is a source of considerable speedup in our LDA implementation . For distributions where the Zi are not independent , ie when P ( Zi|Z−i , X , Θ ) = P ( Zi|X , Θ ) , we can still perform independent sampling as an approximation . This approach is quite similar to the coordinate factored approximation often used in Variational Bayes . We leave the details to a forthcoming paper .
+5 . EXACT SAMPLING
+In order to generate samples exactly we need fast , repeated multinomial sampling . Alias sampling is one approach to doing this fast on a sequential machine [ 20 ] , but is not evidently suitable for parallel implementation . Instead we implemented a fast multinomial sampler using parallel scan operations on the GPU . Let pi for i = 1 , . . . , n denote a probability vector from which we will take m multinomial samples . In our implementation , there is no need for pi to be normalized , ie to sum to 1 .
+The pi are arranged as leaves of a binary tree . At each internal node , we recursively compute the sum of the probabilities of all its descendents , which is equal to the sum of its two children . This requires log2(n ) stages .
+From the root of the tree , we start with a count of m assigned to the root . At this node we then draw a binomial sample mL from B(n , p ) = B(m , L/(L + R ) ) where L is total probability of the left child and R is the total probability of the right child . The left child receives the count mL while the right child receives mR = m − mL . We continue recursively computing binomial samples using the left and right child weights and the count assigned to the node . Eventually , each leaf receives a count which its share of the multinomial count vector .
+The complexity of this scheme is O(n ) ( proportional to the number of nodes in the tree ) . Although a practical GPU implementation uses the same number of threads per datum at each layer with fast shared memory . So the practical complexity is O(n log n ) , albeit with a very small constant . The current implementation of this scheme is within a factor of two of the Poisson method above .
+6 .
+IMPLEMENTATION OF SAME LDA
+Our SAME LDA sampler implementation is described in Algorithm 3 . Samples are taken directly from Poisson distributions ( line 7 of the algorithm ) as described earlier .
+1497 m
+Nd
+6.1 Latent Dirichlet Allocation
+LDA is a generative process for modeling a collection In the LDA model , the words of documents in a corpus . X = {xd,i} are observed , the topics Z = {zd,i} are latent variables and parameters are Θ = ( θ , φ ) where θ is document topic distributions and φ is word topic distributions . Subscript d , i denotes document d and its ith word . Given X and Θ , zd,i are independent , which also implies that we can sample from Z without any information about Z from previous samples . A similar result holds for the parameters , which can be sampled given only the current counts from the Zi . We can therefore alternate parameter and latent variable inference using a pair of samplers : PX ( Z|θ , φ ) and PX ( θ , φ|Z ) . Such blocked sampling maximizes parallelism and works very well with modern SIMD hardware . The sampling of zd,i ’s uses the Poisson formula derived earlier . The conditional distributions PX ( θ , φ|zd,i ) are mulIn practice , we collapse out tiple independent Dirichlet ’s . d,i given the zt−1 from ( θ , φ ) , so we in effect sample a new zt a previous iteration . The update sampler follows a Dirichlet compound multinomial distribution ( DCM ) and can be derived as ,
+PX ( zt d,i|zt−1 , α , β ) = ck,d,·/m + α c·,d,·/m + Kα ck,·,w/m + β ck,·,·/m + W β
+,
+( 7 ) where W and K are numbers of words and topics respectively , c are counts across all samples and all documents which are defined as , ck,d,w =
+1(z(j ) d,i = k and xd,i = w ) ,
+( 8 ) j=1 i=1 where Nd is the number of documents and superscript ( j ) of z denotes the jth sample of the hidden topic variable . In W Equation 7 , dot(s ) in the subscript of c denotes integrating ( summing ) over that dimension(s ) , for example , ck,d,· = w=1 ck,d,w . As shown in Equation 7 , sample counts are sufficient statistics for the update formula . 6.2 Mini batch Processing
+For scalability ( to process datasets that will not fit in memory ) , we implement LDA using a mini batch update strategy . In mini batch processing , data is read from a dataset and processed in blocks . Mini batch algorithms have been shown to be very efficient for approximate inference [ 4 , 3 ] .
+In Algorithm 3 , Dt is a sparse ( nwords x ndocs ) matrix that encodes the subset of documents ( mini batch ) to process at period t . The global model ( across mini batches ) is the word topic matrix φ . It is updated as the weighted average of the current model and the new update , see line 14 . The weight is determined by
+ρt = ( τ0 + t )
+−γ
+( 9 ) according to [ 12 ] . We do not explicitly denote passes over the dataset . The data are treated instead as an infinite stream and we examine the cross validated likelihood as a function of the number of mini batch steps , up to tmax . 6.3 GPU optimizations
+GPUs are extremely well suited to Gibbs sampling by virtue of their large degree of parallelism , and also because of their extremely high throughput in non uniform random
+Algorithm 3 SAME Gibbs LDA 1 : for t = 0 → tmax do 2 : 3 : 4 :
+ˆθ = 0 ; ˆφ = 0 ; ρt = ( τ0 + t)−γ µ = SDDM M ( θ , φ , Dt ) for all document word pair ( d , w ) in mini batch Dt parallel do for k = 1 → K parallel do λ = θd,kφk,w/µd,w sample z ∼ Poisson(λ · m ) ˆθd,k = ˆθd,k + z/m ˆφk,w = ˆφk,w + z/m end for end for θ = ˆθ + α ; φ = ˆφ + β normalize ˆφ along the word dimension φ = ( 1 − ρt)φ + ρt ˆφ
+5 : 6 : 7 : 8 : 9 : 10 : 11 : 12 : 13 : 14 : 15 : end for number generation ( thanks to hardware accelerated transcendental function evaluation ) . For best performance we must identify and accelerate the bottleneck steps in the algorithm . First , computing the normalizing factor in equation 7 is a bottleneck step . It involves evaluating the product of two dense matrix A·B at only nonzeros of a sparse matrix C . Earlier we developed a kernel ( SDDMM ) for this step which is a bottleneck for several other factor models including our online Variational Bayes LDA and Sparse Factor Analysis [ 6 ] .
+Second , line 7 of the algorithm is another dominant step , and has the same operation count as the SDDMM step . We wrote a custom kernel that implements lines 4 11 of the algorithm with almost the same speed as SDDMM . Finally , we use a matrix caching strategy [ 5 ] to eliminate the need for memory allocation on the GPU in each iteration .
+7 . EXPERIMENTS 7.1 LDA
+In this section , we evaluate the performance of the SAME Gibbs sampler against several other algorithms and systems . We implemented LDA using our SAME approach , VB online and VB batch , all using GPU acceleration . The code is open source and distributed as part of the BIDMach project [ 5 , 6 ] on github 2 . We compare our systems with four other systems : 1 ) Blei et al ’s VB batch implementation for LDA [ 2 ] , 2 ) Griffiths et al ’s collapsed Gibbs sampling ( CGS ) for LDA [ 10 ] , 3 ) Yan et al ’s GPU parallel CGS for LDA [ 19 ] , 4 ) Li et al ’s LDA via Walker ’s alias method [ 20 ] , 5 ) Ahmed et al ’s cluster CGS for LDA [ 1 ] .
+1 ) and 2 ) are both C/C++ implementations of the algorithm 3 on CPUs . 3 ) is the state of the art GPU implementation of parallel CGS and 4 ) is the most recent work on topic model inference and won the KDD’14 best paper award . To our best knowledge , 3 ) and 4 ) are among the fastest single machine LDA implementation to date . And 5 ) is the fastest cluster implementation of LDA .
+All the systems/algorithms are evaluated on a single PC equipped with a single 8 core CPU ( Intel E5 2660 ) and a
+2https://github.com/BIDData/BIDMach/wiki 32 ) provides a Matlab interface for CGS LDA
+1498 Figure 1 : ll vs . n passes on NYTimes
+Figure 3 : ll vs . number of samples/word speed only improves marginally beyond m = 100 . However , runtime per pass over the dataset starts to increase beyond m = 100 while being relatively flat for m < 100 . The minibatch size is set to be 1/20 of the total number of examples . N test log(P ( X test ) ) We use the per word log likelihood ll = 1 ( negative log of perplexity ) as a measure of convergence .
+Figures 1 and 2 show the cross validated likelihood as a function of the number of passes through the data for both datasets , up to 20 passes . As we can see , the SAME Gibbs sampler converges to a higher quality result than VB online and VB batch on both datasets . The SAME sampler and VB online converged after 4 5 passes for the NYTimes dataset and 2 passes for the PubMed dataset . VB batch converges in about 20 passes .
+All three methods above are able to produce higher quality than CGS within 20 passes over the dataset . It usually takes 1000 2000 passes for CGS to converge for typical datasets such as NYTimes , as can be seen in Figure 3 .
+Figure 3 plots log likelihood against the number of samples taken per word . We compare the SAME sampler with m = 100 , m = 1 and CGS . To reach the same number of samples CGS and the SAME sampler with m = 1 need to run 100 times as many passes over the data as the SAME sampler with m = 100 . That is Figure 3 shows 20 passes of SAME sampler with m = 100 and 2000 passes of the other two methods . At the beginning , CGS converges faster . But in the long run , SAME Gibbs leads to better convergence . Notice that SAME with m = 1 is not identical to CGS in our implementation , because of minibatching and the moving average estimate for Θ .
+712 Runtime Performance We further measure the runtime performance of different methods with different implementations for LDA . Again we fix the sample size for SAME GS at m = 100 . For the table , all systems were run on the NYTimes dataset with K = 256 , except Yan ’s CGS [ 19 ] used K = 128 and AliasLDA [ 20 ] used K = 10244 . For most systems , we assume linear dependence
+4AliasLDA was run for around 150 iterations for the 6750 second measurement in [ 20 ] , at which point its reported per
+Figure 2 : ll vs . n passes on PubMed dual core GPU ( Nvidia GTX 690 ) , except GPU CGS , Alias LDA and cluster CGS . Each GPU core comes with 2GB memory . Only one core of GPU is used in the benchmark . The benchmarks for GPU CGS are reported in [ 19 ] . They run the algorithm on a machine with a GeForce GTX 280 GPU . Alias LDA benchmarks are reported in [ 20 ] . The benchmarks we use for cluster CGS are reported on 100 and 1000 Yahoo cluster nodes [ 1 ] .
+Two datasets are used for evaluation . 1 ) NYTimes has approximately 300k New York Times news articles . There are 100k unique words and 100 million tokens . 2 ) PubMed contains about 8.2 million abstracts from collections of US National Library of Medicine . There are 140k unique tokens , and 730 million words . 711 Convergence We first compare the convergence of SAME Gibbs LDA with other methods . We choose m = 100 ( the repeated sampling count ) for the SAME sampler , because convergence
+1499 Table 1 : Runtime Comparison on NYTimes ( Seconds )
+SAME GS BIDMach
+VB online BIDMach
+VB batch BIDMach
+VB batch Blei et al
+CGS
+Griffiths et al
+Runtime/Pass Time to Conv .
+30 90
+20 40
+20 400
+12600 252000
+225
+225000
+GPU CGS Yan et al 5.4(11 )
+AliasLDA
+Li et al 40(10 )
+5400(10800 )
+6750(1650)5 on the dimension , so we added expected runtimes scaled to K = 256 in parenthesis . We report time per iteration and time to convergence ( somewhat subjective since most models didnt not use formal definitions of convergence ) . Note that one iteration of SAME uses 100 parallel samples and approximates many passes of conventional GS .
+Results are illustrated in the Table 1 . The SAME Gibbs sampler takes 90 seconds to converge on the NYTimes dataset . By comparison , the other CPU implementations take around 60 70 hours to converge , and Yan ’s GPU implementation takes 5400 seconds to converge for K = 128 . We also measured SAME GS LDA to convergence with K = 128 ( 50 seconds ) and K = 1024 ( 330 seconds ) for direct comparison with Yan et al . and Li et al . Our system demonstrates at least an order of magnitude speedup ( we believe closer to two when all models are trained to convergence ) . This is a substantial improvement over the state of the art .
+Finally , we compare our system with the state of art cluster implementation of CGS LDA [ 1 ] , using time to convergence . Ahmed et al . [ 1 ] processed 200 million news articles on 100 machines and 1000 iterations in 2mins/iteration = 2000 minutes overall = 120k seconds . We constructed a repeating stream of news articles ( as did [ 1 ] ) and ran for two iterations having found that this was sufficient for news datasets of comparable size . This took 30k seconds , which is 4x faster , on a single GPU node . Ahmed et al . also processed 2 billion articles on 1000 machines to convergence in 240k seconds , which is slightly less than linear scaling . Our system ( which is sequential on minibatches ) simply scales linearly to 300k seconds on this problem . Thus single machine performance of GPU accelerated SAME GS is almost as fast as a custom cluster CGS on 1000 nodes , and 4x faster than 100 nodes . 713 Multi sampling and Annealing The effect of sample number m is studied in Figure ? ? and Table 2 . As expected , more samples yields better convergences given fixed number of passes through the data . And the benefit comes almost free thanks to the SIMD parallelism offered by the GPU . As shown in Table 2 , m = 100 is only modestly slower than m = 1 . However , the runtime for m = 500 is much longer than m = 100 .
+We next studied the effects of dynamic adjustment of m , ie annealing . We compare constant scheduling ( fixed m ) with
+1 . linear scheduling : mt = 2mt tmax+1 ,
+2 . logarithmic scheduling : tmax mt = mtmax log t/ log t , t=1
+3 . invlinear scheduling : mt = 2m(tmax+1−t ) tmax+1
+. plexity was higher than the other models we studied and still decreasing . So the table gives a lower bound on its convergence time
+Figure 4 : ll vs . sample size m
+Figure 5 : annealing schedule tmax is the total number of iterations . The average sample size per iteration is fixed to m = 100 for all 4 configurations . As shown in Figure 5 , we cannot identify any particular annealing schedule that is significantly better then fixed sample size . Invlinear is slighter faster at the beginning but has the highest initial sample number .
+Finally , we study the cooled distribution we sample from . It is hard to find the distributions for all the parameter configurations . Instead we use the empirical word topic distributions ( on NYTimes dataset ) as a proxy . We compute the entropy of the distributions for different words , and differ
+1500 over a set of topics drawn from the CRP for this document , rather than over all topics . In more detail , the model is implemented by ( 1 ) choosing a sequence of ci for each document using the CRP process . This sequence specifies a set of L topics which are represented in the document . ( 2 ) draw a vector of topic proportions θ from an L dimensional Dirichlet . ( 3 ) generate the words in the document ( ie the z and w ) using the coordinates of θ as the mixture coefficients .
+The model was found to require tens of thousands of samples for good model estimation [ 11 ] , and so would benefit from acceleration . We note that as with standard LDA , the words are sampled repeatedly and independently for each document from the same distribution ( keeping c , θ and β fixed ) . Similar to LDA , we can fold c , θ and β into the parameter vector Θ , and apply SAME sampling by oversampling the Z parameters . Because of independence of the Z given Θ , we can again use multinomial sampling to extract counts of samples rather than distinct , individual samples . The method in [ 11 ] alternates draws of c and z and the multinomial counts can be used directly in the formula for the distribution of c in section 4 of [ 11 ] . While the application of SAME to nested CRP is straightfoward , a SAME implementation of the nested CRP process is a topic for future work .
+9 . CONCLUSIONS
+This paper described hardware accelerated SAME Gibbs Parameter estimation a method to improve and accelerate parameter estimation via Gibbs sampling . This approach reduces the number of passes over the dataset while introducing more parallelism into the sampling process . We showed that the approach meshes very well with SIMD hardware , and that a GPU accelerated implementation of cooled GS for LDA is faster than other sequential systems , and comparable with the fastest cluster implementation of CGS on 1000 nodes . The code is available at https://githubcom/BIDData/BIDMach SAME GS is applicable to many other problems , and we are currently exploring the method for inference on general graphical models . The coordinate factored sampling approximation is also being applied to this problem in conjunction with full sampling ( the approximation reduces the number of full samples required ) and we anticipate similar large improvements in speed . The method provides the quality advantages of sampling and annealed estimation , while delivering performance with custom ( symbolic ) inference methods . We believe it will be the method of choice for many inference problems in future .
+10 . REFERENCES [ 1 ] A . Ahmed , M . Aly , J . Gonzalez , S . Narayanamurthy , and A . J . Smola . Scalable inference in latent variable models . In Proceedings of the fifth ACM international conference on Web search and data mining , pages 123–132 . ACM , 2012 .
+[ 2 ] D . M . Blei , A . Y . Ng , and M . I . Jordan . Latent dirichlet allocation . the Journal of machine Learning research , 3:993–1022 , 2003 .
+[ 3 ] L . Bottou . Large scale machine learning with stochastic gradient descent . In Proceedings of COMPSTAT’2010 , pages 177–186 . Springer , 2010 .
+Figure 6 : cooling effect ent sample size m . The entropies are normalized by the entropy at m = 100 for word “ web ” . Lower entropy indicates that the empirical sampling distribution is more concentrated and “ cooled ” . Figure 6 shows the cooling effect . As we can see , the empirical entropies decreases with increasing m . The figure provides evidence that the distribution we sample from is cooled for larger m . However , sample size m beyond 100 offers only marginal contribution on reducing variance . It also shows that word “ web ” has more spread out topic distribution of “ school ” and “ book ” .
+8 . A GENERALIZATION : NESTED CRP
+Another popular topic model is based on the nested Chinese Restaurant Process [ 11 ] . In the CRP model , the topics mixed into each document are drawn from a topic hierarchy . The CRP model is illustrated in figure 7 .
+Figure 7 : The nested CRP process
+The parameters α , θ , η and β play a similar role as in the standard LDA model , although θ specifies a topic mixture
+1501 Table 2 : Runtime per iteration with different m
+Runtime per iteration ( s )
+50
+30
+25
+23
+20 m=500 m=100 m=20 m=5 m=1
+[ 4 ] L . Bottou and O . Bousquet . The tradeoffs of large
+[ 13 ] M . I . Jordan , Z . Ghahramani , T . S . Jaakkola , and scale learning . In NIPS , volume 4 , page 2 , 2007 .
+[ 5 ] J . Canny and H . Zhao . Bidmach : Large scale learning with zero memory allocation . In BigLearn Workshop , NIPS , 2013 .
+[ 6 ] J . Canny and H . Zhao . Big data analytics with small footprint : Squaring the cloud . In Proceedings of the 19th ACM SIGKDD international conference on Knowledge discovery and data mining , pages 95–103 . ACM , 2013 .
+L . K . Saul . An introduction to variational methods for graphical models . Machine learning , 37(2):183–233 , 1999 .
+[ 14 ] T . Minka . Expectation propagation for approximate bayesian inference . 2001 .
+[ 15 ] C . Robert , A . Doucet , and S . Godsill . Marginal MAP estimation using markov chain monte carlo . In IEEE Int . Conf . on Acoustics , Speech and Signal Processing , volume 3 , pages 1753–1756 . IEEE , 1999 .
+[ 7 ] A . P . Dempster , N . M . Laird , D . B . Rubin , et al .
+[ 16 ] G . C . Wei and M . A . Tanner . A monte carlo
+Maximum likelihood from incomplete data via the em algorithm . Journal of the Royal statistical Society , 39(1):1–38 , 1977 .
+[ 8 ] A . Doucet , S . Godsill , and C . Robert . Marginal maximum a posteriori estimation using markov chain monte carlo . Statistics and Computing , 12:77–84 , 2002 . [ 9 ] S . Geman and D . Geman . Stochastic relaxation , gibbs distributions , and the bayesian restoration of images . Pattern Analysis and Machine Intelligence , IEEE Transactions on , ( 6):721–741 , 1984 .
+[ 10 ] T . L . Griffiths and M . Steyvers . Finding scientific topics . Proceedings of the National academy of Sciences of the United States of America , 101(Suppl 1):5228–5235 , 2004 .
+[ 11 ] DM Blei and TL Griffiths and MI Jordan and JB Tenenbaum Hierarchical Topic Models and the Nested Chinese Restaurant Process Advances in Neural Information Processing Systems , 2004
+[ 12 ] M . D . Hoffman , D . M . Blei , and F . R . Bach . Online learning for latent dirichlet allocation . In NIPS , volume 2 , page 5 , 2010 . implementation of the em algorithm and the poor man ’s data augmentation algorithms . Journal of the American Statistical Association , 85(411):699–704 , 1990 .
+[ 17 ] Y . Weiss . Correctness of local probability propagation in graphical models with loops . Neural Computation , 12(1):1–41 , 2000 .
+[ 18 ] J . Winn and C . Bishop . Variational message passing . Journal of Machine Learning Research , 6:661 ˆA aV694 , 2005 .
+[ 19 ] F . Yan , N . Xu , and Y . Qi . Parallel inference for latent dirichlet allocation on graphics processing units . In NIPS , volume 9 , pages 2134–2142 , 2009 .
+[ 20 ] A . Li , A . Ahmed , S . Ravi , and A . Smola Reducing the sampling complexity of topic models . Proceedings of the 20th ACM SIGKDD international conference on Knowledge discovery and data mining . ACM , 2014 .
+1502

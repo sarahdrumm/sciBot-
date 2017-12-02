@@ -1,0 +1,457 @@
+Parallel Lasso Screening for Big Data Optimization
+Qingyang Li
+Arizona State Univ . Tempe , AZ 85287 qingyangli@asuedu Paul M . Thompson
+Univ . of Southern California
+Los Angeles , CA 90089 pthomp@usc.edu
+Shuang Qiu Univ . of Michigan
+Ann Arbor , MI 48109 qiush@umich.edu
+Jieping Ye
+Univ . of Michigan Ann Arbor , MI 48109 jpye@umich.edu
+Shuiwang Ji
+Washington State Univ . Pullman , WA 99164 sji@eecswsuedu
+Jie Wang
+Univ . of Michigan
+Ann Arbor , MI 48109 jwangumi@umich.edu
+ABSTRACT Lasso regression is a widely used technique in data mining for model selection and feature extraction . In many applications , it remains challenging to apply the regression model to large scale problems that have massive data samples with high dimensional features . One popular and promising strategy is to solve the Lasso problem in parallel . Parallel solvers run multiple cores in parallel on a shared memory system to speedup the computation , while the practical usage is limited by the huge dimension in the feature space . Screening is a promising method to solve the problem of high dimensionality by discarding the inactive features and removing them from optimization . However , when integrating screening methods with parallel solvers , most of solvers cannot guarantee the convergence on the reduced feature matrix . In this paper , we propose a novel parallel framework by parallelizing screening methods and integrating it with our proposed parallel solver . We propose two parallel screening algorithms : Parallel Strong Rule ( PSR ) and Parallel Dual Polytope Projection ( PDPP ) . For the parallel solver , we proposed an Asynchronous Grouped Coordinate Descent method ( AGCD ) to optimize the regression problem in parallel on the reduced feature matrix . AGCD is based on a grouped selection strategy to select the coordinate that has the maximum descent for the objective function in a group of candidates . Empirical studies on the real world datasets demonstrate that the proposed parallel framework has a superior performance compared to the state of the art parallel solvers . CCS Concepts •Information systems → Data mining ;
+Keywords Lasso regression , parallel computing , screening rules , coordinate descent , aynchronized coordinate descent
+1 .
+INTRODUCTION
+Sparse models with 1 regularization are widely used to find the linear model of best fit . Many research efforts have been devoted to develop efficient solvers for the 1regularized sparse models , such as the Lasso problem [ 18 ] . Recent technological innovations lead to huge data collections that keep growing rapidly . As a result , in many applications , running Lasso on huge scale data sets usually exceeds the computing capacity of a single machine running single threaded approaches . Parallelizing the learning process for the regression problem has recently drawn a lot of interest . Most of the proposed algorithms are based on Stochastic Coordinate Descent ( SCD ) [ 17 ] to accelerate the whole learning process . Many existing approaches , like Shotgun [ 6 ] , Parallel Block Coordinate Descent ( PBCD ) [ 13 ] and Thread Greedy [ 16 , 15 ] , employ multiple threaded computing by utilizing multiple cores on a shared memory system . However , the curse of dimensionality is still a great challenge for large scale problems . High dimensional data in feature space means more time spent in the optimization and data synchronization in the multithreading environment .
+To address this issue , screening is one of highly efficient approaches to solve the high dimensional problem . Screening pre identifies inactive features that have zero components in the solution and remove them from the optimization . As a result , we can solve the regression problem on the reduced feature matrix , leading to substantial savings in terms of computation and memory usage . The idea of screening has achieved great success in a large class of 1regularized problems [ 3 , 19 , 24 , 25 , 22 , 21 , 23 ] , such as Lasso regression , Logistic regression , elastic net , multi task feature learning ( MTFL ) and more general convex problems .
+Parallel screening is a promising strategy to solve the highdimensional problem in big data optimization . However , the idea of using screening in a multithreading environment has not been investigated , since it is challenging to integrate screening rules with parallel solvers . Most of the published parallel solvers are based on parallelizing SCD to speedup the optimization process . The updating strategy of SCD is to randomly select one coordinate to update in each iteration . Parallelizing SCD allows multi processors to update the coordinates concurrently without synchronization . Although it might result in the divergence of objective function , parallel solvers can achieve dramatic speedup when optimizing the regression problem in a very high dimensional feature space . It is shown in [ 6 ] that the dimension of fea
+1705 ture space for parallel solvers should be no less than P 2ρ when there are P threads , where ρ denotes the spectral radius of AT A , and A is the feature matrix . When we integrate screening methods with the state of the art parallel solvers such as Shotgun , PBCD and Asynchronous Stochastic Coordinate Descent ( ASYSCD ) [ 11 ] , it can result in the divergence of the objective function since the feature matrix is shrunk to a matrix with a small feature space after applying screening rules on it . Although we can reduce the number of threads to guarantee the convergence , it has a negative effect on the scalability of the parallel method . Since previous parallel solvers cannot satisfy the constraint between the number of threads and feature space , it is essential to develop a parallel solver to optimize the problem in the reduced feature data matrix .
+In this paper , we propose a parallel framework to solve the Lasso regression problem on large scale datasets with huge dimensional feature space . We parallelize screening rules by partitioning the sample and feature space to accelerate the screening process . We propose two parallel safe screening rules : Parallel Strong Rule ( PSR ) and Parallel Dual Polytope Projection ( PDPP ) . To optimize the regression problem in parallel on the reduced feature matrix , we propose an Asynchronous Grouped Coordinate Descent method ( AGCD ) to solve the problem of small feature space in the optimization after employing screening rules . In AGCD , we introduce competition strategy to select the candidate coordinates that minimize the objective function with the maximum descent of function value . If the selected coordinate wins the competition in a group of candidates , that coordinate will be updated at this iteration , otherwise the update terminates . The main idea of AGCD is to reduce the frequency to update coordinates and select the most important candidates to update , allowing the solver to converge in a small feature space . It is different with the random selection strategy in most of the parallel solvers .
+The main contributions of this study are summarized as follows :
+• We propose a parallel framework by integrating the screening methods with parallel solvers to accelerate the whole learning process . To the best of our knowledge , this is the first study to introduce the idea of screening into a parallel framework .
+• We propose an asynchronous parallel solver AGCD to guarantee the convergence of optimization on the reduced feature data matrix .
+• We evaluate the proposed parallel framework using real world datasets , including the 810 patients of Alzheimer ’s Disease ( AD ) collected from North America with approximately 5.9 million features .
+• Experimental results demonstrate the effectiveness and efficiency of proposed methods ( PSR+AGCD and PDPP +AGCD ) . PSR+AGCD outperforms other state of theart parallel solvers like PBCD and ASYSCD . When solving the Lasso regression along a sequence of parameter values , PDPP+AGCD obtains a speedup of 130 folds over ASYSCD .
+The rest of this paper is organized as follows . Section 2 reviews the related work . Section 3 presents our proposed parallel framework . Section 4 analyzes the convergence of the proposed methods . Experimental results on the realworld biomedical datasets are reported in Section 5 . We conclude the paper in Section 6 .
+2 . RELATED WORK 2.1 Screening
+Existing screening methods can be divided into two categories : Safe Screening Rules and Heuristic Screening Rules . Safe screening rules guarantee that the predicted inactive features have zero coefficients in the solution . In other words , discarding the inactive features in safe screening rules does not sacrifice the accuracy of optimization since the corresponding positions in the solution vector are zero in the ground truth . SAFE [ 3 ] is a safe screening method that estimates the dual optimal solution of Lasso . Strong rules [ 19 ] are another efficient screening methods based on heuristic screening rules . In most of the cases , strong rules discard more features than SAFE , leading to a substantial speedup . However , strong rules cannot guarantee that discarded features have zero components in the solution . To avoid the incorrectly discarded cases , [ 19 ] proposed a method to check the KKT conditions , ensuring the correctness of screening results . To optimize the problem along a sequence of parameter values , Enhanced Dual Polytope Projection ( EDPP ) [ 24 ] is an efficient and effective safe screening method and achieves significant speedup for the Lasso problem . 2.2 Parallel Solvers
+After we get the reduced feature matrix from screening rules , we can apply different solvers to optimize it , such as Stochastic Gradient Descent ( SGD ) [ 26 ] , FISTA [ 1 ] , ADMM [ 2 ] and SCD [ 17 , 12 , 14 ] . When we consider solvers in a multithread environment , a lot of parallel solvers were proposed based on the SCD . Shotgun [ 6 ] is a parallel coordinate descent method which allows multiple processors to update the coordinates concurrently . PBCD [ 13 ] described a method for the convex composite optimization problem . In this method , all the processors update randomly selected coordinates or blocks synchronously at each iteration . The method in [ 9 , 16 , 15 ] are based on the greedy coordinate descent method . Recently , asynchronous parallel methods are proposed to accelerate the updating process . ASYSCD [ 11 ] proved the linear convergence of asynchronous SCD solver under the essential strong convexity condition . PASSCoDe [ 4 ] is an asynchronous Stochastic Dual Coordinate Descent(SDCD ) method for solving the dual problem . Parallel SDCA [ 20 ] is an asynchronous parallel solver based on the Stochastic Dual Coordinate Ascent ( SDCA ) method . Both PassCoDe and Parallel SDCA focus on the 2 regularized models .
+3 . PROPOSED PARALLEL FRAMEWORK In this section , we present the proposed parallel framework based on a shared memory model with multiple processors . Our parallel framework is composed of two main procedures :
+1 . Identify the inactive features by the parallel screening rules and remove inactive features from optimization .
+2 . Solve the Lasso regression on the reduced feature ma trix in parallel .
+In step one , we parallelize screening rules to identify and
+1706 discard inactive features , significantly accelerating the whole learning process . We propose two parallel screening rules : PSR and PDPP .
+In step two , we propose an asynchronous parallel solver AGCD to solve the Lasso regression on the reduced data matrix in parallel . 3.1 Problem Formulation
+In this paper , we consider the following 1 regularized minimization problem :
+1 2
+Ax − y2
+2 + λx1 ,
+F ( x ) = min x∈RN
+( 1 ) where A is the design matrix and A ∈ RM×N , y ∈ RM is the response vector and x is the sparse model we need to learn . λ is the regularization parameter and λ > 0 . 3.2 Parallel SAFE and Parallel Strong Rules SAFE [ 3 ] is an efficient safe screening method . SAFE discards the ith entry of x when the following rule holds :
+λmax − λ
+|AT i y| < λ − Ai2y2
+, where λmax = maxi |AT
+( 2 ) i y| , Ai denotes the ith column of A . Strong rules [ 19 ] are another efficient screening methods based on heuristic screening method . In strong rules , the ith feature will be discarded when satisfies the following equation :
+λmax
+|AT i y| < 2λ − λmax .
+( 3 )
+The calculation of λmax follows the same way in SAFE .
+[ W ]Sj
+For large scale problems , it is necessary to parallelize the learning process . To speedup the learning process , we parallelize screening rules in a multithreading environment . Suppose there are P processors , we partition the feature space into P parts . The jth processor holds a subset Sj of feature space where Sj ⊆ S and S = {1 , 2 , , N} . To average the performance of parallel solvers , each thread holds N/P coordinates and the partition is non overlapped . We summarize the Parallel SAFE rule ( PSAFE ) in algorithm 1 . At the beginning , every processor generates the index set Sj and Sj ∈ RN/P . Let us define some notations here . E is a vector and E ∈ RN/P . indicates the collection of ωth element in W where ω ∈ Sj if W is a vector . When W represents a matrix , [ W ]Sj denotes the collection of ωth i y| , we column of W and ω ∈ Sj . Since λmax = maxi |AT first need to compute E = AT b firstly . To achieve this on P processors , we partition the computation into P parts . Every processor performs [ E]Sj y in parallel . The time complexity is reduced from O(MN ) to O(MN/P ) since no synchronization is needed between processors . E is stored as a global variable and can be accessed by all the processors after updated . Then we get λmax by E∞ . From the 6th line to the 11th line in algorithm 1 , every processor performs screening rules on its own index set Sj to select the active features . Since A and b are global variables , all the processors are able to calculate σ and τ in parallel without synchronization . In the end , we get the selected index set I and reduced feature matrix A . Suppose I has N elements of true values , the dimension of A is RM×N . The original
+= [ A]T Sj optimization problem ( 1 ) can be reformulated as :
+Ax − y2
+2 + λx1 :x ∈ RN . minx
+1 2
+( 4 )
+1http://dpc screeninggithubio/lassohtml
+Algorithm 1 Parallel SAFE rule ( PSAFE ) Input :
+Output :
+A , b and λ .
+A and the selected index set I .
+1 : Initialize : I = 0 ∈ RN . 2 : In parallel on P processors . 3 : Generate the index set Sj for the jth processor .
+Compute the λmax : [ E]Sj
+4 : 5 : Get the norm of response y : σ = y2 . for each element i in the set of Sj do 6 :
+= [ A]T Sj y , λmax = E∞ .
+Get the norm of the ith column of A : τ = Ai2 . Ii = true , select ith column of A into A . if |AT i y| ≥ λ − τ ∗ σ ∗ λmax−λ then
+λmax
+7 :
+8 :
+9 : 10 : 11 : end if end for
+After we obtain the solution vectorx∗ for problem ( 4 ) , we can recover x∗ by I and x∗ . The implementation of PSR in parallel follows the same way of PSAFE . The only difference between PSR and PSAFE is that the computation of Ai2 and y2 in equation ( 2 ) is not needed in PSR . We employ the same partition strategy and parallel technique to parallelize the strong rules in ( 3 ) . We skip the details of implementation for brevity . 3.3 Parallel Dual Polytope Projection
+In many machine learning applications , the optimal value of the regularization parameter λ is unknown . To tune the value of λ , commonly used methods such as cross validation needs to solve the Lasso problem along a sequence of parameter values λ0 > λ1 > > λκ , which can be very time consuming . A sequential version of strong rules was proposed in [ 19 ] by utilizing the information of optimal solutions in the previous parameter . Suppose we have already obtained the solution vector x(λk−1)∗ at λk−1 where the integer k ∈ [ 1 , κ ] , the sequential strong rule rejects the ith feature at λk when the following rule holds :
+|AT i ( y − Ax(λk−1 )
+∗| < 2λk − λk−1 .
+( 5 )
+Although the sequential strong rule is able to predict a large proportion of inactive features , it might mistakenly discard active features that have nonzero components in the solution . We need to check the KKT conditions to guarantee the correctness of the predicted results .
+EDPP [ 24 ] is a highly efficient safe screening method that estimates the dual problem and geometric properties of Lasso regression , achieving significant speedups for real world applications . The implementation details of EDPP is available on the GitHub1 . We omit the introduction of EPDD for brevity . Based on the partition strategy and parallel technology employed on PSAFE and PSR , we propose a parallel safe screening rules , known as the Parallel Dual Polytope Projection ( PDPP ) , to quickly identify and discard inactive features parallelly in a sequence of parameters .
+To parallelize the screening rules , we need to partition both the feature space and sample space . In Section 2.1 , this is done in the feature space , and we follow a similar
+1707 way to partition it in the sample space . Before introducing the details about the proposed algorithm , we first introduce notations in the paper . As we discussed in Section 2.1 , we use [ W ]Sj to indicate the collection of elements of W in the index set Sj if W denotes a vector . When W is a matrix , we use the [ W ]Sj to represent the corresponding columns of W in the index set Sj . We use the same notations in PDPP . Suppose there are P processors , we partition the sample space into P parts . The jth processor holds an index set Tj of sample space , where Tj ⊆ T and T = {1 , 2 , , M} . Every subset Tj has M/P elements and there is no overlap among them . When W denotes a vector , {W}Tj indicates the collection of every ωth elements from W in the index set Tj where ω ∈ Tj . When W is a data matrix , {W}Tj denotes the collection of every ωth rows in W where ω ∈ Tj . To take {A}Tj as an example , we extract columns of A in the index set Tj to construct it . So the dimension of {A}Tj P ×N . is R M
+We summarize the PDPP method in algorithm 2 .
+Algorithm 2 Parallel Dual Polytope Projection ( PDPP )
+1 : In parallel on P processors 2 : Generate the Sj and Tj for the jth processor .
+= [ A]T Sj y , λmax = E∞ . Compute the λmax : [ E]Sj φ = argmaxi|E| , v = Aφ , v is the φth column of A . Let λ0 ∈ ( 0 , λmax ] and λ ∈ ( 0 , λ0 ] . if λ = λmax then {y}Tj else
+{θ(λ)}Tj {θ(λ)}Tj
+=
+.
+λmax
+{y}Tj
+−{A}Tj x(λ)∗
+λ
+.
+= else end if if λ0 = λmax then
+{v1(λ0)}Tj {v1(λ0)}Tj {v2(λ , λ0)}Tj α = <v1(λ0),v2(λ,λ0)> {v⊥ 2 ( λ , λ0)}Tj v1(λ0)2 end if
+=
+=
+.
+= sign(vT y){v}Tj
+.
+{y}Tj − {θ(λ0)}Tj λ0 {y}Tj λ − {θ(λ0)}Tj
+.
+.
+3 :
+4 :
+5 :
+6 :
+7 : 8 : 9 : 10 : 11 : 12 : 13 : 14 : 15 :
+16 :
+17 :
+20 :
+21 :
+22 :
+23 :
+24 :
+25 :
+2
+= {v2(λ , λ0)}Tj
+− α{v1(λ0)}Tj
+18 : 19 : Given λmax = λ0 > > λκ , for k ∈ [ 1 , κ ] , we make a prediction of screening on λk if x(λk−1)∗ is known :
+.
+= [ A]T Sj
+2 ( λk , λk−1 ) ) [ w]Sj for every element i in the set of Sj do
+( θ(λk−1 ) + 1 if wi < 1 − 1
+2v⊥
+2 ( λk , λk−1)2Ai2 then
+2 v⊥
+Discard the i th column from A . end if end for
+In PDPP , all the P processors perform the computation in parallel . Firstly , the jth processor generates the corresponding index set Sj and Tj by the method we discussed previously . Then we follow the same way in PSAFE and PSR to calculate the λmax in parallel . The dimensions of θ(λ ) , v1(λ0 ) , v2(λ , λ0 ) , v⊥ 2 ( λ , λ0 ) are RM . In PDPP , we employ partition strategy in sample space on these variables : {θ(λ)}Tj . As
+, {v2(λ , λ0)}Tj
+, {v1(λ0)}Tj
+2 ( λ , λ0)}Tj and {v⊥ a result , the computation of these variables is performed in parallel . From line 19 to line 25 in algorithm 2 , we employ PDPP on a sequence of parameter values : λmax = λ0 > > λκ . When performing the screening rule on λk and k ∈ [ 1 , κ ] , we need to compute w firstly , where w ∈ RN . We perform the computation of w based on the partition strategy in the feature space :
+[ w]Sj
+= [ A]T Sj
+( θ(λk−1 ) +
+⊥ 2 ( λk , λk−1) ) . v
+1 2
+( 6 )
+Finally , for each element i in the index set Sj , we will identify the ith entry of x(λk)∗ to be zero if the following rule holds : v wi ≥ 1 − 1 ( 7 ) 2 The calculation of v⊥ 2 ( λk , λk−1)2 and Ai2 in ( 7 ) is similar to the calculation of y2 and Ai2 in algorithm 1 .
+2 ( λk , λk−1)2Ai2 . ⊥
+{θ(λ)}Tj
+Overall , the time complexity of PDPP is O(MN/P ) . Regardless of the calculation and updating on the vector variables , the calculation of these variables is dominant : w , and Ai2 where i ∈ Sj . The calculation of all these variables can be parallelized by the partition strategy in PDPP without synchronization among processors . 3.4 Asynchronous Grouped Coordinate Descent
+To address the challenge we discussed in section 2.2 , we propose a novel parallel solver , called Asynchronous Grouped Coordinate Descent ( AGCD ) , to solve the Lasso regression on the reduced feature matrix . Rather than randomly selecting coordinates or blocks to update asynchronously among threads , AGCD adopts a grouped selection strategy ; that is , chooses the candidate that minimizes the objective function with the most descent to update among a group of coordinates . The details of AGCD are given in algorithm 3 . g(x)i = AT
+The calculation of the gradient for the ith coordinate , which where d ∈ RN and R ∈ RM . We initialize d to be zero and R In AGCD , there are two global variables d and R to store up a coordinate i from {1 , 2 , , N} to estimate and update . to be −y . In each iteration , every processor randomly picks is denotes as g(x)i , can be written as : i ( Ax − y ) . Step1 : Calculate the gradient : g(x)i = AT i R and get ∆xi . Step2 : Update R : R = R + ∆xiAT i ( Ax − y ) by following the above updating rules . To calAT culate ∆xi , we apply soft thresholding function [ 17 ] to get the proximal gradient for xi . The definition of soft thresh
+To make it more efficient , the calculation of ( 8 ) can be decomposed into the following steps :
+Since R is initialized as −y , R stores the information of
+( 8 ) i . olding operator Γ is given by :
+Γϕ(x ) = sign(x)(|x| − ϕ ) .
+( 9 )
+In algorithm 3 , L denotes the Lipschitz constant . For SCD [ 17 , 12 , 14 ] , the Lipschitz constant is set to be Ai2 2 when updating the ith coordinate . Since SCD randomly picks only one coordinate to update , the problem has a closed form solution in each iteration . When considering a multithreading environment , the way to calculate L is different . PBCD [ 13 ] employs Expectation Maximization ( EM ) to get an approximation model on L but it depends on the sparsity of the
+1708 Algorithm 3 Asynchronous Grouped Coordinate Descent
+Input:A , b and λ . The solution vector x for the problem ( 4 ) 1 : Initialize : x = d = 0 ∈ RN and R = −b .
+Output :
+2 : while not converged do 3 :
+In parallel on P processors
+Randomly pick i from the index set {1 , 2 , , N} . Compute the ith gradient : g(x)i = AT Get ∆xi : ∆xi = Γλ/L(xi − g(x)i L ) −xi . 2Ai2 di = λ(|xi| − |xi + ∆xi| ) − g(x)i∆xi − 1 for t = ( i − ω/2 ) to ( i + ω/2 ) do i R .
+2∆x2 i . if di < dt then
+Return and perform the next iteration . end if end for
+Update xi : xi =xi + ∆xi . Update R : R = R + ∆xiAT i .
+Update di by the same way from 5th to 7th line .
+4 :
+5 :
+6 :
+7 :
+8 :
+9 :
+10 : 11 :
+12 :
+13 :
+14 :
+15 :
+16 : end while
+( 10 )
+( 11 ) feature matrix . In this paper , we employ the same method in [ 11 ] to get the Lipschitz constant from the Hassian matrix .
+[ ∇2F ( x)]ii .
+L = max i=1,2,,N
+For the Lasso problem , L can be calculated by :
+L = max i=1,2,,N
+Ai2 2 .
+3.5 Grouped Selection Strategy
+The strategy of selecting potential coordinates in AGCD is to evaluate the descent of objective function for the selected If the selected coordinate i wins the competicandidate . tion in a group of candidates , xi will be updated by ∆xi .
+Otherwise this selection fails and the update in this iteration is terminated . In a multithreading environment , all the processors perform this process in parallel .
+Then we need to estimate the descent of objective function for a specific coordinate . The descent of the objective function is stored and updated in d . For the ith coordinate , suppose that we have already obtained ∆xi and g(x)i , di can be estimated by the following equation : di = F ( x ) − F ( x + ∆xiei ) .
+( 12 ) where ei is a unit vector in the ith coordinate . When considering the Lasso problem , di can be rewritten as the following formula :
+λ(|xi| − |xi + ∆xi| ) + di = λ(|xi| − |xi + ∆xi| ) − 1
+( Ax − y2 2 − Ax + AT 2 − ∆xiAT 2Ai2 ∆xi
+Finally , di can be calculated by : i ∆xi − y2 i R , ( 14 )
+2 ) . ( 13 )
+1 2
+2
+After di is updated , there is a competition between the
+Figure 1 : Illustration of AGCD with two threads . The white blocks in each sample represent inactive features discarded by screening rules . Thread 1 chooses the 2nd active feature to evaluate . Firstly , d2 is updated and evaluated in a group of {d1 , d2 , d3} . d2 wins the competition and we follow the three steps to update x4 , R and d2 . Thread 2 selects the 5th candidate . However , it fails in the competition and update is terminated for thread 2 in this iteration . will be updated . Otherwise the update of the ith coordinate in this iteration is terminated . Bradley et al.[6 ] showed that i R equals to g(x)i that has already been calculated
+2 is also obtained when calculating the Lipschitz constant L in equation ( 11 ) . Thus , the time complexity to update di is O(1 ) . where AT previously . The value of Ai2 ith coordinate and a group of ω candidates . If di wins , xi the number of updated coordinates is at most N /2ρ in one iteration where ρ is the spectral radius of AT A . AGCD divides the feature space into N /ω groups , which means there are at most N /ω coordinates to be updated in each AGCD . If ω is larger than N , ω is set to be N . The way we i − ω/2 ≤ 0 , it starts from 1 to ω . When i + ω/2 ≥ N , it is set the candidate group is to select ω number of coordinates that are close to the ith coordinate . Specifically , the index in the group starts from i − ω/2 and ends at i + ω/2 . If from i − ω to i . If the ith coordinate wins the competition , the update is performed by the following three steps : iteration . Therefore , we set the size of group ω to be 2ρ in
+Step1 : Update xi : xi + ∆xi . Step2 : Update R : R = R + ∆xiAT i .
+Step3 : Update di by equation ( 8 ) , ( 9 ) and ( 14 ) .
+Fig 1 illustrates the process of group selection and asynchronous updating flowchart with two threads . Although di has already been updated at the beginning , AGCD still needs to perform Step 3 in the above updating rules because we intend to minimize the effects of un updated winners’ di to the competition of other candidates . We still take the example in Figure 1 to illustrate this . After the 2nd coordinate
+1709 wins the competition , AGCD performs Step 1 and Step 2 to update xi and R . However , di is not the current descent of object function since xi and R have changed . In the next iteration , if AGCD selects the 1st coordinate to evaluate , x1 might still not be updated since d2 > d1 in the last iteration . Although d1 is updated in the next iteration , x1 still has a lower chance to be updated since x2 is the winner last time and d2 is the “ winning distance ” . Because of asynchronous characteristic of AGCD , it is not guaranteed that all the di are updated to the newest one . AGCD makes all the winners’ di updated to newest value to minimize the effects of winners to competitions of other candidates . 3.6 Discussion
+We apply atomic operations to avoid the synchronization among threads when updating xi , R and di . Since x , R and di are global variables , it is necessary to add locks on these shared variables when multiple threads attempt to update them simultaneously . However , updating a single variable and locking all the variables is not an efficient strategy since all the other threads have to wait for one thread to finish its job . We employ atomic operations to write the global variables atomically without any locks . [ 11 ] and [ 4 ] have observed empirical convergence when applying “ atomic writes ” on updating the shared variables .
+AGCD adopts a grouped selection strategy to update the solution vector by choosing the candidate that minimizes the objective function with the most descent . In the random selection strategy used in parallel SCD solvers , a number of processors update the solution vector asynchronously , which is more likely to result in the divergence of the optimization problem in a small feature space . In AGCD , the update of solution variables is not as frequent as in the random selection strategy . The selected coordinate has to beat a group of candidates to get the chance to update . In fact , the selected coordinates will not be updated in most of the iterations since it failed in the competition . However , this does not mean that the computation spent in a failed candidate is a waste of time . Although xi is not updated , it updates the descent value di for that coordinate . Suppose xi is updated , it means that R is changed . As a result , all the elements in d should be updated by ( 14 ) . Therefore , updating d concurrently is critical to guarantee the accurate result of competition in the grouped selection strategy .
+4 . CONVERGENCE ANALYSIS
+In this section , we analyze the convergence of the proposed parallel framework . PSAFE and PDPP are safe screening rules and it is guaranteed that all the discarded features have zero coefficients in the solution . PSR is a heuristic screening method but we can ensure the correctness of result by checking the KKT condition . AGCD can be safely applied on the reduce feature matrix A to optimize the problem ( 4 ) .
+Therefore , the proposed parallel framework will work if we prove the convergence of AGCD .
+We follow the same way in [ 17 ] to rewrite the objective function ( 1 ) into an equivalent problem with a twicedifferentiable regularizer :
+M min
+ˆx
+1 2
+2N j ˆx − bj)2 + λ
+( ˆaT
+ˆxi : ˆx ∈ R2N ,
+( 15 ) j=1 i=1 where aj denotes the jth row of A and the feature space is duplicated as : ˆaj = [ aj;−aj ] and ˆaj ∈ R2N . Once the optimal solution ˆx∗ of equation ( 15 ) is obtained , we can d+i − ˆx∗ recover the solution vector x∗ of ( 1 ) by x∗ i . We denote the objective function F ( x ) equal to ( 15 ) in the convergence analysis part . i = ˆx∗
+Definition 1 . Let F ( x ) : R2N → R be a convex function . Assume that there exists β > 0 , for all x and ∆x updated in parallel , we have the following rule : F ( x + ∆x ) ≤ F ( x ) + ∆xT∇F ( x ) +
+∆xT AT A∆x .
+β 2
+We denote β = 1 for the square loss function and β = 1 4 for the logistic loss function . Let ˆd = [ ˆd1 , ˆd2 , ˆd2N ] represent the potential candidates updated by ( 12 ) . ∆x denotes the collective update of x in one iteration . ∆xi is equal to zero when ˆdi fails the competition where i ∈ ( 1 , 2N ) .
+When there is only one coordinate updated at the same time , we have ∆x = ( ∆xi)ei and ei is a unit vector in the ith coordinate . The process of optimization is the same as the sequential coordinate descent when one coordinate is updated at each iteration . It was shown in [ 17 ] that the sequential coordinate descent converges by the following bound :
+E[F ( x(K) ) ] − F ( x ∗
+) ≤ N ( βx∗2
+2 + 2F ( x(0) ) ) K + 1
+,
+( 16 ) where F ( x(K ) ) is the output after K iterations . The convergence analysis of AGCD is the same as sequential coordinate descent if only one coordinate is updated in each iteration . When there are more than one candidates winning the competition at the same time , we summarize the main analysis in the following theorem :
+Theorem 1 . Let x∗ be the solution of F(x ) and x(K ) be the output of AGCD after K iterations . Let P be the number of processors and Φ denotes the maximum number of candidates to be updated in one iteration . Suppose F ( x ) satisfies the assumption of Definition 1 ; let = ( Φ−1)(ρ−1 ) 2N−1 < 1 and ρ be the spectral radius of AT A . We have
+E[F ( x(K) ) ] − F ( x ∗
+) ≤ N ( βx∗2
+1− F ( x(0) ) )
+2 + 2 ( K + 1)Φ
+.
+Proof . We use a similar technique in [ 6 ] to prove this theorem . Let Θ denote the index set that collects the winners of competitions in one iteration and Φ = |Θ| . Based on the assumption of Definition 1 , we have
+( Φ − 1)(ρ − 1 )
+( 1 +
+2N − 1 ( 1 + )(∆xi)2 ] .
+β 2 β 2
+)(∆xi)2 ]
+Let ρ = maxµ:µT µ=1 µT ( AT A)µ . Ei,j:i=j[∆xi(AT A)i,j∆xj ] is bounded by ρ in terms of Ei[∆(xi)2 ] where i is chosen uniformly at random from {1 , , 2N} . The rest of proof followes the same way in Shotgun [ 6 ] ’s convergence analysis to obtain the result of Theorem 1 . We omit it for brevity .
+∆xT AT A∆x ]
+( ∆xi)2 ]
+Φ(Φ − 1)Ei,j:i=j[∆xi(AT A)i,j∆xj ]
+EΘ[F ( x + ∆x ) − F ( x ) ] ≤ EΘ[∆xT∇F ( x ) + β 2 = ΦEi[∆xi∇F ( x)i + β 2
+β 2
++ = ΦEi[∆xi∇F ( x)i + = ΦEi[∆xi∇F ( x)i +
+1710 Table 1 : A comparison of PDPP+AGCD and EDPP+SLEP along a sequence of 100 parameter values on 0.5 million ADNI dataset
+EDPP+SLEP
+PDPP+AGCD
+No . in the sequence
+λ/λmax nnz after screening
+1 6 12 17 23 28 34 39 45 50 56 61 67 72 78 84 89 94 100
+1.0 0.95 0.9 0.85 0.8 0.75 0.7 0.65 0.6 0.55 0.5 0.45 0.4 0.35 0.3 0.25 0.2 0.15 0.1
+0 9 17 26 52 82 133 182 267 351 447 551 717 867 1104 1423 1878 2745 6065 nnz in the Objective No . in the sequence function solution
+λ/λmax nnz after screening nnz in the Objective function solution
+0 4 8 16 26 46 69 103 134 169 216 260 307 364 419 473 508 571 650
+373.0
+372.9657 372.6708 372.0295 370.5095 368.3644 364.2990 359.3397 351.0384 341.9249 327.9936 313.6343 292.8738 272.4728 244.0223 210.9855 179.7974 145.1732 98.9118
+1 6 12 17 23 28 34 39 45 50 56 61 67 72 78 84 89 94 100
+1.0 0.95 0.9 0.85 0.8 0.75 0.7 0.65 0.6 0.55 0.5 0.45 0.4 0.35 0.3 0.25 0.2 0.15 0.1
+0 9 17 26 52 82 133 182 267 351 447 551 717 867 1104 1423 1878 2745 6070
+0 4 8 16 26 46 69 103 134 169 216 260 307 364 418 473 508 569 651
+373.0
+372.9657 372.6708 372.0295 370.5095 368.3644 364.2990 359.3397 351.0384 341.9249 327.9936 313.6343 292.8738 272.4728 244.0223 210.9855 179.7974 145.1732 98.9118
+In Shotgun , it was shown that the number of processors should satisfy P ≤ P ∗ ≈ N 2ρ and the experiment demonstrates that Shotgun diverges as P exceeds P ∗ . As we discussed in section 3.5 , the size of each group is set to be ω = 2ρ . The maximum number of updated coordinates in one iteration is Φ = N ω which satisfy the above constraint . In the real cases , the number of updated candidates is much smaller than P since most of the updates happen in the calculation of d . In the grouped selection strategy of AGCD , each coordinate has a low probability to be updated among ω candidates . As a result , P can be equal to or larger than N 2ρ in the real application of AGCD . We demonstrate it in the experiment that AGCD encountered the cases that the number of processors is larger than the number of active features while AGCD still converged to the optimal value .
+5 . EXPERIMENTAL RESULTS
+In this section , we conduct several experiments to evaluate the convergence and speedup of the proposed framework on the following four data sets : ADNI2 , MNIST [ 7 ] , rcv1 [ 8 ] and news20 [ 5 ] . The Alzheimer ’s Disease NeuroimagingInitiative ( ADNI ) is a real biomedical dataset collected from neuroimaging and genomic data from elderly individuals across North America , including 809 patients of Alzheimer ’s disease with 5,906,152 features , involving a 80 GB feature matrix with 42 billion nonzeros . For MNIST , rcv1 and news20 , we use the training dataset obtained from LIBSVM data set repository3 to construct the feature data matrices and response vectors . We compare our method with the stateof the art algorithms like PBCD [ 13 ] and ASYSCD [ 11 ] . All the experiments are carried out on an Intel ( R ) Xeon ( R ) 48 core machine with 2.50 GHZ processors and 256 GB of globally addressable memory . We employ OpenMP as the
+2http://wwwadni infoorg 3http://wwwcsientuedutw/∼cjlin/libsvmtools/datasets/ parallel framework and all the methods are implemented in C++ for fair comparisons . 5.1 Accuracy Evaluation
+In this experiment , we examine the accuracy of solution vectors in the proposed method . We perform PDPP+AGCD along a sequence of 100 parameter values equally spaced on the linear scale of λ/λmax from 0.1 to 1 . To make a comparison , we perform EDPP using SLEP [ 10 ] as the solver on the same sequence . In SLEP , we force the “ LeastR ” function to run 500 iterations . AGCD also executes 500 iterations using 48 threads . Experiments are conducted on ADNI data sets . We choose the volume of the right pallidum as the response , including 747 samples by removing samples without labels . The volumes of brain regions are extracted from each subject ’s T1 MRI scan using Freesurfer4 . We randomly select 0.5 million features from ADNI to construct the feature matrix and normalize the matrix using the “ zscore ” function in Matlab . The experimental result is shown in Table 1 .
+We report the result of 20 parameter values from 100 parameters . The first column in both methods is the position of the parameter in the sequence . The third column shows the remaining number of features N after applying screening rules . Table 1 shows that the optimal value obtained by the PDPP+AGCD and the number of nonzero in the solution is the same as that of EDPP+SLEP . When λ/λmax is higher than 0.8 , the remaining features after screening is less than the number of threads . However , PDPP+AGCD is still able to converge to the optimal value . 5.2 Convergence Comparison
+In this experiment , we evaluate the convergence property of the proposed parallel methods . We conduct the experiment on PSR+AGCD and compare with state of the art parallel solvers : PBCD and ASYSCD . We choose two dif
+4http://freesurfer.net/
+1711 Figure 2 : Convergence comparison between PBCD , ASYSCD and PSR+AGCD ferent λ value : 0.8λmax and 0.6λmax to estimate the convergence of above methods . To prevent PSR from discarding active features , we check the KKT condition to ensure the correctness of screening results . To estimate the scalability of above algorithms , the number of cores is varied from 1 to 32 : 1 , 2 , 4 , 8 , 16 and 32 . For different number of cores , we show the time of optimization that solvers converged to the same optimal values with 48 cores . We evaluate the efficiency of parallel solvers on four ADNI dataset : ADNI 1m , ADNI 2m , ADNI 3m and ADNI 5.9m where feature dimension is varied from 1 million to 5.9 million . We choose the volume of hippocampus in patients as the response , including 717 samples from the original dataset . We show details of data sets in Table 2 and results of comparison in Fig 2 . In the first and third columns of Fig 2 , we evaluate the convergence in terms of time using 48 cores . Note that we use log scale in x axis when λ = 08λmax As observed from the figure , the objective function in PSR+AGCD converged faster than other solvers since most of inactive features are discarded . Most of time is spent in the screening part . When
+Dataset MNIST news20 rcv1
+ADNI 1m ADNI 2m ADNI 3m ADNI 5.9m
+Table 3 : Data statistics Number of features Number of samples
+780
+62061 47236
+1000000 2000000 3000000 5906152
+60000 15935 15564
+717 717 717 717
+λ = 0.6λmax , only part of inactive features are discarded by screening but PSR+AGCD still has superior performances . The second and fourth columns of Fig 2 show the time of different solvers that converged to the same optimal value of 48 cores when varying the number of cores from 1 to 32 . Note that we use two y axis when λ equals to 08λmax PBCD and ASYSCD use the left y axis while PSR+AGCD uses the right one . PSR+AGCD outperforms the other solvers when varying the number of cores and the running time of PSR+AGCD is reduced when there are more cores .
+Time(in seconds)100101102103Objective function3566356835735723574357635781 million ADNIPBCDASYSCDPSR+AGCDNumber of cores05101520253035Time(in seconds)01002003004001 million ADNITime(in seconds)010203040PBCDASYSCDPSR+AGCDTime(in seconds)010203040506070Objective function3433443453463473483493503511 million ADNIPBCDASYSCDPSR+AGCDNumber of cores05101520253035Time(in seconds)01002003004005006007008001 million ADNIPBCDASYSCDPSR+AGCDTime(in seconds)100101102103Objective function356435663568357357235743576357835835822 million ADNIPBCDASYSCDPSR+AGCDNumber of cores05101520253035Time(in seconds)0200400600800100012002 million ADNITime(in seconds)0102030405060PBCDASYSCDPSR+AGCDTime(in seconds)0255075100125150Objective function3393403413423433443453463473483492 million ADNIPBCDASYSCDPSR+AGCDNumber of cores05101520253035Time(in seconds)020040060080010001200140016002 million ADNIPBCDASYSCDPSR+AGCDTime(in seconds)100101102103Objective function3564356535663567356835693573571357235733 million ADNIPBCDASYSCDPSR+AGCDNumber of cores05101520253035Time(in seconds)020040060080010003 million ADNITime(in seconds)020406080100PBCDASYSCDPSR+AGCDTime(in seconds)050100150200250Objective function3393403413423433443453463473483 million ADNIPBCDASYSCDPSR+AGCDNumber of cores05101520253035Time(in seconds)02004006008001000120014001600180020003 million ADNIPBCDASYSCDPSR+AGCDTime(in seconds)101102103Objective function355635583563562356435663568357357259 million ADNIPBCDASYSCDPSR+AGCDNumber of cores05101520253035Time(in seconds)02500500070005.9 million ADNITime(in seconds)05001000PBCDASYSCDPSR+AGCDTime(in seconds)0100200300400500Objective function3343363383403423443463485.9 million ADNIPBCDASYSCDPSR+AGCDNumber of cores05101520253035Time(in seconds)0100020003000400050006000700080005.9 million ADNIPBCDASYSCDPSR+AGCD1712 Table 2 : Efficiency comparison along a sequence of parameter values .
+The number of λ
+Method
+100
+200
+400
+ASYSCD
+PDPP+AGCD
+Speedup ASYSCD
+PDPP+AGCD
+Speedup ASYSCD
+PDPP+AGCD
+Speedup
+The number of λ
+Method
+100
+200
+400
+ASYSCD
+PDPP+AGCD
+Speedup ASYSCD
+PDPP+AGCD
+Speedup ASYSCD
+PDPP+AGCD
+Speedup
+The number of λ
+Method
+100
+200
+400
+ASYSCD
+PDPP+AGCD
+Speedup ASYSCD
+PDPP+AGCD
+Speedup ASYSCD
+PDPP+AGCD
+Speedup
+Dataset : MNIST Time spent in different number of cores ( in minutes )
+1
+131.08
+6.37 20.58 283.43
+10.9 26.01 571.46 17.14 33.34
+2
+76.25 3.61 21.12 182.36
+6.25 29.18 364.21 11.07 32.90
+4
+62.78 2.43 25.84 116.86
+3.96 29.51 238.65
+7.13 33.47
+8
+39.17 1.49 26.29 61.96 1.96 31.61 129.24
+3.86 33.48
+16 26.7 1.02
+26.178 45.76 1.48 30.92 92.58 2.53 36.59
+32
+23.33 0.87 26.82 38.37 1.17 32.79 71.71 1.76 40.74
+Dataset : news20 Time spent in different number of cores ( in minutes )
+1
+2736.52
+40.22 68.04 5528.48
+64.40 85.84
+10437.35
+120.38 86.70
+2
+1491.26
+20.69 72.07 2813.78
+30.07 93.56 5480.47
+64.31 85.21
+4
+762.57 10.60 71.93 1525.03
+16.33 93.38 2812.21
+29.05 96.79
+8
+403.06
+5.59 72.03 804.68
+8.47 95.38 1565.12
+15.88 98.54
+Dataset : ADNI 2m
+16
+265.71
+3.67 72.40 552.83
+5.69 97.02 1057.30
+10.42 101.51
+32
+194.27
+2.50 77.67 358.35
+3.63 98.77 662.792
+6.67 99.47
+Time spent in different number of cores ( in minutes )
+1
+3205.13
+48.34 66.30 5614.21
+63.32 88.66
+11275.34
+95.42 118.16
+2
+1892.34
+23.63 80.08 3217.91
+34.07 94.44 6328.35
+52.17 119.57
+4
+1105.21
+12.21 90.52 1821.87
+18.81 96.86 3812.87
+33.10 115.19
+8
+756.23
+8.28 91.33 1345.21
+12.99 103.56 2315.34
+18.18 127.35
+16
+435.64
+5.34 81.58 826.51
+7.44
+111.09 1521.54
+11.06 137.57
+32
+324.81
+4.03 80.59 692.87
+5.79
+48
+25.94 1.03 25.18 48.87 1.53 31.94 88.37 2.47 35.78
+48
+214.48
+2.72 78.97 374.48
+3.92 95.63 597.35
+6.05 98.79
+48
+372.31
+4.05 91.93 684.25
+5.76
+119.67 1296.54
+9.57
+116.77 1125.61
+8.74
+135.47
+128.79
+5.3 Time Efficiency
+The advantage of the proposed parallel framework is to solve the Lasso problem along a sequence of parameter values . In this experiment , we perform PDPP+AGCD along a sequence of parameter values equally spaced on the linear scale of λ/λmax from 0.1 to 1 . We vary the length of parameter sequences as 100 , 200 and 400 . As a comparison , ASYSCD is performed on the same sequence . The experiment is conducted at three different data sets : MNIST , news20 and ADNI 2m . Detailed information about data sets is in Table 2 . To evaluate the scalability of both methods , we vary the number of cores as : 1 , 2 , 4 , 8 , 16 , 32 and 48 . The result of comparison is presented in Table 3 .
+Table 3 shows that more parameters lead to higher speedup for PDPP+AGCD compared to ASYSCD . PDPP+AGCD achieved 137 folds speedup in ADNI 2m dataset , 101 folds in news20 , and 40 folds in MNIST over ASYSCD with 400 parameters . When using more cores , speedups of our method tend to increase . Thus , in terms of speedup , PDPP+AGCD favors more cores and sequences with more parameters . 5.4 Scalability
+To estimate the scalability of proposed parallel methods , we perform PSR+AGCD and PDPP+AGCD on 1 , 2 , 4 , 8 , 16 , 32 and 48 cores to observe the speedup . We give the definition of speedup by the following criterion : speedup = time spent on P processors time spent on a single processor
+.
+In this experiment , we employ both methods on 5.9 million ADNI and rcv1 data sets , respectively . PDPP+AGCD is carried out along a 100 linear scale sequence of parameter values from 0.1 to 1 . For PSR+AGCD , we set λ to be 0.8λmax in the optimization . Fig 3 presents the result . PDPP+AGCD is more scalable than PSR+AGCD and achieves approximate 17 and 11.5 folds speedup with 48 cores in ADNI 5.9m and rcv1 data sets , respectively . 6 . CONCLUSIONS
+This paper proposes a parallel framework to solve the Lasso problem on huge dimensional datasets . We introduce screening rules into a parallel platform to discard the inactive features before optimization , accelerating the whole learning process significantly . Then the problem boils down to solve Lasso on a multithreading environment with a small feature space . A grouped selection strategy is proposed to select the candidates that minimize the objective function with the largest descent . Experiments demonstrate the efficiency and effective of proposed methods . For future works , we plan to extend our framework to a distributed platform .
+1713 [ 12 ] Y . Nesterov . Efficiency of coordinate descent methods on huge scale optimization problems . SIAM Journal on Optimization , 22(2):341–362 , 2012 .
+[ 13 ] P . Richt´arik and M . Tak´aˇc . Parallel coordinate descent methods for big data optimization . Mathematical Programming , pages 1–52 .
+[ 14 ] P . Richt´arik and M . Tak´aˇc . Iteration complexity of randomized block coordinate descent methods for minimizing a composite function . Mathematical Programming , 144(1 2):1–38 , 2014 .
+[ 15 ] C . Scherrer , M . Halappanavar , A . Tewari , and
+D . Haglin . Scaling up coordinate descent algorithms for large regularization problems . In Proceedings of the 29st International Conference on Machine Learning ( ICML 12 ) , 2012 .
+[ 16 ] C . Scherrer , A . Tewari , M . Halappanavar , and
+D . Haglin . Feature clustering for accelerating parallel coordinate descent . In Advances in Neural Information Processing Systems , pages 28–36 , 2012 .
+[ 17 ] S . Shalev Shwartz and A . Tewari . Stochastic methods for l1 regularized loss minimization . The Journal of Machine Learning Research , 12:1865–1892 , 2011 .
+Figure 3 : Speedup of proposed methods on 5.9 million ADNI and rcv1 data sets respectively 7 . ACKNOWLEDGMENTS
+This work was supported in part by research grants from NIH ( R01 LM010730 and RF1AG051710 ) and NSF ( IIS0953662 and III 1421057 ) . 8 . REFERENCES [ 1 ] A . Beck and M . Teboulle . A fast iterative shrinkage thresholding algorithm for linear inverse problems . SIAM journal on imaging sciences , 2(1):183–202 , 2009 .
+[ 2 ] S . Boyd , N . Parikh , E . Chu , B . Peleato , and
+[ 18 ] R . Tibshirani . Regression shrinkage and selection via
+J . Eckstein . Distributed optimization and statistical learning via the alternating direction method of multipliers . Foundations and Trends Rfl in Machine Learning , 3(1):1–122 , 2011 .
+[ 3 ] L . E . Ghaoui , V . Viallon , and T . Rabbani . Safe feature elimination for the lasso and sparse supervised learning problems . Pacific Journal of Optimization , ( 8):667–698 , 2012 .
+[ 4 ] C J Hsieh , H F Yu , and I . S . Dhillon . Passcode : Parallel asynchronous stochastic dual co ordinate descent . In Proceedings of the 31st International Conference on Machine Learning ( ICML 15 ) , 2015 . the lasso . Journal of the Royal Statistical Society . Series B ( Methodological ) , pages 267–288 , 1996 .
+[ 19 ] R . Tibshirani , J . Bien , J . Friedman , T . Hastie ,
+N . Simon , J . Taylor , and R . J . Tibshirani . Strong rules for discarding predictors in lasso type problems . Journal of the Royal Statistical Society : Series B ( Statistical Methodology ) , 74(2):245–266 , 2012 .
+[ 20 ] K . Tran , S . Hosseini , L . Xiao , T . Finley , and
+M . Bilenko . Scaling up stochastic dual coordinate ascent . In Proceedings of the 21th ACM SIGKDD International Conference on Knowledge Discovery and Data Mining , pages 1185–1194 . ACM , 2015 .
+[ 5 ] S . S . Keerthi , K . Duan , S . K . Shevade , and A . N . Poo .
+[ 21 ] J . Wang , Q . Li , S . Yang , W . Fan , P . Wonka , and
+A fast dual algorithm for kernel logistic regression . Machine learning , 61(1 3):151–165 , 2005 .
+[ 6 ] A . Kyrola , D . Bickson , C . Guestrin , and J . K .
+Bradley . Parallel coordinate descent for l1 regularized loss minimization . In Proceedings of the 28th International Conference on Machine Learning ( ICML 11 ) , pages 321–328 , 2011 .
+[ 7 ] Y . LeCun , L . Bottou , Y . Bengio , and P . Haffner .
+Gradient based learning applied to document recognition . Proceedings of the IEEE , 86(11):2278–2324 , 1998 .
+[ 8 ] D . D . Lewis , Y . Yang , T . G . Rose , and F . Li . Rcv1 : A new benchmark collection for text categorization research . The Journal of Machine Learning Research , 5:361–397 , 2004 .
+[ 9 ] Y . Li and S . Osher . Coordinate descent optimization for l1 minimization with application to compressed sensing ; a greedy algorithm . Inverse Problems and Imaging , 3(3):487–503 , 2009 .
+[ 10 ] J . Liu , S . Ji , and J . Ye . SLEP : Sparse Learning with Efficient Projections . Arizona State University , 2009 . [ 11 ] J . Liu , S . Wright , C . Re , V . Bittorf , and S . Sridhar .
+An asynchronous parallel stochastic coordinate descent algorithm . In Proceedings of the 31st International Conference on Machine Learning ( ICML 14 ) , pages 469–477 , 2014 .
+J . Ye . A highly scalable parallel algorithm for isotropic total variation models . In Proceedings of the 31st International Conference on Machine Learning ( ICML 14 ) , pages 235–243 , 2014 .
+[ 22 ] J . Wang and J . Ye . Two layer feature reduction for sparse group lasso via decomposition of convex sets . In Advances in Neural Information Processing Systems , pages 2132–2140 , 2014 .
+[ 23 ] J . Wang and J . Ye . Safe screening for multi task feature learning with multiple data matrices . In Proceedings of the 32nd International Conference on Machine Learning , 2015 .
+[ 24 ] J . Wang , J . Zhou , P . Wonka , and J . Ye . Lasso screening rules via dual polytope projection . In Advances in Neural Information Processing Systems , pages 1070–1078 , 2013 .
+[ 25 ] Y . Wang , Z . J . Xiang , and P . J . Ramadge . Lasso screening with a small regularization parameter . In Acoustics , Speech and Signal Processing ( ICASSP ) , 2013 IEEE International Conference on , pages 3342–3346 . IEEE , 2013 .
+[ 26 ] T . Zhang . Solving large scale linear prediction problems using stochastic gradient descent algorithms . In Proceedings of the 21st international conference on Machine learning ( ICML 04 ) , page 116 . ACM , 2004 .
+Number of cores05101520253035404550Speedup01234567891011121314151617185.9 million ADNIPSR+AGCDPDPP+AGCDNumber of cores05101520253035404550Speedup0123456789101112RCV1PSR+AGCDPDPP+AGCD1714

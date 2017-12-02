@@ -1,0 +1,358 @@
+Stream Sampling for Frequency Cap Statistics
+Edith Cohen
+Google Research , CA , USA
+Tel Aviv University , Israel edith@cohenwang.com
+ABSTRACT Unaggregated data , in a streamed or distributed form , is prevalent and comes from diverse sources such as interactions of users with web services and IP traffic . Data elements have keys ( cookies , users , queries ) and elements with different keys interleave .
+Analytics on such data typically utilizes statistics expressed as a sum over keys in a specified segment of a function f applied to the frequency ( the total number of occurrences ) of the key . In particular , Distinct is the number of active keys in the segment , Sum is the sum of their frequencies , and both are special cases of frequency cap statistics , which cap the frequency by a parameter T . One important application of cap statistics is staging advertisement campaigns , where the cap parameter is the limit of the maximum number of impressions per user and we estimate the total number of qualifying impressions .
+The number of distinct active keys in the data can be very large , making exact computation of queries costly . Instead , we can estimate these statistics from a sample . An optimal sample for a given function f would include a key with frequency w with probability roughly proportional to f ( w ) . But while such a "gold standard" sample can be easily computed over the aggregated data ( the set of key frequency pairs ) , exact aggregation itself is costly and slow . Ideally , we would like to compute and maintain a sample without aggregation .
+We present a sampling framework for unaggregated data that uses a single pass ( for streams ) or two passes ( for distributed data ) and state proportional to the desired sample size . Our design unifies classic solutions for Distinct and Sum . Specifically , our capped samples provide nonnegative unbiased estimates of any monotone non decreasing frequency statistics , and close to gold standard estimates for frequency cap statistics with T = Θ( ) . Furthermore , our design facilitates multi objective samples , which provide tight estimates for a specified set of statistics using a single smaller sample .
+1 .
+INTRODUCTION
+The data available from many services , such as interactions of users with Web services or content , search logs , and IP traffic , is presented in an unaggregated form . In this model , each data element has a key from a universe X and a weight w > 0 . Data elements with different keys interleave in a data stream or distributed storage . The aggregated view of the data is a set of pairs that consists of an active keys x ∈ X ( a key that occurred at least once ) and the respective total weight wx of all elements with key x . When all element weights are uniform , wx is the number of occurrences of an element with key x in the data . The weight wx is often referred to as the frequency of the key ( it is proportional to the actual frequency in the data set ) .
+Frequency statistics of such data are fundamental to data analyt ics . Queries have the form
+Q(f , H ) ≡ x∈X∩H f ( wx ) ,
+( 1 ) where f ( w ) ≥ 0 is a nonnegative function such that f ( 0 ) = 0 and H is a selection predicate that specifies a segment of the key population X . Typically f is monotone non decreasing , which means that more frequent keys carry at least the same contribution as less frequent ones . Some prominent examples are the pth frequency moment , where f ( x ) = xp for p > 0 [ 1 ] and frequency cap statistics , where f is a cap function with parameter T > 0 : capT ( y ) ≡ min{y , T} .
+Two special cases of both cap statistics and frequency moments , that are widely studied and applied in big data analytics , are Distinct – the number of distinct ( active ) keys in the segment ( L0 moment or cap1 , assuming elements weights are ≥ 1 ) , and Sum – the sum of weights of elements with keys in the segment ( L1 moment or cap∞ ) .
+Frequency caps that are in the mid range mitigate the domination of the statistics by the ( typically few ) very frequent keys but still provide a larger representation of the more frequent keys . Midrange frequency cap statistics are prevalent in online advertising platforms [ 17 , 28 ] : A common practice is to allow an advertiser to specify a limit to the number of impressions of an ad campaign that any individual user is exposed to in a particular duration of time . Advertisements also typically target only a segment H of users ( say certain demographics and geographic location ) . The statistics Q(capT , H ) is the number of qualifying opportunities for placing an ad . These queries are posed over past data in order to provide an advertiser with a prediction for the total potential number of qualifying impressions . Often , the prediction needs to be computed or estimated quickly , to facilitate interactive campaign planning .
+An exact computation of frequency statistics ( 1 ) requires aggregating the data by key . The representation size of the aggregated view , however , and the runtime state needed to produce it , are linear in the number of distinct keys . Often , the number of distinct keys is very large and our system can be using the same resources to process many different streams or workloads . To scalably mine such data , our computation needs to be limited to one or few passes over elements while maintaining a small runtime state ( which translates to memory or communication ) . A single pass ( stream computation ) is necessary when the data is discarded ( such as with IP traffic ) or
+159 when statistics are collected for live dashboards . Under these constraints , we often must settle for a small summary of the data set which can provide approximate answers [ 14 , 16 , 1 ] .
+A solution which only addresses the final summary size is to first compute the aggregated view , and then retain a sample for future queries : For each key we compute a weight equal to f ( wx ) , and we then apply a weighted sampling scheme such as Probability Proportion to Size ( pps ) [ 30 ] , VarOpt [ 2 , 9 ] , or bottom k , which includes successive weighted sampling without replacement ( ppswor ) and sequential Poisson/Priority sampling [ 29 , 27 , 12 ] .
+From the weighted sample we can compute approximate segment frequency statistics by applying an appropriate estimator to the sample . There is a well understood tradeoff between the sample size k and the accuracy of our approximation . For a segment H that has proportion q = Q(f , H)/Q(f,X ) of the statistics value on the general key population , the coefficient of variation ( CV ) is ( roughly ) ( qk)−0.5 : the inverse of the square root of qk . The CV is the standard error normalized by the mean , and corresponds to the NRMSE ( normalized root mean square error ) . That is , in order to obtain NRMSE of = 0.1 ( 10 % ) on segments that have at least q = 0.001 fraction of the total value of the statistics , we need to choose a sample size of k = −2/q = 105 , which is usually much smaller than the number of distinct keys we might have . This also means that we can obtain confidence intervals on our estimates using the actual number of samples from our segment . Moreover , this CV bound is the best we can hope for ( on average over segments ) and will be the gold standard we use in the design of sampling schemes and estimators in more constrained settings , which preclude aggregating the data .
+The challenge is to produce an effective sample of the data , using one or few passes while maintaining state that ideally is of the order of the desired sample size . There is a large body of work on stream sampling schemes designed for distinct and sum queries . The Sample and Hold ( SH ) family of sampling schemes [ 16 , 13 , 6 , 8 ] and another based on VarOpt [ 7 ] are suited for sum queries . Distinct reservoir sampling of keys [ 24 , 14 ] is suited for distinct queries . Both SH [ 8 ] and distinct sampling support unbiased estimates of all frequency statistics and meet our ( qk)−0.5 CV upper bound target for the particular statistics they are designed for ( the claim for SH is established here ) . They do not provide , however , comparable statistical guarantees for other statistics . Contributions and Road Map Our main contribution is a general sampling framework for unaggregated streams . The sampling scheme is specified by a random scoring function that is applied to stream elements . The scoring function is tailored to the statistics we want to estimate . Our framework is presented in Section 3 and we cast the existing distinct and SH sampling schemes as special cases . Our framework facilitates the first stream sampling solution with CV upper bound that is close to the ( qk)−0.5 gold standard for general frequency cap statistics . We offer two basic designs : A discrete spectrum that only handles uniform elements and a continuous spectrum which handles arbitrary positive element weights .
+Our discrete spectrum is presented in Section 4 . The sampling algorithms SH are parametrized by an integer cap parameter . When exceeds the maximum frequency over keys , SH is equivalent to classic SH . For = 1 , it is identical to distinct sampling . We derive unbiased and admissible estimators for any discrete frequency statistics , that is , f specified for nonnegative integers . Our continuous spectrum SH , for a positive real cap parameter , is presented in Section 5 . When * maxx wx , SH is identical to weighted SH [ 6 ] . For minx wx , SH is distinct sampling .
+We derive estimators of frequency statistics where the function f is continuous and differentiable almost everywhere . Note that most natural statistics , including frequency moments and cap statistics , can be expressed as continuous monotone functions , which are differentiable almost everywhere . Surprisingly perhaps , the continuous spectrum , which may seem less intuitive than the discrete spectrum , yields an elegant and simple specification of estimators . We show that our estimates of capT statistics from SH samples have CV upper bounded by O((qk)−0.5 ) when T = O( ) . The CV bound gracefully degrades with disparity max{T / , /T} between the sample cap parameter and the statistics cap parameter T . The estimate of any frequency function f is unbiased and for f that is monotone non decreasing , also nonnegative . This makes our design very versatile .
+Our estimators are derived by expressing sampling as a transform from frequencies to expected “ sampled frequencies , ” and then inverting the transform . The transform is a matrix vector product In the discrete case and an integral transform in the continuous case . For the latter , the estimator is a simple expression in terms of f and its derivative f . Since our estimators are the unique inverse of the transform , they are the minimum variance unbiased nonnegative estimators for the sampling scheme , meaning that in terms of variance , they optimally use the information in the sample . Our discrete estimators generalize a matrix inversion applied in [ 19 , 8 ] to estimate the flow size distribution from Sampled Netflow and SH IP flow records . Our continuous spectrum estimators are novel even for the basic weighted SH scheme , for which previously only estimators for sum statistics were provided [ 6 ] .
+In Section 6 we propose a design for multi objective sampling [ 11 ] that addresses applications that require estimates with statistical guarantees for multiple , possibly all , cap statistics .
+Our proposed sampling algorithms and estimators are simple and highly practical , despite a technical analysis . The application resembles that of classic ( uncapped ) SH , distinct sampling , and approximate distinct counting algorithms that are prevalent in industrial applications [ 18 ] . Section 7 includes an experimental evaluation which demonstrates superior accuracy versus sample size tradeoffs by using a sample that is suited for the statistic . Due to a page limit , we could not include most proofs and many details and refer the reader to the technical report [ 5 ] . 2 . PRELIMINARIES We work with key value data sets that consist of elements ( x , w ) , where x is a key from a universe X and w > 0 . The data set is aggregated if each key appears in at most one element and is h∈x w(h ) of a key x to be the sum of the weights of elements with key x . If x is not active ( there are no elements with key x ) , we define wx = 0 . When element weights are uniform , we define wx to be the number of elements with key x . The aggregated view of an unaggregated data set has elements ( x , wx ) for all active keys x . unaggregated otherwise . We define the weight wx ≡
+We are interested in sampling algorithms that process the unaggregated data in one or few passes while maintaining state that is proportional to the sample size . Such algorithms can be scalably executed when elements are streamed ( presented sequentially to the algorithm ) or distributed across multiple locations .
+We start with a quick review of relevant sampling schemes for aggregated data sets . A Poisson sample of a key value dataset {(x , wx)} is specified by sampling probabilities px . The sample S includes each x ∈ X with independent probability px and has x px ≡ k . To estimate a frequency statistics Q(f , H ) from the sample , we can apply the inverse probability x∈H∩S f ( wx)/px [ 20 ] . This estimator expected size E[|S| ] = estimator ˆQ(f , H ) =
+160 can be interpreted as a sum of per key estimates that are f ( wx)/px if x ∈ S and 0 otherwise . Note that this estimator can only be applied when wx and px are available for all x ∈ S . It is nonnegative and is unbiased if px > 0 when f ( wx ) > 0 . It is actually the minimum variance unbiased and nonnegative sum estimator ( sum of per key estimates ) for the given probabilities {px} . For a dataset {(x , wx)} , function f , and ( expected ) sample size k , one can ask what are the “ optimal ” sampling probabilities . It is well known that if we sample keys with probability proportional to their contribution f ( wx ) ( pps ) , we minimize the sum of per key x f ( wx)2(1/px − 1 ) . With pps , we have the following statistical guarantee : For estimates of the statistics Q(f , H ) , where the segment H has proportion variances q =
+Q(f , H ) Q(f,X )
+= x f ( wx ) of the statistics , the variance of our estimate is x∈H f ( wx ) var[ ˆQ(f , H ) ] ≤ 1 qk
+Q(f , H)2 .
+Thus the CV ( normalized standard error ) is at most ( qk)−0.5 , which is the best bound we can hope for on average over segments with proportion q . That is , any scheme that would do better on some segments , would do worse on others . Other weighted sampling schemes we mentioned in the introduction provide this statistical guarantee with a fixed sample size k . f ( wx)/
+One of these schemes that is particularly relevant for our treatment of unaggregated data sets is ppswor : Keys are drawn successively so that at each step the probability that we draw x is proportional to its weight relative to the remaining unsampled keys : y∈S f ( wy ) . The sampling can be realized by associating with each key a random seed(x ) ∼ Exp[f ( wx ) ] ( exponentially distributed seed with parameter f ( wx ) ) [ 29 ] . Ordering keys by increasing seed value turns out to correspond exactly to ppswor sampling order . A fixed threshold sample , for a pre specified threshold τ , includes all keys with seed(x ) < τ . Alternatively , we can obtain a fixed size ( bottom k ) sample by taking the k keys with smallest seed values . In the latter case , it is convenient to define τ as the ( k + 1 ) smallest seed .
+Finally , we can estimate a statistics Q(g , H ) from the ppswor sample taken for weights f ( wx ) as follows . When we use fixed threshold sampling , we compute the probability that x is sampled
+Φτ ( wx ) ≡ Pr[seed(x ) < τ ] = 1 − e
+−f ( wx)τ , and apply inverse probability : x∈H∩S
+ˆQ(g , H ) =
+ˆg(wx | τ ) , where ˆg(wx | τ ) ≡ g(wx ) Φτ ( wx )
+.
+( 2 ) Note that Φτ ( wx ) only depends on wx and τ ( which are available for sampled keys ) . When we work with a fixed sample size k and define τ to be the ( k+1 ) smallest seed , we can interpret Φτ ( wx ) as the probability that the key x is sampled , conditioned on fixed randomization of other keys . This means that the estimator ( 2 ) is unbiased [ 10 ] . Moreover , the estimates ˆg(wx | τ ) obtained for different keys x have zero covariances [ 10 ] , which allows us to bound the variance on segment queries as we would do when sampling with a pre specified threshold . It turns out ( see TR[5 ] ) that for statistics ˆQ(f , H ) with proportion q , the CV is at most ( q(k − 1))−0.5 , which is essentially ( within a single sample ) our “ gold standard ” CV . computed from a streamed ( or distributed ) aggregated data {(x , wx)} ,
+A ppswor sample with respect to any function f ( wx ) can be using state proportional to the sample size . This is not generally possible , however , over unaggregated data : For example , there are polynomial lower bounds on the state needed by a streaming algorithm which approximates frequency moments Q(xp,X ) with p > 2 [ 1 ] .
+3 . SAMPLING FRAMEWORK
+We present a framework for sampling unaggregated data sets and cast SH and distinct sampling in our framework . Our algorithms compute a sample S while maintaining state , in the form of a cache S of sampled keys , that is proportional to the sample size . Each sampling scheme in specified through a random mapping ElementScore(h ) of elements h = ( x , w ) to numeric score values . The distribution of ElementScore may only depend on the key x and w . We then define the seed of a key x seed(x ) = min h with key x
+ElementScore(h )
+( 3 ) to be the random variable that is the minimum score of all its elements . As with ppswor , we can obtain a fixed threshold sample S = {x | seed(x ) < τ} , which for a given τ includes all keys with seed(x ) < τ , or a fixed size sample , which for a specified sample size k includes the k keys with smallest seed values and define τ to be the ( k + 1 ) smallest seed .
+Once we have the sample , we can apply estimators to it to approximate statistics . To do so , we need to have information on the weight of sampled keys . The exact weights wx of sampled keys x ∈ S can be computed in a second pass over the data , as we detail below . We also consider a pure streaming ( single sequential pass ) setting , where we generally settle for some cx ≤ wx and we derive estimators that are able to work with this information . In terms of computation platform , our 2 pass schemes can be fully parallelized or distributed whereas our 1 pass ( streaming ) schemes are not as flexible : They can be executed on multiple streams that are processed separately ( as with sharding ) provided that all elements with the same key are processed at the same shard . 3.1 2 pass scheme
+The first pass identifies the set of keys S with smallest seeds . For fixed threshold sampling , our summary contains all keys with scores below τ . With fixed size sampling , the summary contain the keys with k smallest minimum scores . These summaries are mergeable , that is , from the summaries of two data sets we can compute a summary of their union . For fixed τ , the merged summary is the union of the keys in the two summaries . For fixed k , we compute the seed of each key in the union as the minimum seed attained in each of the summaries . We then take the k keys with smallest seeds ( retaining their seed values ) as a summary of the union . Either way the summary sizes never exceed |S| , which is the final sample size . The second pass , which computes wx for x ∈ S uses summaries that are the weight of each key x ∈ S the data set . We merge two summaries by key wise addition of weights to obtain a summary of the union . Algorithm 1 is 2 pass stream sampling of a fixed sample size k . 3.2 Fixed threshold stream sampling A fixed threshold scheme processes an element h = ( x , w ) as follows . If x ∈ S ( key x is cached/sampled ) , then cx ← cx + w . Otherwise , if ElementScore(h ) < τ , then x is inserted to S and cx ≤ w is initialized . The discrete scheme which applies to uniform weights w = 1 , is provided as Algorithm 2 , and uses the initialization cx ← 1 ( Counters[x ] in the pseudocode ) . A continuous scheme is presented in Section 5 .
+161 Algorithm 1 : 2 pass stream sampling : fixed size k Data : sample size k , elements ( x , w ) where x ∈ X and w > 0 Output : set of k pairs ( x , wx ) where x ∈ X Counters ← ∅ // Initialize sample τ ← +∞ // Upper bound on ElementScore // Pass I : Identify the k sampled keys foreach stream element h = ( x , w ) do if x is in Counters then seed(x ) ← min{seed(x ) , ElementScore(h)} else s ← ElementScore(h ) if s < τ then seed(x ) ← s ; Counters[x ] ← 0 if |Counters| = k + 1 then y ← arg max{seed(x ) | x in Counters} τ ← seed(y ) delete seed(y ) , Counters[y ]
+// Pass II : Compute wx for sampled keys foreach stream element h = ( x , w ) do if x is in Counters then
+Counters[x ] ← Counters[x ] + w return(τ ; ( x , Counters[x ] ) for x in Counters )
+Algorithm 2 : Stream sampling with fixed threshold τ Data : threshold τ , stream of elements with key x ∈ X Output : set of pairs ( x , cx ) where x ∈ X and cx ∈ [ 1 , wx ] Counters ← ∅ // Initialize Counters cache foreach stream element h with key x do // Process a stream element if x is in Counters then
+Counters[x ] ← Counters[x ] + 1 ; else if ElementScore(h ) < τ then
+Counters[x ] ← 1 ; // Initialize cx return((x , Counters[x ] ) for x in Counters )
+3.3 Fixed size stream sampling
+Algorithm 3 provides pseudocode for discrete ( uniform weights ) stream sampling with a fixed sample size k .
+The algorithm maintain a set S ( Counters ) of cached keys . For each cached key x , it keeps a count cx ( Counters[x ] ) and a lazily computed seed value seed(x ) . When processing an element h with key x , we compute y ← ElementScore(h ) . If x ∈ S , we increment cx . Otherwise , if x ∈ S and y < τ , we insert x ∈ S with cx ← 1 and seed(x ) ← y . As a result , we may have |S| = k + 1 cached keys . In this case , we would like to evict from S the key with maximum seed . But the seeds are not fully evaluated yet , in that the current seed(x ) only reflect the seed up to the first element that is currently counted in cx . We repeat the following until a key is evicted . We pop from S the key y with maximum current seed and set τ ← seed(y ) . We then iterate decreasing the count cy and scoring “ uncounted ” elements until either the count becomes cy = 0 and y is evicted or we obtain a score that is below τ . In the latter case , we reinsert y to S with seed(y ) equal to that score .
+Algorithm 3 : Stream sampling with fixed size k Data : sample size k , stream of elements with key x ∈ X Output : set of k pairs ( x , cx ) where x ∈ X and cx ∈ [ 1 , wx ] Counters ← ∅ // Initialization τ ← 1 // Supremum of ElementScore range foreach element h with key x do if x is in Counters then
+Counters[x ] ← Counters[x ] + 1 else score ← ElementScore(h ) if score < τ then seed(x ) ← score Counters[x ] ← 1 while |Counters| > k do y ← arg max{seed(x ) | x in Counters} τ ← seed(y ) while Counters[y ] > 0 and seed(y ) ≥ τ do
+Counters[y ] ← Counters[y ] − 1 seed(y ) ← ElementScore(y ) if Counters[y ] == 0 then delete Counters[y ] , seed(y ) return(τ ; ( x , Counters[x ] ) for x in Counters )
+Analysis . Clearly , the work of Algorithm 2 ( fixed threshold sampling ) is O(1 ) per stream element . We show amortized work O(1 ) for Algorithm 3 ( fixed size sampling ) . ( See TR [ 5 ] for proof . ) 3.4 Element scoring properties
+We will select the element scoring function according to the statistics f we are interested in . Intuitively , to obtain quality estimates ( CV upper bound of ( qk)−0.5 ) , we would need to sample each key x with probability roughly proportional to f ( wx ) . The challenge is to identify when and how we can achieve this by a small state streaming algorithm .
+Some properties of our element scoring functions that greatly simplify the derivation of estimators are that seed values of different keys are independent and that for a particular key x , the distribution of seed(x ) ( the minimum element score ) depends only on wx , and not on the arrangement of elements or on the breakdown of the weight of each key to different elements . Furthermore , we would also want the distribution of cx for x ∈ S to only depend on wx and τ . We assume here that we work with perfectly random numbers and hash functions . 3.5 Estimation As with the ppswor estimator reviewed in Section 2 , we use estimators that can be expressed as a sum over keys x ∈ H of individual estimates ˆf ( wx ) of f ( wx ) . The estimate are unbiased and are 0 for keys x ∈ S . With two pass sampling ( Algorithm 1 ) , we have the weight wx , and therefore f ( wx ) , for each sampled key x ∈ S . When the seed distribution only depends on wx and τ , we can compute the inclusion probability Φτ ( wx ) of a key x from its weight wx and apply inverse probability estimation as in ( 2 ) . In the streaming ( single pass ) schemes , the sample includes a partial count cx ≤ wx for each x ∈ S . The requirement that the distribution of cx only depends on wx and τ allows us to express sampling as a transform
+162 ( which depends on τ ) from the distribution wx to the expected outcome distribution cx . The derivation of unbiased estimators then corresponds to inverting this transform .
+The transforms we obtain have a unique inverse , which means that our estimators are the optimal ( minimum variance ) unbiased and nonnegative sum estimators . Because the 2 pass estimators ( 2 ) are also optimal , and rely on more information – the exact value wx instead of a sample from a distribution with parameter wx , the variance of the streaming estimators is always at least that of the 2 pass estimator .
+The estimators for both the fixed threshold and the fixed samplesize schemes are stated in terms of the threshold probability τ . When working with a fixed sample size k , τ is defined as the ( k + 1)st smallest seed . As with ppswor , τ when defined this way plays the same role as the threshold value τ used in a fixed sampling threshold scheme : The probability that a key is sampled , conditioned on fixed randomization of other keys , is the probability that its seed value is below the kth smallest seed of other keys . When the key is included in the sample , this value is τ . Similarly , under the same conditioning , the distribution of cx only depends on τ and wx , and is the same one as the respective fixed threshold scheme with τ . Moreover , the covariance of the estimates obtained for two different keys x , y is zero . The argument is the same as with ppswor [ 10 ] and SH [ 8 ] . This important property allows us to bound the variance on estimates of segment statistics by the sum of variance of estimates for individual keys .
+We now cast two existing basic sampling schemes in our framework : Distinct , which is designed for cap1 statistics and SH , which is designed for cap∞ ( sum ) statistics . 3.6 Distinct sampling
+A distinct sample is a uniform sample of active keys ( those with wx > 0 ) , meaning that conditioned on sample size k , all subsets of active keys are equally likely . For an element h with key x , we use ElementScore(h ) = Hash(x ) , where Hash(x ) ∼ U [ 0 , 1 ] is a random hash function selected before we process the stream . Note that all elements of the same key x have the same score and therefore seed(x ) ≡ Hash(x ) .
+When we sample with respect to a fixed threshold τ , we retain all keys with Hash(x ) < τ . When using a fixed sample size k , the scheme is the following ( distinct variant ) of reservoir sampling [ 24 ] : For each stream element , compute Hash(x ) and retain the k keys with smallest hash values .
+With distinct sampling , the value cx is equal to the exact weight wx for each sampled key x . This is because any key that enters our cache does so on the first element of the key . If a key is evicted , ( in the fixed k scheme ) , it can never re enter . We also have that for all keys with wx > 0 , the probability that x is sampled is Φτ ( wx ) ≡ τ−1 . We can therefore apply the inverse probability estimator ( 2 ) :
+ˆQ(f , H ) = τ f ( wx ) .
+( 4 )
+−1 x∈S∩H
+Distinct sampling is optimized for distinct ( cap1 ) statistics . In particular , ˆQ(cap1,X ) has CV upper bounded by ( k − 1)−0.5 [ 3 , 4 ] and for a segment H with proportion q of distinct keys , ˆQ(cap1 , H ) has CV upper bounded by ( q(k − 1))−0.5 , as it is equivalent to the ppswor estimator for f ( w ) ≡ 1 . For general see it is ∝ √ capT statistics , however , the CV grows rapidly with T ( we shall T ) . This is because our uniform sample of active keys can easily miss keys with high f ( wx ) values which contribute more to the statistics .
+3.7 Sample and Hold ( SH )
+Classic SH , with fixed sampling threshold τ or with fixed sample size k , [ 16 , 13 ] is specified for uniform element weights , so that wx is the number of elements with key x . We cast SH in our framework using ElementScore(h ) ∼ U [ 0 , 1 ] . Note that each key x can have many independent scores drawn , one for each element of x . Therefore , the more elements a key has , the more likely it is to be sampled . The seed is the minimum element score , which can be transformed to an exponentially distributed random variable with parameter wx . Therefore , as observed in [ 8 ] , the SH sample is actually a ppswor sample with respect to the weights wx [ 29 ] . When we use a second pass ( Section 3.1 ) to obtain the exact weights wx , we can apply the ppswor estimator ( 2 ) . With stream sampling ( Algorithm 2 and Algorithm 3 ) , the final count of a key x has cx ≤ wx , where wx − cx + 1 is geometric with parameter τ , truncated at wx + 1 ( probability of cx = 0 is ( 1 − τ )wx ) . An unbiased estimator for statistics Q(f , H ) from an SH sample is [ 8 ] :
+ˆQ(f , H ) = τ f ( cx ) − f ( cx − 1)(1 − τ )
+.
+( 5 )
+−1 x∈S∩H
+Note that this estimator is nonnegative when f is monotone non decreasing . This is because for all i > 0 , f ( i ) − f ( i − 1)(1 − τ ) > 0 . Surprisingly perhaps , we show here ( see TR [ 5 ] ) that the 1 pass estimate is not too far from the 2 pass estimate in that for sum statistics ( f ( x ) = x ) the CV is also upper bounded by ( q(k − 1))−05 For cap statistics with small T , however , the SH estimates can have CV that far exceeds our ( qk)−0.5 target : When the frequency distribution is highly skewed , the ppswor sample would be dominated by heavy keys . This means that segments with a large proportion of the capT statistics that mostly include keys with low frequencies would have a disproportionally small representation in the sample and thus large errors .
+SH Sampling probability per flow size τ = 0.01
+= 1 = 5 = 10 = 100 = 500
+1
+0.1
+0.01
+1
+10
+100
+1000
+Figure 1 : SH sampling probability per key weight w , for selected values of ( τ = 001 ) Note that for w * log probability is constant and for w , probability is proportional to w . We can see that the probability is close to being proportional to min{w , } , which is what we want for estimating cap statistics .
+4 . THE DISCRETE SH SPECTRUM
+Our discrete SH spectrum is parametrized by an integer ≥ 1 . Distinct sampling is SH1 and classic SH is SH∞ . In general , SH is designed to estimate well frequency cap statistics with T ≈ .
+163 probability estimator ( 2 ) ˆQ(f , H ) =
+If we use a 2 pass scheme ( Section 3.1 ) , we can apply the inverse x∈S∩H f ( wx )
+Φ(wx ) .
+Inverting the sample counts . We now derive a streaming estimator . We use the notation oi = {x ∈ S ∩ H | cx = i} ( the “ observed ” count ) for the random variable that is the number of keys x ∈ S ∩ H with cx = i . Let mi = {x ∈ H | wx = i} be the number of keys in H with count wx = i . Our statistics ( 1 ) can be expressed as Q(f , H ) = f T m . We have the relation
+E[oi ] = j≥i φj−i+1mi and can write
+E[o ] = Y ( φ)m .
+We use the notation Y ( v ) for an upper triangular matrix that corresponds to a vector v , such that ∀ , j ≥ i , [ Y ( v)]ij ≡ vj−i+1 . We have m = ( Y ( φ))−1E[o ] . Therefore , from linearity , ˆm ≡ ( Y ( φ))−1o is an unbiased estimator of m . Therefore , to compute the estimate we need to invert Y ( φ ) .
+The inverse of the matrix Y ( φ ) has the same upper triangular structure , and can be expressed as Y ( ψ ) with respect to another vector ψ . To compute ψ , we consider the constraints Y ( ψ)Y ( φ ) = I obtained from the product of the first row of Y ( ψ ) with the columns of Y ( φ ) . We obtain the equations ψ1 = φ
+−1 1 , and for j > 1 , i j=1
+ψjφ1+i−j = 0 .
+This allows us to iteratively solve for ψi after computing ψj for j < i using
+1 ( − i−1
+−1 j=1
+The SH element scoring function for an element h with key x draws a uniform random bucket b ∼ U [ 1,··· , ] and returns a hash of the pair Hash(x , b ) ∼ U [ 0 , 1 ] . Note that the buckets are independent for different elements with key x .
+ElementScore(h ) ← Hash(( ∗ rand() ) , x ) .
+( 6 )
+Recall that seed(x ) ( 3 ) is the minimum score of an element with key x . When = 1 , the seed distribution is uniform for all keys with wx > 0 . More generally , we can see that the element scoring ( 6 ) provides up to “ independent ” attempts for each key to obtain a lower seed . That way , keys with more elements are more likely to have a lower seed and be sampled , but with diminishing return : Keys where wx min{ , τ−1} are sampled with probability roughly proportional to wx whereas keys with wx * min{ , τ−1} have a roughly constant inclusion probability regardless of frequency . Also note that when the cap parameter is large relative to the inverse sampling threshold * τ−1 , SH is similar to SH∞ . Figure 1 illustrates these properties by showing the sampling probability of a key as a function of wx , for selected values of the parameter . 4.1 Estimators for discrete SH The output of our stream sampling algorithm is a threshold value τ and a set S of pairs of the form ( y , cy ) , where y ∈ X and cy ∈ [ 1 , wy ] . Coefficient form . We express our estimators as vectors β(f,τ, ) , which depends on f , the threshold τ , and the parameter . The cth is the contribution to the estimate of a key with count entry β(f,τ , ) c . The estimate on the statistics Q(f , H ) is then c x∈S∩H fi−fi−1(1−τ )
+The distinct sample ( = 1 ) estimator ( 4 ) is expressed using βi ≡ fiτ−1 ( using the notation fi ≡ f ( i ) ) whereas the SH estimator ( = +∞ ) ( 5 ) is expressed using βi ≡ τ−1 . We seek estimators of this form for general that are unbiased , admissible , and nonnegative β ≥ 0 when f is non decreasing . Probability vector φ . Let φi be the probability that the ith element of the same key was the first one to get counted by SH . The vector φ depends on the parameters and τ . For = 1 , we have the closed form φ1 ≡ τ and φi = 0 for i > 1 . For = +∞ , we have φi = ( 1 − τ )i−1τ . To express φ for general , we let aij be the probability that we used exactly j ≤ min{ , i} buckets in the first i elements of a key . By definition a0i ≡ 0 when i ≥ 1 , aij ≡ 0 when j > min{ , i} , and a1,0 = 0 . Otherwise , a1,1 = 1 and for i > 1 , j ≤ min{ , i} , the values can be computed from the relation aij = ai−1,j j
++ ai−1,j−1
+− j + 1
+.
+( 8 )
+We can now write
+φi = τ min{i−1,−1} j=1 ai−1,j(1 − τ )j − j
+.
+A 2 pass estimator . The probability that a key x is sampled ( illustrated in Figure 1 ) is
+Φτ,(wx ) ≡ wx
+φj . j=1
+ˆQ(f , H ) =
+βcx .
+( 7 )
+ψi = φ
+φ1+i−jψj ) .
+For distinct sampling we have ψ1 = τ−1 and ψi = 0 for i > 1 . For SH [ 8 ] we have ψ1 = τ−1 , ψ2 = −(1 − τ )τ−1 , and ψi = 0 for i ≥ 2 . In general , however , ψ can have many non zero entries .
+We show the following ( see TR [ 5] ) :
+THEOREM 41 The estimator ˆQ(f , H ) = x∈S∩H βcx , where
+≡ i
+β(f,τ , ) i
+ψjfi−j+1 is unbiased . j=1
+We show that the estimates are nonnegative when f is monotone non decreasing :
+THEOREM 42 When f is monotone non decreasing , then for all and τ , β(f,τ , ) ≥ 0 .
+5 . THE CONTINUOUS SH SPECTRUM We now present our continuous SH sampling schemes , which generalizes SH with weighted updates ( = ∞ ) [ 6 ] . The continuous design offers the following advantages over the discrete design even when applied to uniform weights . First , fixed sample size sampling no longer requires explicitly maintain a lazy seed(x ) for cached keys as we did in Algorithm 3 : The lazy value is implicitly captured by the current threshold τ . Second , the estimator can be expressed in terms of f and its derivative . Lastly , the continuous spectrum facilitates multi objective samples ( Section 6 ) .
+Our input is a stream of elements h = ( x , w ) with key x and a weight w > 0 . Our element scoring is as follows : Each key has a base hash KeyBase(x ) ∼ U [ 0 , 1/ ] , that is fixed for the computation and is uniformly distributed in [ 0 , 1/ ] : KeyBase(x ) ←
+164 Hash(x)/ . An element h = ( x , w ) is assigned a score by first drawing v ∼ Exp[w ] and then returning v if v > 1/ and KeyBase(x ) otherwise : ElementScore(h ) = ( v ∼ Exp[w ] ) ≤ 1/ ? KeyBase(x ) : v . ( 9 ) The random variables Exp[w ] are independent for different elements and are also independent of KeyBase(x ) .
+We now consider the distribution of seed(x ) ( the minimum element score of stream elements with key x ) . We use properties of the exponential distribution ( see TR [ 5 ] for details ) and show that seed(x ) ∼ ( v ∼ Exp[wx ] ) ≤ 1/ ? U [ 0 , 1/ ] : v .
+Note that the element scoring satisfies our requirement ( Section 3.4 ) that the distribution of seed(x ) depends only on wx . Qualitatively , we can see that when wx , the seed is close to exponentially distributed with parameter wx , and we are close to ppswor . When wx * , the seed is uniform . Intuitively , the sampling probability of keys would be roughly proportional to cap(wx ) which is what we need to approach the “ gold standard ” CV . 5.1 2 pass estimator
+Consider 2 pass sampling ( Section 3.1 ) with our element scoring function ( 9 ) . For estimation , we need to compute the probability Φτ,(wx ) = Pr[seed(x ) < τ ] of a key with weight wx in a sample with parameters and τ . If τ < 1 , then a key is included if Exp[wx ] < 1/ and then KeyBase(x ) < τ . These two events are independent and have joint probability ( 1 − e−wx/)τ . If τ ≥ 1 then a key is included if Exp[wx ] < τ , which has probability ( 1 − e−τ wx ) . We can express the combined probability as ( 10 )
+Φτ,(wx ) ≡ ( 1 − e
+) min{1 , τ } .
+−wx max{1/,τ} statistics ˆQ(f , H ) =
+We can then apply inverse probability ( 2 ) to estimate a segment
+We show the following ( Proof provided in TR [ 5] ) : x∈S∩H f ( wx)/Φτ,(wx ) .
+THEOREM 51 The CV of estimating Q(capT , H ) from an SH sample with exact weights wx is at most max{T / , /T}
+0.5 q(k − 1 )
+. e e − 1
+The streaming ( 1 pass ) algorithms compute a sample S of cached
+Note that when = Θ(T ) , the CV is O((q(k − 1))−0.5 ) and the upper bound degrades smoothly with the disparity max{T / , /T} between and T . Also note that the increased CV due to the constant e/(e− 1 ) and the disparity arise from a worst case and somewhat forgiving analysis and are not inherent . 5.2 1 pass algorithms keys and a value cx ≤ wx for each x ∈ S . Algorithm 4 performs fixed threshold sampling . When processing an element h = ( x , w ) with a cached key , we update cx ← cx +w . Otherwise , we compute the weight ∆ that would be needed for the score to be below max{1/ , τ} . If w ≤ ∆ , we break . Otherwise , if τ < 1/ , we break if KeyBase(x ) ≥ τ . Finally , we initialize a couter cx ← w − ∆ . Intuitively , the score is continuously assigned to the mass wx . The value cx ≤ wx is the weight observed after the point in which the score gets below τ .
+Fixed sample size sampling is provided as Algorithm 5 . To maintain a fixed size sample , the threshold is decreased when there are k +1 cached keys , to the point needed to evict a key . The algorithm “ simulates ” the end result of working with the lower threshold to begin with . and w > 0
+Algorithm 4 : Continuous SH stream sampling : fixed τ Data : threshold τ , stream of elements ( x , w ) where x ∈ X Output : set of pairs ( x , cx ) where x ∈ X and cx ∈ ( 0 , wx ] Counters ← ∅ // Initialize Counters cache foreach stream element ( x , w ) do // Process a stream element if x is in Counters then
+Counters[x ] ← Counters[x ] + w ; else max{τ,1/} // ∼ Exp[max{τ , 1/} ]
+∆ ← − ln(1−rand( ) ) if KeyBase(x ) < min{τ , 1/} and ∆ < w then // initialize counter for x
+Counters[x ] ← w − ∆ ; return((x , Counters[x ] ) for x in Counters )
+The eviction step is as follows . We draw and fix some “ randomization ” and compute for each cached key the threshold needed to evict the key . The randomization for key x , in the form of ux and rx . We then compute zx which is the maximum threshold value that is needed to evict x with respect to that randomization . We then take the new threshold to be the maximum zx over keys . One key ( the one with maximum zx ) is evicted . For remaining keys , cx ( Counters[x ] ) is updated according to the same ux , rx .
+We elaborate on how zx is determined when the current threshold is τ . The key x can be viewed as having a score ( computed to the point the key entered the cache ) that is at most τ . We can consider the distribution of the score given that it is at most τ : With the randomization , we can take it as uxτ . A necessary requirement for x to be evicted is that the new threshold τ∗ is below uxτ , so we have zx < uxτ . Conditioned on τ∗ < uxτ , we can treat this as processing an element with a new ( uncached ) key x and weight cx . We consider the threshold value τ∗ needed for the key to enter the cache . We simply reverse the entry rule : If − ln(1−rx)/cx ≥ −1 , then the key would enter the cache when τ∗ ≥ − ln(1− rx)/cx . If − ln(1 − rx)/cx < −1 , then the key would enter the cache if and only if τ∗ ≥ KeyBase(x ) , with count cx − ( − ln(1 − rx) ) .
+We now express the distribution of cx ( Counters[x ] ) and verify that it satisfies our requirement that for any key x , it only depends on wx , , and τ . Recall that for fixed threshold SH we use the specified τ whereas with fixed cache size SH , the statement is conditioned on the randomization on all other keys , which determines τ when x ∈ S . The proof is provided in TR [ 5 ] .
+THEOREM 52 With fixed τ SH ( Algorithm 4 ) and fixed k SH ( Algorithm 5 ) , for any key x , cx ∼ max{0 , wx − φ} , where φ has density
+φ(y ) = τ exp(−y max{1/ , τ} ) in the interval y ∈ [ 0 , wx ] . 5.3 Estimators for Continuous SH
+We seek an unbiased and nonnegative estimator in a coefficient form , that is , a function β(f,τ,)(c ) defined for any c > 0 and we use the estimator
+ˆQ(f , H ) =
+β(f,τ,)(cx ) .
+( 11 ) x∈H∩S
+THEOREM 53 For any continuous f that is differentiable al most everywhere , the estimator that uses
+β(f,τ,)(c ) ≡ f ( c)/ min{1 , τ} + f
+( c)/τ
+( 12 )
+165 with key x ∈ X and w > 0
+Algorithm 5 : Continuous SH stream sampling : fixed k Data : sample size k , stream of elements of the form ( x , w ) Output : τ ; set of pairs ( x , cx ) where x ∈ X and cx ∈ ( 0 , wx ] Counters ← ∅ ; τ ← ∞ // Initialize cache foreach stream element ( x , w ) do // Process element if x is in Counters then
+Counters[x ] ← Counters[x ] + w ; else max{−1,τ} // ∼ Exp[max{−1 , τ} ]
+∆ ← − ln(1−rand( ) ) if ∆ < w and ( τ > 1 or τ ≤ 1 and KeyBase(x ) < τ ) then // insert x
+Counters[x ] ← w − ∆ if |Counters| = k + 1 then // Evict a key if τ > 1 then foreach x ∈ Counters do ux ← rand( ) ; rx ← rand( ) zx ← min{τ ux , threshold of x if zx ≤ −1 then
+Counters[x ] }// eviction − ln(1−rx ) zx ← KeyBase(x ) y ← arg maxx∈Counters zx ; Delete y from Counters // key to evict τ∗ ← zy// new threshold foreach x ∈ Counters do // Adjust counters according to τ∗ if ux > max{τ∗ , −1}/τ then Counters[x ] ← Counters[x ] − − ln(1−rx ) max{−1,τ∗} else // τ ≤ 1
+τ ← τ∗ ; delete u , r , z , b // deallocate memory y ← arg maxx∈Counters KeyBase(x ) ; Delete y from Counters // evict τ ← KeyBase(y)// new threshold return(τ ; ( x , Counters[x ] ) for x in Counters ) is unbiased .
+PROOF . We separately treat the cases where τ < 1 and τ > 1 . We first show that when τ > 1 , β(c ) = f ( c ) + f(c)/τ are unbiased estimation coefficients . For a key of size w , we have density τ e−τ x to have count of w − x ∈ ( 0 , w ) ( otherwise the key has count 0 and the estimate is 0 ) . We can write
+β(y ) = ( f ( y)eτ y )
+−τ yτ
+−1 . e
+Consider a key of size w . Its expected contribution to the estimate is w
+0
+=
+τ e−τ xβ(w − x)dx w
+0 w
+τ e−τ x(f ( w − x)e−τ ( w−x))e−τ ( w−x)τ−1dx
+( f ( w − x)e−τ ( w−x))dx
+= e−τ w = e−τ wf ( w)e−τ w = f ( w )
+0
+We now consider the case where τ < 1/ , showing that
+β(c ) = f ( c)/(τ ) + f
+( c)/τ are unbiased estimation coefficients . For a key with weight w , we have density τ e−x/ to have count of w − x ∈ ( 0 , w ) . We write
+β(y ) = ( f ( y)ey/ )
+−y/τ
+−1 . e w
+0
+=
+−x/β(w − x)dx
+τ e w w
+0 −w/
+= e
+−x/(f ( w − x)e(w−x)/ )
+−(w−x)/τ e
+−1
+τ e
+( f ( w − x)e(w−x)/ ) dx = f ( w ) .
+0
+Note that any continuous monotone function , including the capT functions , is differentiable almost everywhere and hence satisfies the requirements of the theorem . We upper bound the CV of the streaming fixed k SH estimator ( Proof is in TR [ 5] ) :
+THEOREM 54 The CV of estimating Q(capT , H ) from an SH sample is upper bounded by e e−1 ( 1 + max{/T , T /} )
+0.5
+. q(k − 1 )
+In particular , when = Θ(T ) , the CV is O(q(k − 1)−05 )
+6 . MULTI OBJECTIVE SAMPLES
+We established that from a fixed k SH sample we can estimate well capT statistics when T = Θ( ) . This means that if we are interested in estimates with statistical guarantees for cap values T = [ a , b ] , it suffices to use SH samples with parameters i = 2ia for i ≤ ( cid:100)log(b/a ) . To process a query for a capT statistics , we √ 2 ) can use the SH sample with that is closest ( within a factor of from T . In particular , to estimate all cap statistics , it suffices to use ( cid:100)log(maxx wx/ minx wx ) ) samples . We now improve over this basic approach ( see TR [ 5 ] for details ) by instead of working with a set {S} of samples with respective ∈L S . The improvement has several components : Sample coordination , which ensures that samples with closer are more similar so that |SL| k|L| , using estimators that benefit from the combined sample , and sampling algorithms that use state that is proportional to |SL| . caps ∈ L , we work with a single sample SL =
+7 . SIMULATIONS
+Our experimental evaluation is aimed to understand the error distribution of our estimators . Our analysis provided statistical guarantees on the errors that are close to the “ gold standard ” attainable on aggregated data . The analysis , however is worst case in terms of the dependence on the disparity max{/T , T /} , the factors of e/(e − 1 ) ≈ 1.6 for 2 pass and ( 2e/(e − 1))0.5 ≈ 1.8 for 1 pass , which assume a worst case frequency distribution ( error is larger when wx ≈ ) , and not reflecting the advantage of with replacement sampling that is significant when there is skew . We therefore expect actual errors to be much lower than our upper bounds .
+Our sampling algorithms and estimators were implemented in Python using numpy.random and hashlib libraries . Simulations were performed on MacBook Air and Mac mini computers . We did
+166 discrete k = 100 , α = 1.2 , m = 105 , rep = 200 , NRMSE 1 pass discrete k = 100 , α = 1.2 , m = 105 , rep = 200 , NRMSE 2 pass
+, T 1 5 20 50 100 500 1000 10000
+, T 1 5 20 50 100 500 1000 10000
+1 0.098 0.094 0.133 0.138 0.146 0.171 0.174 0.178
+5 0.115 0.093 0.111 0.108 0.125 0.135 0.156 0.148
+20 0.185 0.112 0.102 0.098 0.104 0.123 0.141 0.128
+50 0.279 0.144 0.109 0.101 0.099 0.112 0.125 0.110
+100 0.374 0.184 0.122 0.107 0.099 0.110 0.118 0.102
+500 0.658 0.332 0.199 0.163 0.111 0.102 0.100 0.083
+1000 0.862 0.449 0.254 0.207 0.133 0.101 0.094 0.076 discrete k = 50 , α = 2 , m = 105 , rep = 500 , NRMSE 1 pass
+1 0.145 0.174 0.243 0.280 0.343 0.397 0.384 0.397
+5 0.172 0.134 0.153 0.181 0.211 0.222 0.243 0.231
+20 0.235 0.147 0.123 0.120 0.146 0.141 0.156 0.150
+50 0.290 0.170 0.126 0.106 0.116 0.107 0.110 0.107
+100 0.345 0.202 0.138 0.104 0.099 0.085 0.086 0.083
+500 0.505 0.311 0.196 0.134 0.097 0.046 0.047 0.043
+1000 0.601 0.370 0.232 0.160 0.107 0.035 0.036 0.032
+10000 3.016 1.316 0.615 0.419 0.311 0.149 0.090 0.056
+10000 1.063 0.636 0.421 0.282 0.185 0.018 0.013 0.012
+, T 1 5 20 50 100 500 1000 10000
+, T 1 5 20 50 100 500 1000 10000
+20 0.185 0.110 0.101 0.100 0.105 0.120 0.137 0.120
+50 0.279 0.143 0.108 0.099 0.099 0.114 0.126 0.107
+100 0.374 0.183 0.120 0.105 0.097 0.110 0.118 0.099
+1000 0.862 0.449 0.254 0.205 0.131 0.099 0.092 0.075 discrete k = 50 , α = 2 , m = 105 , rep = 500 , NRMSE 2 pass 1000 0.601 0.370 0.232 0.158 0.105 0.031 0.029 0.028
+1 0.098 0.094 0.123 0.131 0.144 0.156 0.161 0.165
+1 0.145 0.165 0.205 0.241 0.294 0.320 0.334 0.326
+5 0.115 0.093 0.109 0.108 0.122 0.130 0.148 0.140
+5 0.172 0.132 0.147 0.165 0.194 0.202 0.216 0.206
+500 0.658 0.333 0.199 0.161 0.109 0.101 0.099 0.082
+500 0.505 0.311 0.196 0.132 0.094 0.042 0.041 0.040
+20 0.235 0.145 0.122 0.120 0.140 0.138 0.146 0.140
+50 0.290 0.169 0.125 0.104 0.112 0.105 0.109 0.104
+100 0.345 0.201 0.137 0.101 0.097 0.082 0.084 0.081
+10000 3.016 1.316 0.614 0.417 0.310 0.147 0.088 0.054
+10000 1.063 0.636 0.422 0.282 0.184 0.016 0.010 0.010
+Figure 2 : Simulation Results for Discrete SH continuous k = 100 , α = 1.1 , m = 100000 , rep = 500 , NRMSE 1 pass continuous k = 100 , α = 1.1 , m = 100000 , rep = 500 , NRMSE 2 pass
+, T 0.1 1 5 20 50 100 500 1000 10000
+1 0.098 0.098 0.109 0.114 0.117 0.125 0.141 0.144 0.133
+5 0.118 0.108 0.100 0.106 0.106 0.112 0.130 0.133 0.121
+20 0.180 0.150 0.110 0.105 0.103 0.103 0.122 0.123 0.115
+50 0.252 0.207 0.135 0.112 0.105 0.101 0.119 0.118 0.110
+100 0.326 0.267 0.170 0.126 0.108 0.101 0.115 0.112 0.108
+500 0.648 0.541 0.316 0.198 0.145 0.114 0.106 0.102 0.098
+1000 0.897 0.781 0.432 0.252 0.179 0.133 0.103 0.097 0.094
+10000 2.399 2.006 1.135 0.672 0.418 0.285 0.120 0.083 0.080
+, T 0.1 1 5 20 50 100 500 1000 10000
+1 0.098 0.097 0.106 0.112 0.112 0.120 0.137 0.138 0.130
+5 0.118 0.107 0.100 0.106 0.106 0.111 0.128 0.130 0.119
+20 0.180 0.149 0.111 0.104 0.103 0.103 0.121 0.121 0.112
+50 0.252 0.206 0.135 0.111 0.103 0.101 0.117 0.115 0.109
+100 0.326 0.266 0.171 0.125 0.108 0.100 0.114 0.111 0.106
+500 0.649 0.540 0.316 0.197 0.144 0.113 0.105 0.101 0.097
+1000 0.897 0.780 0.433 0.251 0.178 0.131 0.103 0.097 0.093
+10000 2.399 2.005 1.135 0.671 0.418 0.285 0.120 0.082 0.079 continuous k = 100 , α = 1.5 , m = 100000 , rep = 500 , NRMSE 1 pass continuous k = 100 , α = 1.5 , m = 100000 , rep = 500 , NRMSE 2 pass
+, T 0.1 1 5 20 50 100 500 1000 10000
+1 0.106 0.103 0.119 0.152 0.190 0.214 0.225 0.224 0.230
+5 0.134 0.120 0.096 0.115 0.136 0.152 0.169 0.163 0.162
+20 0.198 0.168 0.113 0.096 0.102 0.115 0.129 0.122 0.130
+50 0.266 0.228 0.142 0.100 0.092 0.092 0.105 0.102 0.108
+100 0.341 0.292 0.174 0.112 0.092 0.082 0.089 0.088 0.091
+500 0.558 0.478 0.301 0.176 0.121 0.078 0.059 0.059 0.059
+1000 0.688 0.586 0.382 0.220 0.148 0.088 0.049 0.048 0.049
+10000 1.508 1.320 0.766 0.455 0.294 0.167 0.025 0.024 0.025
+, T 0.1 1 5 20 50 100 500 1000 10000
+1 0.106 0.101 0.113 0.142 0.168 0.191 0.203 0.198 0.205
+5 0.134 0.118 0.096 0.110 0.126 0.139 0.154 0.146 0.152
+20 0.198 0.167 0.111 0.095 0.100 0.109 0.121 0.117 0.122
+50 0.266 0.228 0.140 0.098 0.091 0.091 0.102 0.099 0.104
+100 0.341 0.292 0.172 0.110 0.091 0.082 0.088 0.086 0.089
+500 0.558 0.478 0.300 0.175 0.120 0.076 0.057 0.056 0.057
+1000 0.688 0.586 0.381 0.219 0.147 0.087 0.045 0.045 0.046
+10000 1.508 1.320 0.766 0.454 0.294 0.167 0.022 0.022 0.023 continuous k = 50 , α = 2 , m = 100000 , rep = 500 , NRMSE 1 pass continuous k = 50 , α = 2 , m = 100000 , rep = 500 , NRMSE 2 pass
+, T 0.1 1 5 20 50 100 500 1000 10000
+1 0.126 0.129 0.193 0.277 0.339 0.390 0.397 0.396 0.404
+5 0.159 0.141 0.138 0.169 0.206 0.236 0.250 0.232 0.244
+20 0.216 0.192 0.146 0.124 0.140 0.146 0.162 0.150 0.155
+50 0.274 0.244 0.173 0.118 0.108 0.107 0.114 0.108 0.114
+100 0.326 0.293 0.202 0.125 0.094 0.085 0.092 0.083 0.085
+500 0.502 0.449 0.300 0.183 0.096 0.046 0.047 0.042 0.043
+1000 0.597 0.526 0.353 0.216 0.108 0.034 0.034 0.031 0.032
+10000 1.061 0.908 0.626 0.377 0.182 0.022 0.012 0.011 0.012
+, T 0.1 1 5 20 50 100 500 1000 10000
+1 0.125 0.127 0.178 0.235 0.282 0.327 0.321 0.322 0.326
+5 0.159 0.139 0.137 0.163 0.184 0.204 0.218 0.208 0.213
+20 0.216 0.190 0.144 0.123 0.133 0.140 0.152 0.143 0.147
+50 0.274 0.244 0.172 0.116 0.106 0.105 0.114 0.105 0.109
+100 0.326 0.293 0.202 0.125 0.093 0.083 0.089 0.080 0.084
+500 0.502 0.449 0.300 0.183 0.094 0.041 0.042 0.039 0.040
+1000 0.597 0.526 0.353 0.216 0.106 0.030 0.030 0.028 0.028
+10000 1.061 0.908 0.626 0.378 0.181 0.020 0.010 0.009 0.010
+Figure 3 : Simulation Results for Continuous SH not attempt to benchmark performance in terms of running time , since computationally , our algorithms are similar to the widely applied distinct sampling or counting algorithms and can easily be tuned and scaled to very large data sets and common platforms .
+We generated streams of 105 elements with uniform weights . The keys were drawn from a Zipf distribution with parameter α = 1 , 112 , 1.5 , 1.8 , 2 . This range of Zipf parameters is typical to large data sets and working with them allowed us to finely understand the error dependence on the skew ( Zipf with larger α is more skewed and has fewer distinct keys per number of elements ) . The average number of distinct keys in our simulations , and respective sample sizes we used , was 4.3 × 104 for α = 1.1 ( used k = 100 ) ; 1.84 × 104 for α = 1.2 ( used k = 100 ) ; 3.04 × 103 for α = 1.5 ( used k = 100 ) ; 841 for α = 1.8 ( used k = 50 ) ; and 437 for α = 2 ( used k = 50 ) .
+For each stream , we computed the exact frequencies of each key for reference in the error computation of the estimates . For a set of sample cap parameters = 1 , 5 , 20 , 50 , 100 , 1000 , 10000 ( and also = 0.1 with continuous samples ) , we computed discrete and continuous fixed k SH samples . Discrete SH sampling used Algorithm 3 with scoring function ( 6 ) and continuous SH sampling used Algorithm 5 . From each sample , we computed an estimate of the frequency cap statistic Q(capT ,X ) over all keys , for parameters T = 1 , 5 , 20 , 50 , 100 , 1000 , 10000 . With discrete SH , we used the esti mator of the form ( 7 ) and computed estimation coefficients as in Theorem 41 With continuous SH , we used the estimator ( 11 ) with coefficient function ( 12 ) , which for capT statistics is :
+β(c ) = min{T , c} min{1 , τ} + τ
+−1Ic<T .
+We used the inverse probability estimate
+For each , T combination , we also computed the estimate that is obtained from 2 pass algorithms ( Section 3.1 ) , applied with element scoring ( 6 ) for discrete schemes and ( 9 ) for continuous schemes . x min{T , wx}/Φ(wx ) , where Φ(wx ) is ( 10 ) for continuous schemes and as outlined in Section 4 for discrete schemes .
+For each of these estimates , we computed the relative and NRMSE errors , averaged over multiple ( rep = 200 or rep = 500 ) simulations ( each using a fresh hash function and randomness ) . Selected simulation results showing the errors for , T combinations are provided in Figure 2 for discrete SH and in Figure 3 for continuous SH . The minimum error for each statistics T across samples is boldfaced . Additional results are provided in the TR [ 5 ] . Discussion : When looking at the parameter with smallest error for each cap statistics T , we see the diagonal pattern expected from our analysis , where the error is minimized when ≈ T and degrades with disparity between T and . Note that the smallest distinct sampling threshold we had was τ ≈ 0.001 ( for α = 1.1 ) , therefore , our high values effectively emulated uncapped SH .
+167 Even for these realistic distributions , we observe that a considerable performance gain by using an appropriate sample for our particular cap statistics . We can also see that the sensitivity of the error to the parameter increases with skew ( higher Zipf parameter α ) . In particular , the ratio of the error to the boldfaced minimum when using a high sample to estimate distinct counts was up to a factor of 3 whereas the reverse could be 30 fold or more . The increase in error for mid cap statistics by using the better one of = 1,∞ instead of the minimum was up to 40 % . Note however that even this is optimistic , as we measured error on the whole population – on segments with frequency distributions that do not match that of the population , error can be much higher .
+√ The = 1 , T = 1 estimates have NRMSE ≈ 1/
+Comparing the error of 2 pass versus streaming estimates ( both are the same for distinct counts = 1 but diverge otherwise ) , we observe that the benefit of the second pass is limited to 10 % and typically lower . This agrees with our CV upper bounds which are only slightly larger for the streaming estimates . This suggests that the choice of scheme should depend on the computational platform . k − 2 , this is because the upper bounds for approximate distinct counting are fairly tight [ 3 , 4 ] as there is no dependence on the frequency distribution . In our simulations , for higher cap values T , the minimum error ( over ) was typically much lower than the CV upper bounds . This suggests using adaptive confidence bounds , based on sampled frequencies , rather than relying only on the CV upper bounds .
+8 . RELATED WORK
+There is a large body of work on computing statistics over unaggregated data which we can not hope to cover here . The toolbox includes deterministic algorithms [ 25 ] , other sampling algorithms [ 7 ] , and Linear sketches ( random linear projections ) [ 22 , 1 , 21 ] . Most related to frequency cap statistics are sketches based on p stable distributions that are designed to estimate frequency moments for p ∈ [ 0 , 1 ] [ 21 ] and Lp sampling [ 26 , 23 ] . These techniques do not apply for cap statistics , as there are no appropriate stable distributions for cap functions . Conclusion Frequency cap statistics are fundamental to data analysis . We propose a principled and practical sampling solution for scalably and accurately estimating frequency cap statistics over unaggregated data sets . The sample is computed using state proportional to the specified desired sample size and the estimates have error bounds that nearly match those that can be obtained by an optimal weighted sample of the same size that can only be computed over the aggregated view . Our design brings the benefits of approximate distinct counters , which are extensively deployed in the industry , to general frequency cap statistics .
+Looking ahead , we would like to apply our framework for sampling unaggregated data sets to other statistics , extend it to support negative updates [ 15 , 6 ] , and understand the theoretical boundaries of the approach . Acknowledgement : The author would like to thank Kevin Lang for bringing to her attention the use of frequency capping in online advertising and the need for efficient sketches that support it .
+9 . REFERENCES [ 1 ] N . Alon , Y . Matias , and M . Szegedy . The space complexity of approximating the frequency moments . J . Comput . System Sci . , 58:137–147 , 1999 .
+[ 2 ] M . T . Chao . A general purpose unequal probability sampling plan .
+Biometrika , 69(3):653–656 , 1982 .
+[ 3 ] E . Cohen . Size estimation framework with applications to transitive closure and reachability . J . Comput . System Sci . , 55:441–453 , 1997 .
+[ 4 ] E . Cohen . All distances sketches , revisited : HIP estimators for massive graphs analysis . In PODS . ACM , 2014 .
+[ 5 ] E . Cohen . Stream sampling for frequency cap statistics . Technical
+Report csIR/150205955 , arXiv , 2015 . http://arxivorg/abs/150205955
+[ 6 ] E . Cohen , G . Cormode , and N . Duffield . Don’t let the negatives bring you down : Sampling from streams of signed updates . In Proc . ACM SIGMETRICS/Performance , 2012 .
+[ 7 ] E . Cohen , N . Duffield , H . Kaplan , C . Lund , and M . Thorup . Composable , scalable , and accurate weight summarization of unaggregated data sets . Proc . VLDB , 2(1):431–442 , 2009 .
+[ 8 ] E . Cohen , N . Duffield , H . Kaplan , C . Lund , and M . Thorup .
+Algorithms and estimators for accurate summarization of unaggregated data streams . J . Comput . System Sci . , 80 , 2014 .
+[ 9 ] E . Cohen , N . Duffield , C . Lund , M . Thorup , and H . Kaplan . Efficient stream sampling for variance optimal estimation of subset sums . SIAM J . Comput . , 40(5 ) , 2011 .
+[ 10 ] E . Cohen and H . Kaplan . Tighter estimation using bottom k sketches .
+In Proceedings of the 34th VLDB Conference , 2008 .
+[ 11 ] E . Cohen , H . Kaplan , and S . Sen . Coordinated weighted sampling for estimating aggregates over multiple weight assignments . VLDB , 2(1–2 ) , 2009 . full : http://arxivorg/abs/09064560
+[ 12 ] N . Duffield , M . Thorup , and C . Lund . Priority sampling for estimating arbitrary subset sums . J . Assoc . Comput . Mach . , 54(6 ) , 2007 .
+[ 13 ] C . Estan and G . Varghese . New directions in traffic measurement and accounting . In SIGCOMM . ACM , 2002 .
+[ 14 ] P . Flajolet and G . N . Martin . Probabilistic counting algorithms for data base applications . J . Comput . System Sci . , 31:182–209 , 1985 .
+[ 15 ] R . Gemulla , W . Lehner , and P . J . Haas . A dip in the reservoir :
+Maintaining sample synopses of evolving datasets . In VLDB , 2006 . [ 16 ] P . Gibbons and Y . Matias . New sampling based summary statistics for improving approximate query answers . In SIGMOD . ACM , 1998 .
+[ 17 ] Google . Frequency capping : AdWords help , December 2014 . https : //supportgooglecom/adwords/answer/117579 [ 18 ] S . Heule , M . Nunkesser , and A . Hall . HyperLogLog in practice :
+Algorithmic engineering of a state of the art cardinality estimation algorithm . In EDBT , 2013 .
+[ 19 ] N . Hohn and D . Veitch . Inverting sampled traffic . In Proceedings of the 3rd ACM SIGCOMM conference on Internet measurement , pages 222–233 , 2003 .
+[ 20 ] D . G . Horvitz and D . J . Thompson . A generalization of sampling without replacement from a finite universe . Journal of the American Statistical Association , 47(260):663–685 , 1952 .
+[ 21 ] P . Indyk . Stable distributions , pseudorandom generators , embeddings and data stream computation . In Proc . 41st IEEE Annual Symposium on Foundations of Computer Science , pages 189–197 . IEEE , 2001 . [ 22 ] W . Johnson and J . Lindenstrauss . Extensions of Lipschitz mappings into a Hilbert space . Contemporary Math . , 26 , 1984 .
+[ 23 ] H . Jowhari , M . Saglam , and G . Tardos . Tight bounds for Lp samplers , finding duplicates in streams , and related problems . In PODS , 2011 .
+[ 24 ] D . E . Knuth . The Art of Computer Programming , Vol 2 ,
+Seminumerical Algorithms . Addison Wesley , 1st edition , 1968 .
+[ 25 ] J . Misra and D . Gries . Finding repeated elements . Technical report ,
+Cornell University , 1982 .
+[ 26 ] M . Monemizadeh and D . P . Woodruff . 1 pass relative error lp sampling with applications . In Proc . 21st ACM SIAM Symposium on Discrete Algorithms . ACM SIAM , 2010 .
+[ 27 ] E . Ohlsson . Sequential poisson sampling . J . Official Statistics ,
+14(2):149–162 , 1998 .
+[ 28 ] M . Osborne . Facebook Reach and Frequency Buying , October 2014 . http://citizennet.com/blog/2014/10/01/ facebook reach and frequency buying/ .
+[ 29 ] B . Rosén . Asymptotic theory for successive sampling with varying probabilities without replacement , I . The Annals of Mathematical Statistics , 43(2):373–397 , 1972 .
+[ 30 ] Y . Tillé . Sampling Algorithms . Springer Verlag , New York , 2006 .
+168

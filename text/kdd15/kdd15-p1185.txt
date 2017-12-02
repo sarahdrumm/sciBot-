@@ -1,0 +1,361 @@
+Scaling Up Stochastic Dual Coordinate Ascent
+Kenneth Tran
+Microsoft one@kentran.net
+Saghar Hosseini
+University of Washington saghar@uw.edu
+Lin Xiao Microsoft linxiao@microsoftcom
+Thomas Finley
+Microsoft tfinley@microsoft.com
+Mikhail Bilenko
+Microsoft mbilenko@microsoft.com
+ABSTRACT Stochastic Dual Coordinate Ascent ( SDCA ) has recently emerged as a state of the art method for solving large scale supervised learning problems formulated as minimization of convex loss functions . It performs iterative , randomcoordinate updates to maximize the dual objective . Due to the sequential nature of the iterations , it is typically implemented as a single threaded algorithm limited to inmemory datasets . In this paper , we introduce an asynchronous parallel version of the algorithm , analyze its convergence properties , and propose a solution for primal dual synchronization required to achieve convergence in practice . In addition , we describe a method for scaling the algorithm to out of memory datasets via multi threaded deserialization of block compressed data . This approach yields sufficient pseudo randomness to provide the same convergence rate as random order in memory access . Empirical evaluation demonstrates the efficiency of the proposed methods and their ability to fully utilize computational resources and scale to out of memory datasets .
+1 .
+INTRODUCTION
+Efficient linear learning techniques are essential for training accurate prediction models in big data business critical applications . Examples of such applications include text classification , click probability estimation in online advertising , and malware detection . In these domains , dimensionality of representation induced by key predictive features is very high : for word n grams , user IPs , advertisement IDs , and file signatures , many millions and billions of possible values exist .
+Despite high overall dimensionality , examples in such domains are typically very sparse with few non zero features encoded directly or via feature hashing . This results in computationally cheap prediction , making linear models a popular choice for high throughput applications . For additional accuracy gains , linear models can be extended via polynomial expansions explicitly or implicitly [ 2 ] .
+While training linear models has been a well studied area of machine learning and optimization for decades , in recent years , a number of advances in stochastic gradient methods have considerably advanced the state of the art . In particular , Stochastic Dual Coordinate Ascent ( SDCA ) has emerged as a highly competitive algorithm due to its combination of excellent performance on benchmarks , lack of learning rate to tune , and strong convergence guarantees [ 19 , 9 , 22 ] .
+SDCA is a primal dual optimization algorithm that requires sequential random order access to training examples . The per example iterative nature of the coordinate updates effectively results in SDCA being a single threaded in memory algorithm , which limits its scalability to very large training sets , and underutilizes modern hardware with commonly available multiple CPU cores .
+This paper addresses the problem of scaling SDCA to modern multi core hardware and large out of memory datasets . First , we introduce a basic asynchronous parallelization scheme for SDCA , A SDCA , and prove that it retains the fast linear convergence guarantees of single threaded SDCA to a certain suboptimality level . We observe that a naive implementation of the algorithm routinely fails to achieve asymptotic convergence to optimal values due to lack of synchronization between primal and dual updates , and propose a modified version of the algorithm , Semi asynchronous SDCA ( SA SDCA ) , which periodically enforces primal dual synchronization in a separate thread , which empirically results in convergence .
+Our second contribution is a method for scaling SDCA to out of memory datasets . Our approach departs from previous algorithms for out of memory learning that rely either on repeated same order streaming through examples , or repeated iterations through individual blocks , neither of which is suitable for SDCA . Instead , we propose a blockcompressed binary deserialization scheme that includes indexing for random block access , while supporting randomorder within block iteration . By offloading decompression and disk I/O to separate threads , the proposed method provides efficient access to data in pseudo random order , which empirically is shown to provide similar convergence behavior as truly random order access .
+We empirically demonstrate that proposed techniques result in significant speedups and full hardware utilization , as well as the ability to train on out of memory datasets effectively . Extensive comparisons on multi gigabyte datasets demonstrate strong gains over existing state of the art implementations , setting a new high bar for large scale supervised learning .
+1185 2 . PRELIMINARIES We consider regularized empirical loss minimization of linear predictors . Let x1 , . . . , xn ∈ Rd be the feature vectors of n training examples , and w ∈ Rd be a weight vector which generates linear predictions wT xi for i = 1 , . . . , n . In addition , let φi : R → R be a convex loss function associated with linear prediction wT xi . Our goal is to minimize the following regularized empirical loss
+P ( w ) =
+1 n
+φi(wT xi ) +
+||w||2 2 ,
+λ 2
+( 1 ) n i=1 where λ > 0 is a regularization parameter . This formulation is used in many well known classification and regression problems . For binary classification , each feature vector xi is associated with a label yi ∈ {±1} . We obtain linear SVM ( without the bias term ) by using the hinge loss φi(a ) = max{0 , 1−yia} , and regularized logistic regression is obtained by setting φi(a ) = log(1 + exp(−yia) ) . For linear regression problems , each xi is associated with a response yi ∈ R , and we use φi(a ) = ( a − yi)2 .
+Our methods described in this paper can be readily extended to work with a more general formulation , that is , we can replace ( λ/2)w2 2 with a general convex regularizer g(w ) . For example , g(w ) = λw1 or g(w ) = λ1w1 + ( λ2/2)w2 2 . Details for handling such more general regularizations can be found in [ 17 ] . Here we focus on the 2 regularization for clarity and simplicity . dual problem of ( 1 ) . More specifically , let φ∗ the convex conjugate of φi , ie , φ∗ The dual problem is to maximize the dual objective
+The Stochastic Dual Coordinate Ascent ( SDCA ) solves a i : R → R be i ( u ) = maxa(u· a− φi(a) ) . n i=1
+D(α ) =
+1 n
+−φ i ( −αi ) − λ ∗ 2 flflflfl 1
+λn n i=1 flflflfl2
+2
+αixi
+.
+( 2 )
+Notice that α ∈ Rn and each dual variable αi is associated with a different example in the training set . At each iteration of SDCA , a dual coordinate is chosen uniformly at random and D(α ) is maximized with respect to that coordinate while the rest of the dual variables are not modified .
+Let w(cid:63 ) = arg min P ( w ) and α(cid:63 ) = arg min D(α ) be the primal and dual optimal solutions respectively . If we define n i=1 w(α ) =
+1 λn
+αixi ,
+( 3 ) then w(cid:63 ) = w(α(cid:63 ) ) and P ( w(cid:63 ) ) = D(α(cid:63) ) . We say the solution w ∈ Rd is εP sub optimal if the primal sub optimality P ( w ) − P ( w∗ ) is less than εP . 2.1 Smoothness Assumptions
+In this section , we introduce some typical smoothness assumptions on the convex losses φi , and explain its implications for the dual function defined in ( 2 ) . Throughout this paper , we use · to denote the Euclidean norm · 2 .
+Definition 1 . A function φi is called L Lipschitz continuous if there exists a positive constant L such that for all a , b ∈ R ,
+|φi(a ) − φi(b)| ≤ La − b .
+( 4 )
+Definition 2 . A function φi is ( 1/γ) smooth if it is differentiable and its derivative is ( 1/γ) Lipschitz continuous , ie , for all a , b ∈ R , we have
+|∇φi(a ) − ∇φi(b)| ≤ 1 γ a − b .
+( 5 )
+For convex functions , this is equivalent to φi(a ) ≤ φi(b ) + ( a − b)T∇φi(b ) +
+1 2γ
+||a − b||2 .
+( 6 )
+If φi is ( 1/γ) smooth , then its convex conjugate φ∗ i is γstrongly convex ( see , eg , [ 8] ) . That is , for all u , v ∈ R and s ∈ [ 0 , 1 ] , we have
+−φ i ( su + ( 1 − s)v ) ≥ −sφ ∗ i ( u ) − ( 1 − s)φ ∗
+∗ i ( v ) ||u − v||2 .
+( 7 )
+γis(1 − s )
++
+2
+If φi is ( 1/γ) smooth , then we define the condition number
+κ :=
+1 λγ
+,
+( 8 ) which is a key quantity in characterizing the complexity of optimization algorithms . For example , it is shown in [ 19 ] that the number of iterations of the SDCA algorithm to find a w ∈ Rd such that P ( w ) − P ( w(cid:63 ) ) ≤ ( with high probability ) is O((n + κ ) log(1/ ) ) . 2.2 Characterizing Sparse Datasets
+Many popular machine learning problems are represented by very sparse datasets . Specifically , in datasets where the number of examples n and dimensionality d in problem ( 1 ) can be very large , the number of non zero elements in the feature vectors xi ∈ Rd can be relatively small . Here we give a formal characterization of sparse datasets , following the model used in Hogwild! [ 13 ] .
+We can construct a hypergraph G = ( V , E ) representing the sparsity patterns in the dataset . The hypergraph ’s vertex set is V = {1 , . . . , d} , with each vertex v ∈ V denoting an individual coordinate in the space of feature vectors ( Rd ) . Each hyper edge e ∈ E represents a training example , which covers a subset of vertices indicating its nonzero coordinates.Since |E| = n , we can also label the hyper edges by i = 1 , . . . , n .
+Several statistics can be defined for the hyper graphs G . The first one characterizes the maximum size of the hyper edges , or number of non zero elements in an example :
+Ω := max e∈E
+|e| .
+( 9 )
+The next one bounds the maximum fraction of edges that covers any given vertex :
+˜∆ := max1≤v≤n |{e ∈ E : v ∈ e}|
+|E|
+,
+( 10 ) which translate into the maximum frequency of appearance of any feature in the training examples . We also define
+ρ := maxe∈E |{ˆe ∈ E : ˆe ∩ e = Ø}|
+|E|
+,
+( 11 ) which is the maximum fraction of edges that intersect any given edge , and can serve as a measure of sparsity of the hypergraph .
+1186 Algorithm 1 : A SDCA ( on each processor )
+1 repeat 2 sample i ∈ {1 , . . . , n} uniformly at random and let e denote the corresponding hyper edge 2 ||w + 1 read current state w and αi ∆αi = arg max ∆αi i ( −αi − ∆αi)− λn
+( −φ∗
+λn ∆αixi||2 )
+3
+4
+5
+6
+7
+αi ← αi + ∆αi for v ∈ e do wv ← wv + 1
+λn ∆αixi,v end
+8 9 until stop
+3 . PARALLELIZING SDCA
+In this section , we first describe an asynchronous parallel SDCA algorithm ( A SDCA ) based on a shared memory model with multiple processors ( threads ) . Convergence analysis of A SDCA shows that it exhibits fast linear convergence before reaching a dataset dependent suboptimality level , beyond which it may not converge asymptotically to the optimal parameter values . A study of the algorithm ’s empirical performance revealed that asynchronous updates of primal and dual are problematic , leading us to derive a semi asynchronous SDCA technique ( SA SDCA ) , in which periodic synchronization of the primal and dual variables allow satisfying equation ( 3 ) , and empirically result in convergence to optimal values demonstrated in Section 5 .
+Suppose we have a shared memory computer with m processors ( threads ) . Each processor has read and write access to a state vector w ∈ Rd stored in shared memory . In the A SDCA algorithm , each processor follows the procedure shown in Algorithm 1 . In line 7 , wv and xi,v denote the components of weight vector w and training example xi , respectively , indexed by v ∈ {1 , . . . , d} .
+When there is only one processor ( thread ) , Algorithm 1 is equivalent to the sequential SDCA algorithm in [ 19 ] . For multiple processors , each operation in Algorithm 1 can be considered a local event that occurs asynchronously across processors . In particular , the dual update computation in line 4 of Algorithm 1 takes the bulk of computation time during each loop execution , and may take each processor a different amount of time to complete . As a result , when a particular processor updates components of w in the shared memory ( lines 6 8 ) , the component wv on the right hand side of line 7 may be different from the one read in line 3 ( which was used to compute the update ∆αi ) . Despite this asynchronicity , we assume the component wise addition in line 7 is atomic .
+In order to analyze the performance of Algorithm 1 , we define a global iteration counter t = 0 , 1 , 2 , . . We increase t by 1 whenever some component of w in the shared memory is updated by a processor . Thus , line 7 of Algorithm 1 can be written as : w(t+1 ) v
+= v + 1
+λn ∆αk(t ) i w(t ) w(t ) v xi,v if v ∈ e otherwise
+( 12 ) where k(t ) denotes the time at which line 3 of Algorithm 1 was executed ( with k(t ) ≤ t ) . The formula ( 12 ) assumes the operations in lines 6 8 of Algorithm 1 are indivisible ( or simultaneous ) , when the global event counter t is incremented .
+If this cannot be guaranteed in the implementation , we can still analyze a modified version where the for loop in lines 6 8 is replaced by updating a single v ∈ e , picked randomly from the set e ( of nonzero feature coordinates ) .
+In terms of the global counter t , computation of dual up date ∆αk(t ) i
+∆αk(t ) i = arg max ∆αi
+−φ∗ in line 4 can be written as : i −∆αi)− λn i ( −αk(t )
+||wk(t)+
+1 λn
+2
+∆αixi||2
+.
+We assume that dual variables remain fixed :
+α(t ) i = αk(t ) i
+, for all i ∈ {1 , . . . , n} and all t ≥ 0 . allowing the dual update in line 5 to be consistent : i ← α(t ) α(t+1 ) i + ∆αk(t ) i = αk(t ) i + ∆αk(t ) i
+.
+This requires that no more than one processor can work on the same example i . It can be easily guaranteed by partitioning the datasets into m subsets S1 , . . . , Sm ⊂ {1 , . . . , n} , and each processor p only works on random samples from the local subset Sp , for p = 1 , . . . , m .
+We assume that the lag between the read and write operations at each processor is bounded , ie , there is a constant τ such that t − k(t ) ≤ τ , for all t ≥ 0 .
+( 13 )
+Another assumption we make is that the updates ∆αi are always bounded , ie , there is a constant M > 0 such that
+|∆α(t ) i
+| ≤ M , for all i ∈ {1 , . . . , n} and all t ≥ 0 .
+( 14 )
+Based on the above assumptions , the following theorem describes the behavior of the A SDCA algorithm ( see proof in Appendix A ) :
+Theorem 3 . Suppose each loss function φi is convex and ( 1/γ) smooth , and we initialize the shared state by α(0 ) = 0 and w(0 ) = w(α(0) ) . Let the sequence of w(t ) and α(t ) be generated by Algorithm 1 , indexed by the global iteration counter t . If
+εP > K(n + κ)(2 + n + κ ) , where κ = 1/(λγ ) and
+ΩM 2ρτ
+1 + 3λnγ
+K =
+, then we have E[P ( w(T ) ) − D(α(T ) ) ] ≤ εP whenever
+λn(1 + λnγ )
+2Ωρτ + n
+T ≥ ( n + κ ) log(
+( n + κ)(1 − K(n + κ ) )
+εP − K(n + κ ) ( 2 + n + κ )
+) .
+Here τ and M are the constants in equations ( 13 ) and ( 14 ) respectively , and Ω and ρ are the statistics of hypergraph as defined in ( 9 ) and ( 11 ) respectively .
+The theorem proves that the A SDCA algorithm enjoys a fast linear convergence up to suboptimality level K(n + κ)(2 + n + κ ) . This suboptimality level depends on the sparsity parameters Ω and ρ of the dataset , as well as the lag τ , which usually grows with the number of processors m .
+With a single processor , when Algorithm 1 reduces to the sequential SDCA method , there is no the lag between the iteration counter : τ = 0 . Consequently , K = 0 and theorem yields the rate previously proven for sequential SDCA in [ 19 ] . √ In the multiple processor case , consider the typical setting with λ ∼ 1/ n . Since the smoothness parameter γ can be
+1187 Figure 1 : Performance of A SDCA on two different datasets . Left : KDD 2010 data . Right : KDD 2012 data . The datasets are summarized in Table 1 . Log log scale is used to illustrate the super polynomial convergence of sequential SDCA . regarded as a constant , we have κ = 1/(λγ ) ∼ √ case , the suboptimality level scales as
+K(n + κ)(2 + n + κ ) ∼ ( ΩM ρτ )2n + ΩM 2ρτ n n . In this √
+To make the result in Theorem 3 meaningful , we need the suboptimality level be a small constant , which requires
+Ωρτ = O(1/
+√ n ) .
+Algorithm 2 : Semi asynchronous SDCA ( SA SDCA )
+1 . Run m SDCA threads to update weights and dual vectors in shared memory per Algorithm 1 .
+2 . Every k parallel epochs ( k × m effective epochs ) , i=1 αixi in a separate recompute wsync ← 1 thread , and replace w in shared memory with wsync .
+λn n
+This condition can be satisfied by many sparse datasets . When this condition is not satisfied , A SDCA algorithm may fail to converge to desired suboptimality gap , degrading generalization accuracy .
+This is illustrated in Figure 1 that shows the performance of A SDCA on two large datasets . For the KDD 2010 dataset , convergence suboptimality gap degrades gracefully when the number of threads ( hence the lag τ ) increases . For the KDD 2012 dataset , increasing the number of threads beyond one leads to convergence at a high suboptimal gap , failing to improve after the first epoch .
+Our analysis of empirical results revealed that the primary reason that A SDCA does not converge asymptotically to the optimal solution is that , due to the asynchronous updates , the following primal dual relation does not hold in general : n w(t ) =
+1 λn
+α(t ) i xi ,
+( 15 ) case . As a result , we observe the updateflflw(t)− 1 which , by contrast , always holds in the sequential ( 1 thread ) i=1 α(t ) n i=1
+λn i xi not converging in the asynchronous case .
+The above observation motivates us to propose a semiasynchronous SDCA method , SA SDCA , described in Algorithm 2 , which is the primary contribution of this paper . We solve the above problem by periodically forcing the synchronization of the primal and dual variables to enforce their correspondence in Eq ( 15 ) .
+Note that in Algorithm 2 , the synchronization thread that computes wsync does not block the SDCA threads . Instead , it consumes a dynamically updated most recent version of
+α during the computation of wsync , allowing full utilization of CPU at all times . In experiments described in Section 5 , we observe nearly linear speed ups and convergence in both suboptimality gap and holdout set error accuracy , empirically demonstrating the effectiveness of SA SDCA .
+4 . OUT OF MEMORY SCALING
+While the previous section has proposed an attractive asynchronous parallelization of SDCA with strong theoretical guarantees , the assumption of random access to examples implies that the dataset is sufficiently small to reside in memory . The growth of modern industrial datasets to tens of gigabytes and higher , however , invites a technique for efficiently providing high speed random order access to diskbased datasets . This section introduces such a technique based on decoupling the data input interfaces , and implementing them for disk based data with block wise compression and indexing on top of multi threaded , buffered I/O .
+The basis for the proposed method is a block compressed binary format with indexing that provides random order access to blocks . Examples in the dataset are partitioned into equal sized blocks . Random order block access is provided by an offset table , with within block random access provided by upfront decompression of the block upon access .
+The algorithm consumes data via an abstraction of an iterator over shuffled examples . This shuffling is not truly uniform , as it involves two dependent levels on randomness : blocks are read from disk in uniformly random order , fol flfl
+212223242526Effective number of passes10 710 610 510 410 310 210 1Primal sub optimalityKDD 20101 threads2 threads4 threads7 threads21222324Effective number of passes10 410 310 210 1Primal sub optimalityKDD 20121 threads2 threads4 threads7 threads1188 lowed by random order iteration over examples in the block . Threading is orchestrated to coordinate reading compressed blocks from disk with simultaneous decompression and with consumption of examples by the learning algorithm .
+Without compression this process is heavily I/O bound , hence compression provides better balancing of available CPU cores and disk throughput . Because I/O and decompression threads do not perform floating point computations , on modern hyper threaded hardware these threads do not interfere with the training threads described in the previous section .
+Zlib compression [ 6 ] works well as it minimizes CPU costs while achieving high compression rates for typical datasets . Furthermore , we note that reduction in data size with compression may result in file size that effectively leads to inmemory reading due to disk caching .
+The user chooses the count of examples per block when writing the file . For performant shuffling , this choice should ideally balance some practical considerations : blocks should be large enough that seeks do not dominate I/O and compute time , but small enough that decompressed blocks fit within L3 cache , so that each access of an example in a block is a cache hit .
+We note that this approach of a block partitioned dataset shares motivation with earlier work on out of memory SVM training [ 24 ] . Despite some similarities , there are two key distinctions between approaches . First , the approach above performs complete streaming pass over the data , whereas [ 24 ] loads makes multiple passes over each block loaded into memory . The second key difference that we are plugging our shuffling example iterator into an existing SDCA learner with a general data access interface , not proposing a new learner coupled to a particular storage format . In contrast , earlier work was centered around devising a novel block minimization framework that could perform SVM training when only a subset of the dataset was available in memory at any given time .
+5 . EXPERIMENTAL RESULTS
+We present an experimental study of the proposed meth ods covering three areas :
+• Effects of parallelizing SDCA on convergence • Performance and convergence for out of memory train ing and impact of pseudo shuffling
+• Comparisons with leading linear learners .
+All experimental results were obtained by optimizing the logistic loss . For convergence analysis experiments , we used L2 parameters ( λ ) that give best generalization accuracy as measured on held out test sets . Optimum loss values were obtained by running single threaded SDCA sufficiently long for between iterations improvement to be within single floating point precision . For each setting , experiments were repeated 5 times using different random seeds .
+Datasets used in this section are summarized in Table 1 . We note that all datasets are multi gigabyte in size and very sparse . For KDD 2010 [ 21 ] , we used the featurized version on LibSVM website . For KDD 2012 [ 14 ] and Criteo [ 5 ] , we performed a random 90/10 train test split on the publicly available train sets ( hosted by Kaggle ) , preprocessing categorical features by hashing using 25 hash bits .
+Dataset
+KDD 2010 KDD 2012 Criteo
+#Examples Dimension #Features 19.3 × 106 0.6 × 109 1.4 × 109 33.6 × 106 41.8 × 106 1.5 × 109
+29.9 × 106 33.6 × 106 5.6 × 106
+Table 1 : Datasets summary . The #Features column denotes the total number of non zero features .
+5.1 Convergence of SA SDCA
+In this section , we analyze empirical convergence and scaling properties , as well as accuracy , of SA SDCA . Experiments were performed on a hyper threaded machine with 8 physical cores , hence we investigated parallelization up to 7 threads , reserving one thread for loss computation and periodic primal dual syncing .
+Figure 2 demonstrates that on sparse datasets , SA SDCA algorithm converges as quickly as the baseline sequential SDCA for a given effective number of passes over data . AUC curves on bottom most sub figures show that results with respect to hold out error mirror those for suboptimality , with near linear scaling for both with respect to the number of threads . 5.2 Out of memory training
+In next set of experiments , we investigate the effectiveness of the technique proposed in Section 4 for out of memory training . Figure 3 contains results for no shuffling ( other than once before training ) , uniform random , and pseudorandom shuffling , yielding several interesting observations . First , we note that while pseudo random shuffling ’s convergence rate lags that of true random shuffling , it significantly outperforms not shuffling while still allowing diskbased training .
+More importantly , per iteration , out of memory training is actually faster computationally than standard in memory training . This is due to two reasons : first , for some datasets , the block compressed data reduced physical dataset footprint enough to be at least partially cached in memory by the operating system , which reduces disk access penalties after the initial iteration . Second , block based shuffling strategy has better higher level cache efficiency than the uniformly random shuffling scheme , resulting in faster wall clock performance . 5.3 Comparison with Alternatives
+In this subsection , we compare SA SDCA with leading linear learning implementations detailed below . It is important to emphasize that comparing different software implementations of learning algorithms is inherently difficult , and we tried our best to ensure fairness . To this end , we ran a random hyper parameter search [ 3 ] for all competing algorithm over 50 trials on a homogeneous cluster of nodes with 6 core 2.5GHz CPUs and 48GB of RAM ( except for LibLinear as noted below ) . The following learners were compared :
+• LBFGS : a highly tuned implementation of limited memory
+BFGS [ 11 ] , a batch quasi Newton method , parallelized over 5 threads , swept for memory size and convergence tolerance ;
+• SGD1 : an implementation of Stochastic Gradient Descent , highly tuned following [ 4 ] , swept for initial learning rate and convergence tolerance ;
+1189 Figure 2 : Convergence of SA SDCA for different number of threads . Left : results on KDD 2010 data . Right : results on KDD 2012 data . Top and middle : primal sub optimality vs . effective number of passes and training time , bottom : area under ROC curve for holdout set . Log log scale for top plots illustrates the super polynomial convergence rate of the SA SDCA
+• SGD5 : asynchronous parallel SGD ( Hogwild ) with 5 threads , swept as SGD1 ;
+• SDCA1 : our sequential SDCA implementation , swept for convergence tolerance ;
+• VW : Vowpal Wabbit [ 1 ] toolkit ( SGD and L BFGS ) , swept per authors’ suggestions for number of passes , initial learning rate ( for SGD ) , and learning rate adaptation power .
+• SDCA5 : SA SDCA with 5 threads , swept as SDCA1 ; • LIBLIN : LibLinear toolkit [ 25 ] implementation of SDCA1 , swept by one of its authors on different hardware with comparable characteristics ;
+For all methods , the same loss function ( log loss ) and L2 regularization parameters were used . LBFGS and LIBLIN required loading datasets into memory , while the rest were streaming , with SGD1 , SGD5 , SDCA1 , and SDCA5 using the out of memory pseudo shuffling described in section 4 . For each learner , we select top 20 AUC results , shown in Fig
+212223242526Number of passes10 710 610 510 410 310 210 1Primal sub optimalityKDD 20101 threads2 threads4 threads7 threads212223242526Number of passes10 710 610 510 410 310 210 1Primal sub optimalityKDD 20121 threads2 threads4 threads7 threads0100200300400500Training time ( s)10 710 610 510 410 310 2Primal sub optimality1 threads2 threads4 threads7 threads010002000300040005000Training time ( s)10 510 410 310 2Primal sub optimality1 threads2 threads4 threads7 threads050100150200250300Training time ( s)08440846084808500852085408560858AUC1 threads2 threads4 threads7 threads0100020003000400050006000Training time ( s)07600765077007750780078507900795AUC1 threads2 threads4 threads7 threads1190 Figure 3 : Convergence of SDCA for different shuffling options . ure 4 , with the right panel zooming into the top performance quadrant indicated by dotted lines in the left panel .
+These results demonstrate that our baseline sequential SDCA implementation is competitive with LibLinear , while both outperform VW and L BFGS . The difference confirms that SDCA demonstrates faster convergence than primal methods , and that dataset reshuffling between iterations is essential for learning optimal parameters . The results also show that SA SDCA effectively speeds up sequential SDCA by fully utilizing computing resources of modern multi core processors .
+6 . RELATED WORK
+Recent attention to dual coordinate descent methods was brought by [ 9 ] , who have shown that they allow achieving linear convergence rates for large scale linear SVM problems . More generally , [ 19 ] proposed and analyzed SDCA method for regularized risk minimization in which a significantly better convergence rate than the commonly used Stochastic Gradient Descent ( SGD ) methods was proven . In related work , [ 16 ] proposed Stochastic Average Gradient ( SAG ) method for smoothed convex loss functions , which also achieves linear convergence while preserving the iteration complexity of SGD methods , but also requires careful selection of learning step size . In a more general setting , an accelerated variant of SDCA was proposed in [ 20],with superior performance achieved for a sufficient condition number .
+In order to addresses the problem of scaling these methods to modern multi core hardware systems , a number of synchronous parallel algorithms were introduced in recent years , which assume distributed computation across multiple nodes [ 15 , 26 , 26 , 23 ] . In [ 7 , 13 , 12 ] , the sparsity has been utilized to develop asynchronous parallel coordinate descent and stochastic gradient type algorithms . In particular , the Hogwild! framework of [ 13 ] provided inspiration for the ASDCA algorithm in Section 3 , from which our SA SDCA method is derived .
+In both [ 13 ] and [ 12 ] , it is assumed that there is a bound on the lag between when a processor reads w and the time when this processor makes its update to a single element of w . Moreover , it was shown that a near linear speedup on a multi core system can be achieved if the number of processors is O(n1/4 ) . Despite this attention , very little work exists on scaling up dual coordinate ascent . [ 18 ] have considered the mini batch approach , where updates are computed on example subsets and aggregated collectively . Experimental evaluation has shown that mini batches slow down convergence , inviting the use of either Nesterov acceleration or approximate Newton step .
+In more recent work , [ 10 ] have considered a data distributed variant of SDCA , named CoCoA , where a master node aggregates updates computed by multiple worker machines on local examples . Results reported in [ 10 ] on relatively small datasets do not appear competitive , however . For RCV1 , a common text classification benchmark , CoCoA is reported to take 300 seconds on an 8 node cluster to reach the pri
+2122232425Number of passes10 610 510 410 310 210 1Primal sub optimalityKDD 2010No shufflingPseudo shufflingTrue shuffling212223242526Number of passes10 610 510 410 310 210 1Primal sub optimalityKDD 2012No shufflingPseudo shufflingTrue shuffling0100200300400500600700Training time ( s)10 610 510 410 310 210 1Primal sub optimality0100020003000400050006000700080009000Training time ( s)10 610 510 410 310 210 1Primal sub optimality1191 Figure 4 : Comparison results . Left : Total run time ( in seconds ) and AUC of top 20 candidates from each learner . Right : larger display of the dotted region in the left plots . Top : results on KDD 2010 data . Middle : results on KDD 2012 data . Bottom : results on Criteo data .
+010002000300040005000Run Time080081082083084085086AUCKDD 2010LBFGS : LBFGS using 5 threadsLIBLIN : LibLinearSDCA1 : Sequential SDCASDCA5 : Semi Async SDCA using 5 threadsSGD1 : Sequential SGDSGD5 : Hogwild SGD using 5 threadsVW : Vowpal Wabbit020040060080010001200140016001800Run Time0846084808500852085408560858AUCKDD 2010 zoomed010002000300040005000600070008000Run Time073074075076077078079080081AUCKDD 201205001000150020002500300035004000Run Time07800785079007950800AUCKDD 2012 zoomed010002000300040005000Run Time0765077007750780078507900795AUCCriteo05001000150020002500Run Time0784078507860787078807890790AUCCriteo zoomed1192 [ 11 ] D . C . Liu and J . Nocedal . On the limited memory bfgs method for large scale optimization . Mathematical programming , 45(1 3):503–528 , 1989 .
+[ 12 ] J . Liu , S . J . Wright , C . R´e , V . Bittorf , and S . Sridhar . An asynchronous parallel stochastic coordinate descent algorithm . In Proceedings of the 31st ICML , 2014 .
+[ 13 ] F . Niu , B . Recht , C . R´e , and S . J . Wright . Hogwild : A lock free approach to parallelizing stochastic gradient descent . In In NIPS , 2011 .
+[ 14 ] Y . Niu , Y . Wang , G . Sun , A . Yue , B . Dalessandro ,
+C . Perlich , and B . Hamner . The tencent dataset and kdd cup’12 . In KDD Cup Workshop , 2012 .
+[ 15 ] P . Richt´arik and M . Tak´aˇc . Distributed coordinate descent method for learning with big data . arXiv preprint arXiv:1310.2059 , 2013 .
+[ 16 ] N . L . Roux , M . Schmidt , and F . R . Bach . A stochastic gradient method with an exponential convergence rate for finite training sets . In NIPS . 2012 .
+[ 17 ] S . Shalev Shwartz and T . Zhang . Proximal stochatic dual coordinate ascent . arXiv:1211.2772 , November 2012 .
+[ 18 ] S . Shalev Shwartz and T . Zhang . Accelerated mini batch stochastic dual coordinate ascent . In NIPS , pages 378–385 , 2013 .
+[ 19 ] S . Shalev Shwartz and T . Zhang . Stochastic dual coordinate ascent methods for regularized loss minimization . Journal of Machine Learning Research , 14:567–599 , 2013 .
+[ 20 ] S . Shalev Shwartz and T . Zhang . Accelerated proximal stochastic dual coordinate ascent for regularized loss minimization . In Proceedings of the 31st ICML , pages 1–41 , 2014 .
+[ 21 ] Stamper , Niculescu Mizil , Ritter , Gordon , and
+Koedinger . Bridge to algebra 2006 2007 challenge data set from kdd cup 2010 educational data mining challenge , 2010 .
+[ 22 ] T . Suzuki . Stochastic dual coordinate ascent with alternating direction method of multipliers . In Proceedings of the 31st ICML , pages 736–744 , 2014 . [ 23 ] T . Yang . Trading computation for communication :
+Distributed stochastic dual coordinate ascent . In NIPS , pages 629–637 , 2013 .
+[ 24 ] H F Yu , C J Hsieh , K W Chang , and C J Lin .
+Large linear classification when data cannot fit in memory . ACM Transactions on Knowledge Discovery From Data , pages 1–23 , 2012 .
+[ 25 ] H F Yu , F L Huang , and C J Lin . Dual coordinate descent methods for logistic regression and maximum entropy models . Machine Learning , 85(1 2):41–75 , 2011 .
+[ 26 ] Y . Zhang , M . J . Wainwright , and J . C . Duchi .
+Communication efficient algorithms for statistical optimization . In NIPS , pages 1502–1510 , 2012 . mal sub optimality of 10−4 . In contrast , it takes the singlethreaded SDCA implementation that is our baseline approximately 5 seconds to reach the same suboptimality level .
+7 . CONCLUSIONS AND FUTURE WORK We have described , analyzed and evaluated two techniques for scaling up Stochastic Dual Coordinate Ascent ( SDCA ) to large datasets : asynchronous updates with primal dual synchronization , and pseudo random iteration via indexed , block compressed serialization . Empirical results demonstrate strong performance in comparison to existing stateof the art software for linear learning . This work yields a new state of the art baseline for single node linear learning , and invites an investigation of combining the method with distributed learning approaches . Further investigation into pseudo random access is another interesting direction for further research , calling for theoretical analysis of convergence implications of imperfect randomness , and investigating alternative designs , such as the use of quasi random ( lowdiscrepancy ) sequences , that could yield random quality convergence with even higher throughput .
+8 . ACKNOWLEDGMENTS
+Authors wish to thank Wei Sheng Chin for assistance with computing LibLinear baseline results , and John Langford and Paul Mineiro for Vowpal Wabbit hyper parameter suggestions .
+9 . REFERENCES [ 1 ] A . Agarwal , A . Beygelzimer , D . J . Hsu , J . Langford , and M . J . Telgarsky . Scalable non linear learning with adaptive polynomial expansions . In NIPS , 2014 .
+[ 2 ] A . Agarwal , O . Chapelle , M . Dud´ık , and J . Langford .
+A reliable effective terascale linear learning system . The Journal of Machine Learning Research , 15(1):1111–1133 , 2014 .
+[ 3 ] J . Bergstra and Y . Bengio . Random search for hyper parameter optimization . The Journal of Machine Learning Research , 13(1):281–305 , 2012 .
+[ 4 ] L . Bottou . Stochastic gradient descent tricks . In
+Neural Networks : Tricks of the Trade , pages 421–436 . Springer , 2012 .
+[ 5 ] O . Chapelle et al . http://labscriteocom/downloads/2014 kaggle displayadvertising challenge dataset
+[ 6 ] P . Deutsch and J L Gailly . Zlib compressed data format specification version 33 Technical report , RFC 1950 , May , 1996 .
+[ 7 ] J . Duchi , M . Jordan , and B . McMahan . Estimation , optimization , and parallelism when data is sparse . NIPS , pages 1–9 , 2013 .
+[ 8 ] J B Hiriart Urruty and C . Lemar´echal . Fundamentals of Convex Analysis . Springer , Berlin , 2001 .
+[ 9 ] C J Hsieh , K W Chang , C J Lin , S . S . Keerthi , and S . Sundararajan . A dual coordinate descent method for large scale linear svm . In Proceedings of the 25th ICML , pages 408–415 , 2008 .
+[ 10 ] M . Jaggi , V . Smith , M . Tak´ac , J . Terhorst ,
+S . Krishnan , T . Hofmann , and M . I . Jordan . Communication efficient distributed dual coordinate ascent . In NIPS , pages 3068–3076 , 2014 .
+1193 10 . APPENDIX
+In this appendix , we sketch the proof of Theorem 3 . The proof mainly follows the framework in [ 19 , 17 ] , combined with additional techniques for handling asynchronicity in [ 13 ] . First , we need the following key lemmas , which we prove in a longer report . Lemma 4 . Assume that each φ∗ i is γ strongly convex and s ∈ [ 0 , 1 ] . Then the sequence of w(t ) and α(t ) generated by Algorithm 1 with α(0 ) = 0 satisfy P ( w(t ) ) − D(α(t ) ) E[D(α(t+1 ) ) − D(α(t) ) ] ≥ s n − 1 s 2λ n − ΩM 2ρτ
+E
+)2H t+1
+( 2Ωρτ +
+1 + 2s
+) ,
+( n
+E
+λn i )2
+,
+( u(t ) i − α(t )
+||xi||2 − γ(1 − s)λn s where
+H ( t+1 ) = n i=1
+1 n and −u(t ) i ∈ ∂φi(xT i w(t) ) . and ( 1 − s n )t ≤ e− s n t implies
+E[εt
+D ] ≤ e
+− s n t +
+ΩM 2ρτ n
+( 2Ωρτ +
+1 + 2s
+λn
+) t i=0
+− s n i . e
+( 17 )
+In addition , the last term o the right hand side of ( 17 ) can be bounded using integral test as t
+ˆ n i ≤ 1 + − s e t e
+0
+− s n xdx = 1 + n s
+− n s
+− s n t , e i=0 which implies
+E[εt
+D ] ≤ ΩM 2ρτ n − s n t . e
+If it is desired to have E[εt
+− s n t + e
+ΩM 2ρτ n or equivalently
+( 2Ωρτ +
+( 2Ωρτ +
+1 + 2s
+λn
+)
+1 + n s
+− n s e n t
+− s
++
+( 18 )
+D ] ≤ D then we need − s 1 + 2s
+)
+1 + n t ≤ εD
+− n s e
+λn
+K
+1 +
+1 + λγn
+λγ
++
+1 − K
+1 + λγn
+λγ
+1+λγn t ≤ εD , − λγ e n s
+Moreover , the following observation is presented in [ 19 ] and thus , it is presented here without proof . Lemma 5 . For all α , D(α ) ≤ P ( w∗ ) ≤ P ( 0 ) ≤ 1 and D(0 ) ≥ 0 . where s = λnγ
+1+λnγ and
+K =
+ΩM 2ρτ n
+( 2Ωρτ +
+1 + 3λnγ
+λn(1 + λnγ )
+) .
+Therefore , the dual problem sub optimality is bounded by εD if t ≥ ( n +
+1 λγ
+) log(
+1 − K(n + 1 λγ ) 1 + n + 1 λγ
+εD − K
+) .
+Moreover , the duality gap can be presented as
+E[εt
+E.P ( wt ) − D(αt)fi ≤ n
+E.P ( wt ) − D(αt)fi ≤ ( n + κ)(e s M 2 s ≤ n E[εt s M 2 s
+Based on ( 18 ) and ( 19 ) we have
+D ] +
+D − εt+1
+D ] +
+2 ( Ωρτ )2 +
+1 + 2s
+λn
+( Ωρτ )
+2 ( Ωρτ )2 +
+( Ωρτ )
+.(19 )
+1 + 2s
+λn
+κ+n ( 1 − K(n + κ ) ) + − t
+The proof of our basic results stated in Theorem 3 relies on the boundedness of the expected increase in dual objective from below by the duality gap . Lemma 4 implies that the duality gap can be further lower bounded using dual suboptimality and solved to obtain the convergence of dual objective based on recursion . Note that since , φi is ( 1/γ ) smooth , we can assume that there exist M ∈ R such that φi is locally M 2 Lipshitz continuous and subsequently we have ||∆α||2 ≤ M . Moreover , φ∗ i is γ strongly convex and from Lemma 4 we have
+E.P ( wt ) − D(αt)fi −
+E[D(αt+1 ) − D(αt ) ] ≥ s n 1 2λ ΩM 2ρτ s n
+(
+)2H t+1 − where H t+1 = 1 i=1 n By choosing s = λnγ subsequently n
+) ,
+1 + 2s
+( 2Ωρτ +
+||xi||2 − γ(1−s)λn n 1+λnγ ∈ [ 0 , 1 ] , we have H t+1 ≤ 0 and
+E.(ut E.P ( wt ) − D(αt)fi −
+λn i − αt i)2fi . s
+E[D(αt+1 ) − D(αt ) ] ≥ s n ΩM 2ρτ
+).(16 ) D := D(α∗ ) − D(αt ) ≤ P ( wt ) − D(αt ) and thus we D − εt+1 D = D(αt+1 ) − D(αt ) . Therefore , by using
+Let εt have εt recursion on ( 16 ) , we obtain
+( 2Ωρτ +
+λn n
+1 + 2s where κ = 1/(λγ ) . Moreover , based on 1 − K(n + κ ) < 0 , if
+K(2 + n + κ) ) ,
+K(n + κ)(2 + n + κ ) ≤ εP , then we have
+( n + κ)(e
+κ+n ( 1 − K(n + κ ) ) + K(2 + n + κ ) ) < εP , − t which implies we obtain a duality gap of at most εP whenever
+( n + κ)(1 − K(n + κ ) )
+εP − K(n + κ ) ( 2 + n + κ )
+) .
+E[εt
+D ] ≤ ( 1 − s n ΩM 2ρτ
+)tE[ε0
+D ] +
+( 2Ωρτ +
+1 + 2s
+λn
+) n t ≥ ( n + κ ) log( t i=0
+( 1 − s n
+)i ,
+1194

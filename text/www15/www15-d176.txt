@@ -1,0 +1,380 @@
+A Scalable Asynchronous Distributed Algorithm for
+Topic Modeling
+Hsiang Fu Yu
+Univ . of Texas , Austin rofuyu@csutexasedu
+Cho Jui Hsieh
+Univ . of Texas , Austin cjhsieh@csutexasedu
+Hyokun Yun
+Amazon yunhyoku@amazon.com
+SVN Vishwanathan
+Univ . of California , Santa Cruz vishy@ucsc.edu
+ABSTRACT Learning meaningful topic models with massive document collections which contain millions of documents and billions of tokens is challenging because of two reasons . First , one needs to deal with a large number of topics ( typically on the order of thousands ) . Second , one needs a scalable and efficient way of distributing the computation across multiple machines . In this paper , we present a novel algorithm F+Nomad LDA which simultaneously tackles both these problems . In order to handle large number of topics we use an appropriately modified Fenwick tree . This data structure allows us to sample from a multinomial distribution over T items in O(log T ) time . Moreover , when topic counts change the data structure can be updated in O(log T ) time . In order to distribute the computation across multiple processors , we present a novel asynchronous framework inspired by the Nomad algorithm of [ 25 ] . We show that F+Nomad LDA significantly outperforms recent state of the art topic modeling approaches on massive problems which involve millions of documents , billions of words , and thousands of topics .
+Categories and Subject Descriptors I26 [ Artificial Intelligence ] : Learning—Parameter learning
+General Terms Algorithms , Experimentation
+Keywords Topic Models ; Scalability ; Sampling
+1 .
+INTRODUCTION
+Topic models provide a way to aggregate vocabulary from a document corpus to form latent “ topics . ” In particular , Latent Dirichlet Allocation ( LDA ) [ 3 ] is one of the most
+Copyright is held by the International World Wide Web Conference Committee ( IW3C2 ) . IW3C2 reserves the right to provide a hyperlink to the author ’s site if the Material is used in electronic media . WWW 2015 , May 18–22 , 2015 , Florence , Italy . ACM 978 1 4503 3469 3/15/05 . http://dxdoiorg/101145/27362772741682
+Inderjit S . Dhillon Univ . of Texas , Austin inderjit@csutexasedu popular topic modeling approaches . Learning meaningful topic models with massive document collections which contain millions of documents and billions of tokens is challenging because of two reasons . First , one needs to deal with a large number of topics ( typically on the order of thousands ) . Second , one needs a scalable and efficient way of distributing the computation across multiple machines .
+Unsurprisingly , there have been significant attempts at developing scalable inference algorithms for LDA . To tackle large number of topics , [ 23 ] proposed a clever sparse sampling trick that is widely used in packages like MALLET and Yahoo! LDA . More recently , [ 11 ] proposed using the Alias table method to speed up sampling from the multinomial distribution . At the same time , there has also been significant effort towards distributing the computation across multiple processors . Some early efforts in this direction include [ 22 ] and [ 10 ] , where the basic idea is to partition the documents across processors . During each inner iteration the words in the vocabulary are partitioned across processors and each processor only updates the latent variables associated with the subset of documents and words that it owns . After each inner iteration , a synchronization step is used to update global counts and to re partition the words across processors . In fact , a very similar idea was independently discovered in the context of matrix completion by [ 6 ] and [ 15 ] . However , in the case of LDA we need to keep a global count synchronized across processors which significantly complicates matters as compared to matrix completion . Arguably , most of the recent efforts towards scalable LDA such as [ 16 , 13 ] have been focused on the global count issue either implicitly or explicitly . Recently there is also a growing trend in machine learning towards asynchronous algorithms which avoid bulk synchronization after every iteration . For example , in the context of LDA see the work of [ 1 ] , and in the more general machine learning context see eg , [ 7 , 12 ] .
+In this paper , we propose a new asynchronous distributed topic modeling algorithm called F+Nomad LDA which simultaneously tackles the twin problems of large number of documents and large number of topics . In order to handle large number of topics we use an appropriately modified Fenwick tree . This data structure allows us to sample from a multinomial distribution over T items in O(log T ) time . Moreover , when topic counts change , the data structure can be updated in O(log T ) time . In order to distribute the computation across multiple processors , we present a novel asynchronous framework inspired by the Nomad algorithm of [ 25 ] . While we believe that our framework can handle variable update schedules of many different methods , in this paper we will primarily focus on Collapsed Gibbs Sampling ( CGS ) . Our technical contributions can be summarized as follows : • We identify the following key property of various inference methods for topic modeling : only a single vector of size k needs to be synchronized across multiple processors . • We present a variant of the Fenwick tree which allows us to efficiently encode a multinomial distribution using O(T ) space . Sampling can be performed in O(log T ) time and maintaining the data structure requires only O(log T ) work . • F+Nomad LDA : we propose a novel parallel framework for various types of inference methods for topic modeling . Our framework utilizes the concept of nomadic tokens to avoid locking and conflict at the same time . Our parallel approach is fully asynchronous with non blocking communication , thus leading to good speedups . Moreover , our approach minimizes the staleness of the variables ( at most k variables can be stale ) for distributed parallel computation . • We demonstrate the scalability of our methods by performing extensive empirical evaluation on large datasets which contain millions of documents and billions of words .
+2 . NOTATION AND BACKGROUND
+We begin by very briefly reviewing Latent Dirichlet Allocation ( LDA ) [ 3 ] . Suppose we are given I documents denoted as d1 , d2 , . . . , dI , and let J denote the number of words in the vocabulary . Moreover , let ni denote the number of words in a document di . Let wj denote the j th word in the vocabulary and wi,j denote the j th word in the i th document . Assume that the documents are generated by sampling from T topics denoted as φ1 , φ2 , . . . , φT ; a topic is simply a J dimensional multinomial distribution over words . Each document includes some proportion of the topics . These proportions are latent , and we use the T dimensional probability vector θi to denote the topic distribution for a document di . Moreover , let zi,j denote the latent topic from which wi,j was drawn . Let α and β be hyper parameters of the Dirichlet distribution . The generative process for LDA can be described as follows : 1 . Draw T topics φk ∼ Dirichlet(β ) , k = 1 , . . . , T . 2 . For each document di ∈ {d1 , d2 , . . . , dI} :
+• Draw θi ∼ Dirichlet(α ) . • For j = 1 , . . . , ni
+– Draw zi,j ∼ Discrete(θi ) . – Draw wi,j ∼ Discrete(φzi,j ) .
+Inference
+2.1 The inference task for LDA is to characterize the posterior distribution P r(φi , θi , zi,j | wi,j ) . In the Bayesian setting , we want an efficient way to draw samples from this posterior distribution . Collapsed Gibbs Sampling ( CGS ) [ 8 ] is a popular inference scheme for LDA . Define nz,i,w :=
+I ( zi,j = z and wi,j = w ) ,
+( 1 ) niX j=1 nz,i,∗ =P w nz,i,w , nz,∗,w =P i nz,i,w , and nz,∗,∗ =P where I(· ) is the indicator function . The update rule for CGS can be written as follows i,w nz,i,w ,
+1 . Decrease nzi,j ,i,∗ , nzi,j ,∗,wi,j , and nzi,j ,∗,∗ by 1 . 2 . Resample zi,j according to
+`nzi,j ,i,∗ + αzi,j
+´`nzi,j ,∗,wi,j + βwi,j
+Pr ( zi,j|wi,j , α , β ) ∝ nzi,j ,∗,∗ +PJ j=1 βj
+´
+.
+3 . Increase nzi,j ,i,∗ , nzi,j ,∗,wi,j , and nzi,j ,∗,∗ by 1 .
+( 2 )
+Although in this paper we will focus on CGS , note that there are many other inference techniques for LDA such as collapsed variational Bayes , stochastic variational Bayes , or expectation maximization which essentially follow a very similar update pattern [ 2 ] . We believe that the parallel framework proposed in this paper will apply to this wider class of inference techniques as well . 2.2 Review of Multinomial Sampling Given a T dimensional discrete distribution characterized by unnormalized parameters p with pt ≥ 0 such as in ( 2 ) , many sampling algorithms can be applied to draw a sample z such that Pr(z = t ) ∝ pt . • LSearch : Linear search on p . Initialization : Comt pt . Generation : First generate u = uniform(cT ) , a uniform random number in [ 0 , cT ) , and perform a linear search to find z = min pute the normalization constant cT = P
+“ P n o
+”
+> u t :
+. s≤t ps
+P
+• BSearch : Binary search on c = cumsum(p ) . Initialization : Compute c = cumsum(p ) such that ct = s:s≤t ps . Generation : First generate the cumulated sum u = uniform(cT ) and perform a binary search on c to find z = min{t : ct > u} . • Alias method . Initialization : Construct an Alias table [ 19 ] for p , which contains two arrays of length T : alias and prob . See [ 18 ] for a linear time construction scheme . Generation : First generate u = uniform(T ) , j = u , and
+( z = j + 1 alias[j + 1 ] otherwise if ( u − j ) ≤ prob[j + 1 ]
+.
+See Table 1 for a comparison of the time/space requirements of each of the above sampling methods .
+3 . FENWICK TREE SAMPLING
+In this section , we first describe a binary tree structure F+tree for fast T dimensional multinomial sampling . The initialization of an F+tree is linear in T and the cost to generate a sample is logarithmic in T . Furthermore , F+tree can also be maintained in logarithmic time for a single parameter update of pt . We will explain how such properties of F+tree can be explored to significantly accelerate LDA sampling . 3.1 F+tree Sampling
+F+tree , first introduced for weighted sampling without replacement [ 21 ] , is a simplified and generalized version of Fenwick tree [ 5 ] , which supports both efficient sampling and update procedures . In fact , Fenwick tree can be regarded as a compressed version of the F+tree studied in this paper .
+Table 1 : Comparison of samplers for a T dimensional multinomial distribution p described by unnormalized parameters {pt : t = 1 , . . . , T} .
+LSearch BSearch Alias Method F+tree Sampling
+Data Structure
+Initialization Generation Parameter Update Time Space Space cT = p1 : O(1 ) O(T ) O(1 ) O(T ) O(1 ) c = cumsum(p ) : O(T ) prob , alias : O(T ) O(T ) O(T ) F.initialize(p ) : O(T ) O(T ) O(1 )
+Time O(1 ) O(T ) O(T )
+Time O(T )
+O(log T )
+O(log T )
+O(log T )
+O(1 )
+001
+2.5
+=18+07
+001 u=2.1
+2.5 u≥1.8
+001
+3.5
+=2.5+δ
+010
+011
+1.8
+=03+15
+0.7
+=04+03
+010
+1.8
+011 u=0.3
+0.7 u< 0.4
+010
+1.8
+011
+1.7
+=0.7+δ
+100
+101
+110
+111
+100
+0.3
+= p1
+1.5
+= p2
+0.4
+= p3
+0.3
+= p4
+0.3
+2
+1 4 ( a ) F+tree for p = [ 0.3 , 1.5 , 0.4 , 0.3 ]
+3
+1
+101
+1.5
+2
+110
+0.4
+3
+111
+0.3
+4
+100
+0.3
+1
+101
+1.5
+2
+110
+111
+1.4
+=0.4+δ
+0.3
+3
+4
+( b ) Sampling
+( c ) Updating ( with δ = 1.0 )
+Figure 1 : Illustration of sampling and updating using F+tree in logarithmic time .
+For simplicity , we assume T is a power of 2 . F+tree is a complete binary tree with 2T − 1 nodes for a given p , where • each leaf node corresponds to a dimension t and stores • each internal node stores the sum of the values of all of its leaf descendants , or equivalently the sum of values of its two children due to binary tree structure . pt as its value , and
+See Figure 1a for an example with p = [ 0.3 , 1.5 , 0.4 , 0.3 ] and T = 4 . Nodes in the dotted rectangle are internal nodes . Similar to the representation used in a heap [ 4 ] , an array F of length 2T can be used to represent the F+tree structure . Let i be the index of each node , and F[i ] be the value stored in the i th node . The index of the left child , right child , and parent of the i th node is 2i , 2i + 1 , and i/2 , respectively . The 0/1 string along each node in Figure 1 is the binary number representation of the node index .
+Initialization . By the definition of F+tree , given p , the values of F be defined as follows :
+F[i ] = pi−T +1 F[2i ] + F[2i + 1 ] if i ≥ T , if i < T .
+( 3 )
+(
+Thus , F can be constructed in O(T ) by initializing elements using ( 3 ) in reverse . Unlike the Alias method , there is no extra space required in the F+tree initialization in addition to F .
+“ P sampled between [ 0,P
+Sample Generation . Sampling using a F+tree can be carried out as a simple top down traversal procedure to lofor a number uniformly cate z = min t pt is stored in
+” t pt ) . Note that P s:s≤t ps n o
+> u t :
+F[1 ] , which can be directly used to generate u = uniform(F[1] ) . Let leaves(i ) be the set of all leaf descendant of the i th node . We can consider a general recursive step in the traversal with the current node i and u ∈ [ 0 , F[i] ) . The definition of F+tree guarantees that u ≥ F[i.left ] ⇒ z ∈ leaves(i.right ) , u < F[i.left ] ⇒ z ∈ leaves(i.left ) ,
+This provides a guideline to determine which child to go next . If right child is chosen , F[i.left ] should be subtracted from u to ensure u ∈ [ 0 , F[iright ] ) Note that as half of the possible t values are removed from the set of candidates , it is clear that this sampling procedure costs only O(log T ) time . The detailed procedure , denoted by F.sample(u ) , is described in Algorithm 1 . A toy example with u = 2.1 is illustrated in Figure 1b .
+Algorithm 1 Logarithmic time sampling : Fsample(u )
+Input : F : an F+tree for p , u = uniform(F[1] ) . Output : z = min
+> u s≤t ps n
+“ P
+” o t : • i ← 1 • While i is not a leaf – If u ≥ F[i.left ] , ∗ u ← u − F[i.left ] ∗ i ← i.right – Else∗ i ← i.left
+• z ← i − T + 1
+Maintenance for Parameter Updates . A simple and efficient maintenance routine to deal with slight changes on the multinomial parameters p can be very useful in CGS for LDA ( See details in Section 32 ) F+tree structure supports a logarithmic time maintenance routine for a single element change on p . Assume the t th component is updated by δ :
+¯p ← p + δet ,
+Algorithm 2 Logarithmic time F+tree maintenance for a single parameter update : F.update(t , δ )
+Input : a F+tree F for p , t , δ . Output : F+tree F is updated for ¯p ≡ p + δet
+• i ← leaf[t ] • While i is a valid node
+– F[i ] = F[i ] + δ – i ← i.parent where et is the t th column of the identity matrix of order T . A simple bottom up update procedure to modify a F+tree F for the current p to a F+tree for ¯p can be carried out as follows . Let leaf[t ] be the leaf node corresponding to t . For all the ancestors i of leaf[t ] ( self included ) , perform the following delta update :
+F[i ] = F[i ] + δ .
+See Figure 1c for an illustration with t = 3 and δ = 10 The detailed procedure , denoted by F.update(t , δ ) , is described in Algorithm 2 . The maintenance cost is linear to the depth of the F+tree , which is O(log T ) . Note that to deal with a similar change in p , LSearch can update its normalization constant cT ← cT +δ in a constant time , while both BSearch and Alias method require to re construct the entire data structure ( either c = cumsum(p ) or the Alias table : alias and prob ) , which costs O(T ) time in general .
+See Table 1 for a summary of the complexity analysis for each multinomial sampling approach . Clearly , LSearch has the smallest update cost but the largest generation cost , and Alias method has the best generation cost but the worst maintenance cost . In contrast , F+tree sampling has a logarithmic time procedure for both operations .
+Algorithm 3 F+LDA with word by word sampling
+• F.initialize(q ) , with qt = β nt+ ¯β • For each word w
+– F.update(t , ntw/`nt + ¯β´ ) ∀t ∈ Tw
+– For each occurrence of w , say wi,j = w in di
+∗ t ← zi,j ∗ Decrease nt , ntdi , ntw by one ∗ F.update(t , δ ) with δ = ntw +β nt+ ¯β − F[leaf(t ) ] ∗ c ← cumsum(r ) ( on Tw only ) ∗ t ← discrete(p , uniform(αF[1 ] + r1 ) ) by ∗ Increase nt , ntdi , ntw by one ∗ F.update(t , δ ) with δ = ntw +β ∗ zi,j ← t
+– F.update(t,−ntw/`nt + ¯β´ ) ∀t ∈ Tw nt+ ¯β − F[leaf(t ) ]
+( 6 )
+3.2 F+LDA = LDA with F+tree Sampling
+In this section , we give details on applying F+tree sampling to CGS for LDA . Let us focus on a single CGS step in LDA with the current document id di , the current word w , and the current topic assignment tcur . For simplicity of presentation , we further denote ntd = nt,di,∗ , ntw = nt,∗,w , and nt = nt,∗,∗ and assume αt = α,∀t , βj = β,∀j , and ¯β = J × β . The multinomial parameter p of the CGS step in ( 2 ) can be decomposed into two terms as follows . ∀t = 1 , . . . , T .
+( ntd + α ) ( ntw + β ) pt =
+,
+„ ntd + α nt + ¯β
+« nt + ¯β
+„ ntd + α
+« nt + ¯β
+= β
++ ntw
+.
+( 4 )
+Let q and r be two vectors with qt = ntd+α Some facts and implications about this decomposition : ( a ) p = βq + r . This leads to a simple two level sampling nt+ ¯β and rt = ntwqt . for p discrete(p , u ) =
+( discrete(r , u ) discrete(q , u−r1
+β if u ≤ r1 , ) otherwise , where 1 is the all ones vector and p1 denotes the normalization constant for p , and u = uniform(p1 ) . This means that sampling for p can be very fast if q and r can be sampled efficiently .
+( b ) q is always dense but only two elements will be changed at each CGS step if we follow a document by document sampling sequence . Note q only depends on ntd . Decrement or increment of a single ntd only changes a single element of q . We propose to apply F+tree sampling for q for its logarithmic time sampling and maintenance . At the beginning of CGS for LDA , a F+tree F for q with qt = α nt+ ¯β is constructed in O(T ) time . When CGS switches to a new document di , perform the following updates
+F.update(t , ntd nt + ¯β
+) ∀t ∈ Td := {t : ntd = 0} .
+When CGS finishes sampling for this document , we can nt+ ¯β ) ∀t ∈ Td . Both updates can −ntd perform F.update(t , be done in O(|Td| log T ) . As |Td| is upper bounded by the number of words in this document , the amortized sampling cost for each word in the document remains O(log T ) . ( c ) r is Tw sparse , where Tw := {t : ntw = 0} . Unlike q , all the elements of r change when we switch from one word to another word in the same document . Moreover , r is only used once to compute r1 and to generate at most one sample . Thus , we propose to use BSearch approach to perform the sampling for r . In particular , we only calculate the cumulative sum on nonzero elements in Tw . Thus , the initialization cost of BSearch is O(|Tw| ) and the sampling cost is O(log |Tw| ) . Word by word CGS for LDA . Other than the traditional document by document CGS for LDA , we can also consider CGS using a word by word sampling sequence . For this sequence , we consider another decomposition of ( 4 ) as follows .
+„ ntw + β
+« nt + ¯β
+„ ntw + β
+« nt + ¯β pt = α
++ ntd
+∀t .
+,
+( 5 )
+For this decomposition ( 5 ) , q and r have analogous definitions such that qt = ntw +β nt+ ¯β and rt = ntdqt , respectively . The corresponding three facts for ( 5 ) are as follows . ( a ) p = αq + r . The two level sampling for p is
+( discrete(p , u ) = discrete(r , u ) discrete(q , u−r1
+α if u ≤ r1 , ) otherwise ,
+( 6 )
+Table 2 : Comparison of various sampling methods for LDA . We use #M H to denote number of Metropolis Hasting steps for Alias LDA . Note that in this table only the time complexity is presented—there are some hidden constants that also play important roles in practice . For example , the initialization cost of the Alias table is much more than linear search although they have the same time complexity .
+Sample Sequence Exact Sampling
+“ ntw +β
+”
+F+LDA
+Word by Word
+“ ntw +β
+”
+Yes
+α
++ntd
+Decomposition nt+ ¯β Sampling method F+tree Fresh samples Initialization Sampling nt+ ¯β BSearch Yes O(|Td| ) O(log T ) O(log T ) O(log |Td| )
+Yes
+F+LDA
+Doc by Doc
+“ ntd+α
+”
+β
+Yes
++ntw
+“ ntd+α
+” nt+ ¯β F+tree nt+ ¯β BSearch O(|Tw| ) O(log T ) O(log T ) O(log |Tw| )
+Yes
+Yes
+Sparse LDA Doc by Doc
+“ ntd
+”
+Yes
++ntw
+Alias LDA Doc by Doc
+“ ntd+α nt+ ¯β
+”
+α
+“ ntw +β
+”
+No
++ntd
+“ ntw +β
+”
+αβ nt+ ¯β +β nt+ ¯β LSearch LSearch
+Yes Yes O(1 ) O(1 ) O(T ) O(|Td| )
+Yes
+LSearch O(|Tw| ) O(|Tw| ) nt+ ¯β nt+ ¯β Alias No O(1 )
+Alias Yes O(|Td| ) O(#M H ) O(#M H )
+( b ) q is always dense but only very few elements will be changed at each CGS step using word by word sampling sequence . A F+tree structure F is maintained for q . The amortized update time for each occurrence of a word is O(log T ) and the sampling generation for q using F also costs O(log T ) . Thus , discrete(q , u ) := Fsample(u ) ( c ) r is a sparse vector with |Td| non zeros . BSearch is used to construct c = cumsum(r ) in O(Td ) space and time . c is used to perform binary search to generate a sample required by CGS for the occurrence of the current word . Thus , discrete(r , u ) := binary search(c , u ) .
+The detailed procedure of using word by word sampling sequence is described in Algorithm 3 . Let us analyse the performance difference of F+LDA between two sampling sequences of a large number of documents . The amortized cost for each CGS step is O(|Td| + log T ) for the word by word sequence and O(|Tw|+log T ) for the document by document sequence . Note that |Td| is always bounded by the number of words in a document , which is usually a much smaller number than a large T ( say 1024 ) . In contrast , |Tw| approaches to T when the number of documents increases . Thus , we can expect that F+LDA with the word by word sequence is faster than the document by document sequence . Empirical results in Section 5.1 also confirm our analysis . 3.3 Related Work
+SparseLDA [ 23 ] is the first sampling method which considered decomposing p into a sum of sparse vectors and a dense vector . In particular , it considers a three term decomposition of pt as follows .
+„ ntd
+« nt + ¯β
++ ntw
+„ ntd + α
+« nt + ¯β
+, pt =
+αβ nt + ¯β
++ β where the first term is dense , the second term is sparse with |Td| non zeros , and the third term is sparse with |Tw| In both SparseLDA implementations ( Yahoo! non zeros . LDA [ 16 ] and Mallet LDA [ 23] ) , LSearch is applied to all of these three terms . As SparseLDA follows the documentby document sequence , very few elements will be changed for the first two terms at each CGS step . Sampling procedures for the first two terms have very low chance to be performed due to the observation that most mass of pt is contributed from the third term . The choice of LSearch , whose normalization constant cT can be updated in O(1 ) time , for the first two terms is reasonable . Note that O(T ) and O(|Td| ) initialization costs for the first two terms can be amortized . The overall amortized cost for each CGS step is O(|Tw| + |Td| + |T| ) . AliasLDA [ 11 ] is a recently proposed approach which reduces the amortized cost of each step to O(|Td| ) . AliasLDA considers the following decomposition of p :
+„ ntw + β
+« nt + ¯β
+„ ntw + β
+« nt + ¯β
+. pt = α
++ ntd
+Instead of the “ exact ” multinomial sampling for p , AliasLDA considers a proposal distribution q with a very efficient generation routine and performs a series of Metropolis Hasting ( MH ) steps using this proposal to simulate the true distribution p . In particular , the proposal distribution is constructed using the latest second term and a stale version of the first term . For both terms , Alias method is applied to perform the sampling . #M H steps decides the quality of the sampling results . The overall amortized cost for each CGS step is O(|Td| + #M H ) . Note the initialization cost O(|T| ) for the first term can be amortized as long as the same Alias table can be used to generate T samples .
+See Table 2 for a detailed summary for LDA using various sampling methods . Note that the hidden coefficient ρA in the O(|Td| ) notation for the construction of the Alias table is larger than the coefficient ρB for the construction of BSearch and the coefficient ρF for the maintenance and sampling of
+, F+LDA using the F+tree . Thus as long as T < 2 word by word sampling sequence is faster than AliasLDA . Empirical results in Section 5.1 also show the superiority of F+LDA over AliasLDA for real world datasets even using T = 50 , 000 .
+ρF
+ρA−ρB
+|Td|
+4 . PROPOSED PARALLEL APPROACH
+In this section we present our second innovation—a novel parallel framework for CGS . Note that the same technique can also be used for other inference techniques for LDA such as collapsed variational Bayes and stochastic variational Bayes [ 2 ] since they follow similar update patterns .
+To explain our proposed approach , we find it instructive to consider a hypergraph G . Let G = ( V , E ) be a hypergraph with ( I + J + 1 ) nodes :
+V = {di : i = 1 , . . . , I} ∪ {wj : j = 1 , . . . , J} ∪ {s} , and hyperedges :
+E = {eij = {di , wj , s}} , summation node s wj di words documents x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x
+( a ) Access graph for LDA
+( b ) Task and Data Partition
+Figure 2 : Abstract access graph for LDA where |E| =P i ni . Note that G contains multi edges , which means that the same hyperedge can appear more than once in E just as a single word can appear multiple times in a document . Clearly , G is equivalent to a bag of words representation of the corpus {d1 , . . . , dI} ; each di is associated with the i th document , each wj is associated with the jth vocabulary , and each hyperedge eij corresponds to one occurrence of the vocabulary wj in the i th document di . See Figure 2 ( a ) for a visual illustration ; here , each gray edge corresponds to an occurrence of a word and the black triangle highlights a particular hyperedge eij = {di , wj , s} . To further connect G to the update rule of CGS , we associate each node of G with a T dimensional vector . In many inference methods , an update based on a single occurrence wij can be realized as a graph operation on G which accesses values of nodes in a single hyperedge eij . More concretely , let us define the t th coordinate of each vector as follows :
+( di)t := nt,i,∗ ,
+( wj)t := nt,∗,wj , and ( s)t := nt,∗,∗ .
+Based on the update rule of CGS , we can see that the update for the occurrence of wij only reads from and writes to the values stored in di , wwij , and s .
+Interestingly , this property of the updates is reminiscent of that of the stochastic gradient descent ( SGD ) algorithm for matrix completion model . Similarly to LDA , matrix completion model has two sets of parameters w1 , . . . , wJ and d1 , . . . , dI , and each SGD update requires only one of wj and one of di to be read and modified . Since each update is highly localized , there is considerable parallelism available ; [ 25 ] exploits this property to propose an efficient asynchronous parallel SGD algorithm for matrix completion .
+The crucial difference in the case of LDA , however , is that there is an additional variable s which participates in every hyperedge of the graph . Thus , if we change the update sequence from ( eij , eij ) to ( eij , eij ) , then even if i = i and j = j the result of updates will not be the same since the value of s changes in the first update . Fortunately , this dependency is very weak ; each element of s is a large number because it is a summation over the whole corpus and each update changes its value at most by one , therefore the relative change of s made in a short period of time is often negligible .
+While existing approaches such as Yahoo! LDA [ 16 ] exploit this observation by introducing a parameter server and let each machine query the server to retrieve recent updates , it is certainly not desirable in a large scale system that every machine has to query the same central server . Motivated by the “ nomadic ” algorithm introduced by [ 25 ] for matrix completion , we propose a new parallel framework for LDA that is decentralized , asynchronous and lock free . x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x xx x x x x x x x x x x x x
+( a ) Initial assignment of wj . Each worker works only on the diagonal active area in the beginning . x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x xx x x x x x x x x x x x x
+( b ) After a worker finishes processing j , the corresponding wj to another worker . Here , w2 is sent from worker 1 to 4 . sends it x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x xx x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x xx x x x x x x x x x x x x
+( c ) Upon receipt , the wj is processed by the new worker . Here , worker 4 can now process w2 since it owns it .
+( d ) During the execution of the algorithm , the ownership of the wj changes .
+Figure 3 : Illustration of the Nomad LDA algorithm
+Algorithm 4 The basic Nomad LDA algorithm Given : initialized sl , ¯s , and local queue ql • While stop signal has not been received
+– If receive a token τ , push(ql , τ ) – τ ← pop(ql ) – If τ = τs
+∗ s ← s + ( sl − ¯s ) ∗ sl ← s ∗ ¯s ← s ∗ Send τs to another worker ∗ Perform the j th subtask ∗ Send τs to another worker
+– Else if τ = τj := ( j , wk )
+4.1 Nomadic Framework for Parallel LDA
+Let p be the number of parallel workers , which can be a thread in a shared memory multi core machine or a processor in a distributed memory multi machine system .
+Data Partition and Subtask Split . The given document corpus is split into p portions such that the l th worker owns the l th partition of the data , Dl ⊂ {1 , . . . , J} . Unlike the other parallel approach where each unit subtask is a document owned by the worker , our approach uses a fine
+( a )
+( b )
+( c )
+( d )
+Figure 4 : ( a ) and ( b ) present the convergence speed in terms of number of iterations . ( c ) and ( d ) present the sampling speed of each iteration—the y axis is the speedup over the normal LDA implementation which takes O(T ) time to generate one sample . We observe all the sampling algorithms have similar convergence speed , while F+LDA(doc ) is the fastest compared to other document wise sampling approaches . Also , F+LDA(word ) is faster than F+LDA(doc ) for larger datasets , which confirms our analysis in Section 32 grained split for tasks . Note that in the inference for LDA , each word occurrence corresponds to an update . Thus , we consider a unit subtask tj as all occurrences of word wj in all documents owned by the worker . See Figure 2b for an illustration in the data partition and task split . Each “ x ” denotes an occurrence of a word . Each block row ( bigger rectangle ) represents a data partition owned by a worker , while each smaller rectangle stands for a unit subtask for the worker .
+Asynchronous Computation .
+It is known that synchronous computation would suffer from the curse of last reducer when the load balance is poor . In this work , we aim to develop an asynchronous parallel framework where each worker maintains a local job queue ql such that the worker can keep performing the subtask popped from the queue without worrying about data conflict and synchronization . To achieve this goal , we first study the characteristics of subtasks . The subtask tj for the l th worker involves updates on all occurrences of wj in Dl , which means that to perform tj , the l th worker must acquire permission to access {di : i ∈ Dl} , wj , and s . Our data partition scheme has guaranteed that two workers will never need to access a same di simultaneously . Thus we can always keep the ownership of di,∀i ∈ Dl to l th worker . The difficulty for parallel execution comes from the access to wj and s which can be accessed by different workers at the same time . To overcome this difficulty , we propose to use a nomadic token passing scheme to avoid access conflicts . Token passing is a standard technique used in telecommunications to avoid conflicting access to a resource shared by many members . The idea is “ owner computes ” : only the member with the ownership of the token has the permission to access the resource . Here we borrow the same idea to avoid the situation where two workers require access to the same wj and s .
+Nomadic Tokens for wj . We have a token τj dedicated for the ownership of each word wj . These J tokens are nomadically passed among p workers . The ownership of a token τj means the worker can perform the subtask tj . Each token τj is a tuple ( j , wj ) , where the first entry is the index for the token , and the second entry is the latest value of wj . For a worker , a token τ means the activation of the corresponding inference subtask . Thus , we can guarantee that 1 ) the values of wj used in each subtask is always upto date ; 2 ) no two workers require access to a same wj .
+Nomadic Token for s . So far we have successfully kept the values of di and wj used in each subtask latest , and avoid access conflicts by nomadic token passing . However , all subtasks depend on each other due to the need to access s . Based on the summation property , we propose to deal with this issue by creating a special nomadic token τs = ( 0 , s ) for s , where 0 is the token index for τs , and have two copies of s in each worker : sl and ¯s . sl is a local shadow node for s . The
+( a )
+( b )
+( c )
+Figure 5 : ( a ) and ( b ) present the sampling speed for T = 10 , 000 and T = 50 , 000 . The superiority of F+LDA(word ) is more significant when T is large . ( c ) shows the sampling speed for various T . The increase in sampling time is much smaller than the increase in the number of topics T . Note that the sampling time per iteration for T = 100 , 000 is only about twice as much as the time required for T = 1 , 000 . l th worker always uses the values of sl to perform updates and makes the modification to sl . ¯s was the snapshot of s from the last arrival of τs . Due to the additivity of s , the delta sl − s can be regarded as the effort that has been made since the last arrival of τs . Thus , each time that τs arrives , the worker can perform the following operations to accumulate its local effort to the global s and update its local sl .
+1 . s ← s + ( sl − ¯s ) 2 . ¯s ← s 3 . sl ← s
+We present the general idea of Nomad LDA in Algorithm 4 and its illustration in Figure 3 . 4.2 Related Work
+Unlike the situation in the serial case , the latest values of nz,∗,w and nz,∗,∗ can be distributed among different machines in the distributed setting . The existing parallel approaches focus on developing mechanisms to communicate these values . We briefly review two approaches for parallelizing CGS in distributed setting : AdLDA [ 13 ] and Yahoo! LDA [ 16 ] . In both approaches , each machine has a local copy of the entire nz,∗,w and nz,∗,∗ . AdLDA uses bulk synchronization to update its local copy after each iteration . At each iteration , each machine just uses the snapshot from last synchronization point to conduct Gibbs sampling . On the other hand , Yahoo! LDA creates a central parameter server to maintain the latest values for nz,∗,w and nz,∗,∗ . Every machine asynchronously communicates with this machine to send the local update to the server and get new values to update its local copy . Note that the communication is done asynchronously in Yahoo! LDA to avoid expensive network locking . The central idea of Yahoo! LDA is that modest stale values would not affect the sampler significantly . Thus , there is no need to spend too much effort to synchronize these values . Note that for these two approaches , both values of nz,∗,w and nz,∗,∗ used in Gibbs sampling could be stale . In contrast , our proposed Nomad LDA has the following advantages : • No copy of the entire nz,∗,w is required in each ma• The value of nz,∗,w used in the Gibbs sampling is al chine . ways up to date in each machine .
+• The computation is both asynchronous and decentral ized .
+Our Nomad LDA is close to a parallel approach for matrix completion [ 25 ] , which also utilized the concept of nomadic variables . However , the application is completely different . [ 25 ] concentrates on parallelizing stochastic gradient descent for matrix completion . The access graph for this problem is a bipartite graph , and there is no variable that needs to be synchronized across processors .
+5 . EXPERIMENTAL EVALUATION
+In this section we investigate the performance and scaling of our proposed algorithms . We demonstrate that our proposed F+tree sampling method is very efficient in handling large number of topics compared to the other approaches in Section 51 When the number of documents is also large , in Section 5.2 we show our parallel framework is very efficient in multi core and distributed systems .
+Datasets . We work with five real world large datasets— Enron , NyTimes , PubMed , Amazon , and UMBC . The detailed data set statistics are listed in Table 3 . Among them , Enron , NyTimes and PubMed are bag of word datasets in the UCI repository1 . These three datasets have been used to demonstrate the scaling behavior of topic modeling algorithms in many recent papers [ 2 , 16 , 11 ] . In fact , the PubMed dataset stretches the capabilities of many implementations . For instance , we tried to use LDA code from http://wwwicsuciedu/~asuncion/software/fasthtm , but it could not handle PubMed .
+To demonstrate the scalability of our algorithm , we use two more large scale datasets—Amazon and UMBC . The Amazon dataset consists of approximately 35 million product reviews from Amazon.com , and was downloaded from the Stanford Network Analysis Project ( SNAP ) home page . Since reviews are typically short , we split the text into words , removed stop words , and using Porter stemming [ 14 ] . After this pre processing we discarded words that appear fewer than 5 times or in 5 reviews . Finally , any reviews that were left with no words after this pre processing were discarded .
+1https://archiveicsuciedu/ml/datasets/Bag+of+Words
+( a )
+( b )
+( c )
+Figure 6 : ( a ) and ( b ) show the comparison between Nomad LDA and Yahoo! LDA using 20 cores on a single machine . ( c ) shows the scaling performance of Nomad LDA as a function of number of cores .
+Table 3 : Data statistics .
+Enron NyTimes PubMed Amazon UMBC
+# documents ( I ) # vocabulary ( J ) 28,102 102,660 141,043 1,682,527 2,881,476
+37,861 298,000 8,200,000 29,907,995 40,599,164
+# words 6,238,796 98,793,316 737,869,083 1,499,602,431 1,483,145,192
+This resulted in a corpus of approximately 30 million documents and approximately 1.5 billion words .
+The UMBC WebBase corpus is downloaded from http : //ebiquityumbcedu/blogger/2013/05/01/ It contains a collection of pre processed paragraphs from the Stanford WebBase2 crawl on February 2007 . The original dataset has approximately 40 million paragraphs and 3 billion words . We further processed the data by stemming and removing stop words following the same procedure in LibShortText [ 24 ] . This resulted in a corpus of approximately 1.5 billion words .
+Hardware . The experiments are conducted on a parallel platform at the Texas Advanced Computing Center ( TACC ) , called Maverick3 . Each node contains 20 Intel Xeon E5 2680 CPUs and 256 GB memory . Each job can run on at most 32 nodes ( 640 cores ) for at most 12 hours .
+Parameter Setting . Throughout the experiments we set the hyper parameters α = 50/T and β = 0.01 , where T is the number of topics . Previous papers showed that this parameter setting gives good model qualities [ 9 ] , and many widely used software such as Yahoo! LDA and MalletLDA also use this as the default parameters . To test the performance with a large number of topics , we set T = 1024 in all the experiments except the ones in Figure 5 .
+Evaluation .
+Our main competitor is Yahoo! LDA in large scale distributed setting . To have a fair comparison , we use the same training likelihood routine to evaluate the quality of model ( see Eq ( 2 ) in [ 16 ] for details ) .
+5.1 Comparison of sampling methods : han dling large number of topics
+In this section , we compare various sampling strategies used for LDA in the serial setting . We include the following
+2Stanford WebBase project : edu:8091/~testbed/doc2/WebBase/ 3https://portaltaccutexasedu/user guides/ maverick http://dbpubsstanford sampling strategies into the comparison ( see Section 3 for details ) :
+1 . F+LDA : our proposed sampling scheme . Documentwise and word wise sampling order are denoted by F+LDA(doc ) and F+LDA(word ) , respectively .
+2 . SparseLDA : the approach that uses linear search on PDF to conduct document wise sampling . This approach is used in Yahoo! LDA and Mallet LDA .
+3 . AliasLDA : the approach that uses Alias method to do the sampling with document wise sampling order . This approach is proposed very recently in [ 11 ] .
+To have a fair comparison focusing on different sampling strategies , we implemented the above three approaches to use the same data structures . We use two smaller datasets— Enron and NyTimes to conduct the experiments . Note that [ 11 ] also conducts the comparison of different sampling approaches using these two datasets after further preprocessing . Figure 4 presents the comparison results using T = 1 , 024 , while in Figure 5 we show the results by varying T from 1 , 000 to 100 , 000 .
+We first compare F+LDA(doc ) , Sparse LDA , and Alias
+LDA , where all of the three approaches have the same documentwise sampling ordering . F+LDA(doc ) and Sparse LDA follow the exact sampling distribution of the normal Gibbs sampling ; as a result , we can observe in Figure 4a and 4b that they have the same convergence speed in terms of number of iterations . On the other hand , Alias LDA converges slightly slower than other approaches because it does not sample from the exact same distribution . Note that we found that this phenomenon becomes more clear when T is large . In terms of efficiency , Figures 4c and 4d indicate that F+LDA(doc ) is faster than Sparse LDA and Alias LDA , which confirms our analysis in Section 3 .
+Next we compare the performance of document wise and word wise sampling for F+LDA . Figure 4a and 4b indicate that both orderings give similar convergence speed . As discussed in Section 3.2 , using the F+tree sampling approach , the word wise ordering is expected to be faster than document wise ordering as the number of documents increases . This phenomenon is confirmed by our experimental results in Figures 4c , 4d , and 5a as F+LDA(word ) is faster than F+LDA(doc ) on the NyTimes dataset , which has a larger number of documents comparing to Enron . The experimental results also justify our use of word wise sampling
+Figure 7 : The comparison between F+Nomad LDA and Yahoo! LDA on 32 machines with 20 cores per machine .
+( a )
+( b ) when applying the Nomad approach in multi core and distributed systems .
+Figure 5 shows the results for even larger T . As the length of the computing time is limited to 12 hours by the Maverick system , the number of iterations is different for all methods . We first observe that when T ≥ 10 , 000 , AliasLDA starts to outperform SparseLDA in Figures 5a and 5b . However , F+LDA(word ) still outperforms these two methods significantly . In 5c , we can see that when T is increased from 1 , 000 to 100 , 000 , the sampling time required by F+LDA(word ) increases only by a factor of two . This can be explained by the logarithmic time complexity of F+LDA(word ) . 5.2 Multi core and Distributed Experiments Now we combine our proposed F+tree sampling strategy with the nomadic parallelization framework . This leads to a new F+Nomad LDA sampler that can handle huge problems in multi core and distributed systems . 521 Competing Implementations . We compare our algorithm against Yahoo! LDA for three reasons : a ) It is one of the most efficient open source implementations of CGS for LDA , which scales to large datasets . b ) [ 16 ] claims that Yahoo! LDA outperforms other open source implementation such as AD LDA [ 13 ] and PLDA [ 20 ] . c ) Yahoo! LDA uses a parameter server , which has become a generic approach for distributing large scale learning problems . It is therefore interesting to see if a different asynchronous approach can outperform the parameter server on this specific problem . Yahoo! LDA is a disk based implementation that assumes the latent variables associated with tokens in the documents are streamed from disk at each iteration . To have a fair comparison , in addition to running the disk based Yahoo! LDA ( denoted by Yahoo! LDA(D) ) , we further ran it on the tmpfs file system [ 17 ] which resides on RAM for the intermediate storage used by Yahoo! LDA . This way we eliminate the cost of disk I/O , and can make a fair comparison with our own code which does not stream data from disk ; we use Yahoo! LDA(M ) to denote this version . 522 Multi core Experiments Both F+Nomad LDA and Yahoo! LDA support parallel computation on a single machine with multiple cores . Here we conduct experiments on two datasets , Pubmed and Amazon , and the comparisons are presented in Figure 6 . As can be seen from Figures 6a and 6b , F+Nomad LDA handsomely outperforms both memory and disk version of Yahoo! LDA , and gets to a better quality solution within the same time budget . Given a desired log likelihood level , F+Nomad LDA is approximately 4 times faster than Yahoo! LDA .
+Next we turn out attention to the scaling of F+Nomad LDA as a function of the number of cores . In Figure 6c we plot the convergence of F+Nomad LDA as the number of cores is varied . Clearly , as the number of cores increases the convergence speed is faster . 523 Distributed Memory Experiments In this section , we compare the performance of F+Nomad LDA and Yahoo! LDA on two huge datasets , Amazon and UMBC , in a distributed memory setting . The number of machines is set to 32 , and the number of cores per machine is 20 . As can be seen from Figure 7 , F+Nomad LDA dramatically outperforms both memory and disk version of Yahoo! LDA and obtains significantly better quality solution ( in terms of log likelihood ) within the same wall clock time . 6 . CONCLUSIONS
+In this paper , we present a novel F+Nomad LDA algorithm that can handle large number of topics as well as large number of documents . In order to handle large number of topics we use an appropriately modified Fenwick tree . This data structure allows us to sample from and update a T dimensional multinomial distribution in O(log T ) time . In order to handle large number of documents , we propose a novel asynchronous and non locking parallel framework , which leads to impressive speedups in multi core and distributed systems . The resulting algorithm is faster than Yahoo! LDA and is able to handle datasets with billions of words . In future work we would like to include the ability to stream documents from disk , just like Yahoo! LDA does . It is also interesting to study how our ideas can be transferred to other sampling schemes such as CVB0 .
+Acknowledgments . We thank the anonymous reviewers for their constructive comments . We thank Alex Smola for help in implementing AliasLDA . We thank the Texas Advanced Computing Center for providing infrastructure and timely support for our experiments . This research was supported by NSF grants IIS 1219015 , CCF 1320746 , and CCF1117055 .
+7 . REFERENCES [ 1 ] A . Asuncion , P . Smyth , and M . Welling .
+Asynchronous distributed learning of topic models . In NIPS , pages 81–88 , 2008 .
+[ 2 ] A . Asuncion , M . Welling , P . Smyth , and Y . W . Teh .
+On smoothing and inference for topic models . In UAI , pages 27–34 , 2009 .
+[ 3 ] D . Blei , A . Ng , and M . Jordan . Latent Dirichlet allocation . Journal of Machine Learning Research , 3:993–1022 , Jan . 2003 .
+[ 4 ] T . H . Cormen , C . E . Leiserson , and R . L . Rivest .
+Introduction to Algorithms . MIT Press , Cambridge , MA , 1990 .
+[ 5 ] P . M . Fenwick . A new data structure for cumulative frequency tables . Software : Practice and Experience , 24(3):327–336 , 1994 .
+[ 6 ] R . Gemulla , E . Nijkamp , P . J . Haas , and Y . Sismanis .
+Large scale matrix factorization with distributed stochastic gradient descent . In KDD , 2011 .
+[ 7 ] J . E . Gonzalez , Y . Low , H . Gu , D . Bickson , and
+C . Guestrin . Powergraph : Distributed graph parallel computation on natural graphs . In OSDI , 2012 .
+[ 15 ] B . Recht and C . R´e . Parallel stochastic gradient algorithms for large scale matrix completion . Mathematical Programming Computation , 5(2):201–226 , June 2013 .
+[ 16 ] A . J . Smola and S . Narayanamurthy . An architecture for parallel topic models . Proceedings of the VLDB Endowment , 3(1):703–710 , 2010 .
+[ 17 ] P . Snyder . tmpfs : A virtual memory file system . In
+Proceedings of the Autumn 1990 European UNIX Users’ Group Conference , 1990 .
+[ 18 ] M . D . Vose . A linear algorithm for generating random numbers with a given distribution . IEEE Transactions on Software Engineering , 17(9):972–975 , 1991 .
+[ 19 ] A . J . Walker . An efficient method for generating discrete random variables with general distributions . ACM Transactions on Mathematical Software , 3(3):253–256 , Sept . 1977 .
+[ 20 ] Y . Wang , H . Bai , M . Stanton , W . Chen , and
+E . Chang . PLDA : Parallel latent Dirichlet allocation for large scale applications . In International Conference on Algorithmic Aspects in Information and Management , 2009 .
+[ 8 ] T . Griffiths and M . Steyvers . Finding scientific topics .
+[ 21 ] C . K . Wong and M . C . Easton . An efficient method
+PNAS , 101:5228–5235 , 2004 .
+[ 9 ] G . Heinrich . Parameter estimation for text analysis .
+Technical report , 2008 .
+[ 10 ] A . Ihler and D . Newman . Understanding errors in approximate distributed latent Dirichlet allocation . IEEE TKDE , 24(5):952–960 , May 2012 .
+[ 11 ] A . Q . Li , A . Ahmed , S . Ravi , and A . J . Smola .
+Reducing the sampling complexity of topic models . In KDD , 2014 .
+[ 12 ] M . Li , D . G . Andersen , J . Park , A . J . Smola ,
+A . Ahmed , V . Josifovski , J . Long , E . Shekita , and B . Y . Su . Scaling distributed machine learning with the parameter server . In OSDI , 2014 .
+[ 13 ] D . Newman , A . Asuncion , P . Smyth , and M . Welling .
+Distributed algorithms for topic models . Journal of Machine Learning Research , 10:1801–1828 , 2009 .
+[ 14 ] M . Porter . An algorithm for suffix stripping . Program ,
+14(3):130–137 , 1980 . for weighted sampling without replacement . SIAM Journal on Computing , 9(1):111–113 , 1980 .
+[ 22 ] F . Yan , N . Xu , and Y . Qi . Parallel inference for latent
+Dirichlet allocation on graphics processing units . In NIPS , pages 2134–2142 , 2009 .
+[ 23 ] L . Yao , D . Mimno , and A . McCallum . Efficient methods for topic model inference on streaming document collections . In KDD , 2009 .
+[ 24 ] H F Yu , C H Ho , Y C Juan , and C J Lin .
+Libshorttext : A library for short text classification and analysis . Technical report , 2013 .
+[ 25 ] H . Yun , H F Yu , C J Hsieh , S . V . N . Vishwanathan , and I . S . Dhillon . NOMAD : Non locking , stOchastic Multi machine algorithm for Asynchronous and Decentralized matrix completion . Proceedings of the VLDB Endowment , 7(11):975–986 , 2014 .

@@ -1,0 +1,523 @@
+Rewriting Queries on SPARQL Views
+Wangchao Le1 Songyun Duan2 Anastasios Kementsietsidis2
+Feifei Li1 Min Wang3
+1 Florida State University {le , lifeifei}@csfsuedu
+2 IBM TJ Watson Research Center {sduan , akement}@usibmcom
+3 HP Labs China minwang6@hpcom
+ABSTRACT The problem of answering SPARQL queries over virtual SPARQL views is commonly encountered in a number of settings , including while enforcing security policies to access RDF data , or when integrating RDF data from disparate sources . We approach this problem by rewriting SPARQL queries over the views to equivalent queries over the underlying RDF data , thus avoiding the costs entailed by view materialization and maintenance . We show that SPARQL query rewriting combines the most challenging aspects of rewriting for the relational and XML cases : like the relational case , SPARQL query rewriting requires synthesizing multiple views ; like the XML case , the size of the rewritten query is exponential to the size of the query and the views . In this paper , we present the first native query rewriting algorithm for SPARQL . For an input SPARQL query over a set of virtual SPARQL views , the rewritten query resembles a union of conjunctive queries and can be of exponential size . We propose optimizations over the basic rewriting algorithm to ( i ) minimize each conjunctive query in the union ; ( ii ) eliminate conjunctive queries with empty results from evaluation ; and ( iii ) efficiently prune out big portions of the search space of empty rewritings . The experiments , performed on two RDF stores , show that our algorithms are scalable and independent of the underlying RDF stores . Furthermore , our optimizations have order of magnitude improvements over the basic rewriting algorithm in both the rewriting size and evaluation time . Categories and Subject Descriptors H28 [ Information Systems ] : Database Management— Systems . Subject : Query processing General Terms : Algorithms Keywords : Rewriting , SPARQL query , SPARQL views 1 .
+INTRODUCTION
+In a number of settings , including access control [ 13 , 14 , 24,26 ] or data integration [ 19,25 ] , users can only access data that are visible through a set of views . The views are typically defined using a standard query language ( SQL for relational data , XPath/XQuery for XML , SPARQL for RDF ) and commonly the same language is used by the users to express the queries over the views . The process of answering these user queries is determined on whether the views are virtual or materialized . For materialized views , evaluating the user Copyright is held by the International World Wide Web Conference Committee ( IW3C2 ) . Distribution of these papers is limited to classroom use , and personal use by others . WWW 2011 , March 28–April 1 , 2011 Hyderabad , India ACM 978 1 4503 0632 4/11/03 .
+( person0 , name , Eric ) ( person1 , name , Kenny ) ( person2 , name , Stan ) ( person3 , name , Kyle ) ( person5 , name , Jimmy ) ( person6 , name , Timmy ) ( person9 , name , Danny )
+( person0 , lives , NYC ) ( person1 , lives , LA ) ( person2 , lives , NYC ) ( person3 , lives , NYC ) ( person5 , lives , NYC ) ( person6 , lives , CHI ) ( person9 , lives , LA )
+( person0 , friend , person1 ) ( person0 , friend , person2 ) ( person1 , friend , person2 ) ( person1 , friend , person5 ) ( person2 , friend , person6 ) ( person3 , friend , person8 )
+( a ) Base triples
+( person0 , related , person3 ) ( person3 , related , person9 ) ( person0 , works , person4 ) ( person2 , works , person7 )
+1 ) View VF : CONSTRUCT { 1 ?f0 vfriend ?f1 , 2 ?f1 vname ?n1 , 3 ?f1 vlives ?l1 WHERE { ?f0 name .P1fi , ?f0 friend ?f1 , ?f1 name ?n1 , ?f1 lives ?l1
+}
+}
+2 ) View VFoF : CONSTRUCT { 1 ?f2 vfriend ?f4 , 2 ?f4 vname ?n4 , 3 ?f4 vlives ?l4 WHERE { ?f2 name .P2fi , ?f2 friend ?f3 , ?f3 friend ?f4 , } ?f4 name ?n4 , ?f4 lives ?l4
+}
+3 ) View VR :
+CONSTRUCT { 1 ?r0 vrelated ?r1 , 2 ?r1 vname ?n1 , 3 ?r1 vlives ?l1
+} WHERE { ?r0 name .P3fi , ?r0 related ?r1 , ?r1 name ?n1 , ?r1 lives ?l1
+}
+QU : SELECT { } ?f5 , ?r5 , ?l5 WHERE { 1 person0 vfriend ?f5 , 2 ?f5 vlives ?l5 , 3 person0 vrelated ?r5 , 4 ?r5 vlives ?l5
+}
+4 ) View VRoR :
+CONSTRUCT { 1 ?r2 vrelated ?r4 , 2 ?r4 vname ?n4 , 3 ?r4 vlives ?l4
+WHERE { ?r2 name .P4fi , ?r2 related ?r3 , ?r3 related ?r4 , ?r4 name ?n4 , ?r4 lives ?l4 ( b ) Views and user query
+}
+}
+( person1 , vname , Kenny ) [ V F ] F , V ( person2 , vname , Stan ) [ V ( person3 , vname , Kyle ) [ V R ] ( person5 , vname , Jimmy ) [ V ( person6 , vname , Timmy ) [ V ( person9 , vname , Danny ) [ V
+FoF ] FoF ] RoR ]
+FoF ]
+( person1 , vlives , LA ) [ V F ] ( person2 , vlives , NYC ) [ V ( person3 , vlives , NYC ) [ V ( person5 , vlives , NYC ) [ V ( person6 , vlives , CHI ) [ V ( person9 , vlives , LA ) [ V
+F , V R ] FoF ] FoF ] RoR ]
+FoF ]
+( person0 , vfriend , person1 ) [ V ( person0 , vfriend , person2 ) [ V ( person0 , vrelated , person3 ) [ V ( person0 , vfriend , person5 ) [ V ( person0 , vfriend , person6 ) [ V ( person0 , vrelated , person9 ) [ V
+F ] F , V R ] FoF ] FoF ] RoR ]
+FoF ]
+( c ) Materialized triples in VEric
+Figure 1 : Motivating example queries is straightforward , but the simplicity in query evaluation comes at a cost , both in terms of the space required to save the views , and in terms of the time needed to maintain the views . Therefore , view materialization is a viable alternative only when ( i ) there are a small number of views ; ( ii ) the views expose small fragments of base data ; and ( iii ) the base data are infrequently updated . Since most practical scenarios do not meet these requirements , the other alternative is to use virtual view and rewrite the queries over the views to equivalent queries over the underlying data . In relational databases , query rewriting over SQL views is straightforward as it only requires view expansion , ie , the view mentioned in the user SQL query is replaced by its definition . However , in the case of RDF and SPARQL , view expansion is not possible since expansion requires query nesting , a feature not currently supported by SPARQL . In XML , XPath query rewriting is rather involved and the rewriting is exponential to the size of the query and the view [ 14 ] . Query rewriting for RDF/SPARQL is inherently more complex since ( i ) whereas XML/XPath is used for representing and querying trees , RDF/SPARQL considers generic graphs ; and ( ii ) in SPARQL , the query and view definitions may use different variables to refer to the same entity , thus requiring variable mappings when synthesizing multiple views to rewrite a given query . Therefore , query rewriting in RDF/SPARQL raises distinct challenges from those in the relational or XML .
+WWW 2011 – Session : Query and Ontology LanguagesMarch 28–April 1 , 2011 , Hyderabad , India655 To illustrate these challenges , we use a Facebook inspired example , and in Figure 1(a ) we consider RDF triples modeling common acquaintances ( eg , friend , related , and works ) . In such a setting , we can use views to express access control ( privacy ) policies over Facebook profiles . For instance , for each person ( eg , person0 with name “ Eric ” ) we might have a default policy that exposes from the social network only the person ’s immediate friends ( eg , for person0 , person1 and person2 ) , and relatives ( eg , for person0 , person3 ) , along with friends of friends ( FoF ) , and relatives of relatives ( RoR ) , while not exposing the relatives of friends , or the friendsof relatives . Figure 1(b ) shows four views to enforce this policy ( variables are prefixed by ‘?’ and constructed view predicates are prefixed with the letter ‘v’ ) . The views hide any distinction between immediate friends ( or relatives ) and those at a distance of two . Like [ 24 ] , a parameter .Pifi specifies the name of the person for whom the policies are enforced . Figure 1(c ) shows the result VEric of materializing all four views for “ Eric ” , with each triple annotated by the generating view(s ) .
+Consider the query QU in Figure 1(b ) over the triples for “ Eric ” ( shown in Figure 1(c) ) . QU identifies “ Eric ” ’s friends and relatives who live in the same city . Instead of materializing VEric just to evaluate QU , we would like to use the views to rewrite QU into a query over the base data in Figure 1(a ) . The first challenge is to determine which views can be used in this rewriting . Finding relevant views requires computing ( variable ) mappings between the body of QU ( its WHERE clause ) and the return values ( CONSTRUCT clause ) of the views . An example of a mapping between triples ( ?f0 , vfriend , ?f1 ) in VF and ( person0 , vfriend , ?f5 ) in QU , maps ?f0 to person0 and ?f1 to ?f5 . The mapping indicates that VF can be used for rewriting QU . How it will be used , is our next challenge .
+In more detail , the second challenge of the query rewriting is to determine how the views can be combined into a sound and complete rewriting . Intuitively , soundness guarantees that the rewritten query only returns results that would have been retrieved should the user query have been executed over the materialized view . Completeness guarantees that the rewritten query returns all these results . Addressing the second challenge requires algorithms that ( i ) meaningfully combine the views identified in the first step of the rewriting ; and ( ii ) consider all such possible combinations of the views . In our example , a sound and complete rewriting results in a union of 64 queries , with each query being a result of a single view combination , and where each view combination results in by combining 2 possible var . mappings for each of vfriend and vrelated , and 4 possible var . mappings for each instance of vlives . Clearly , there is an ( exponential ) blowup in the size of the rewritten query , with respect to the size of the input query and views . However , the blind view combinations often generate rewritings that have empty results , which provides optimization opportunities by removing the empty rewritings from evaluation . For this particular example , only four of these combinations need to be evaluated ( the others are either subsumed by these four , or return no results ) . Therefore , our third challenge is to optimize the rewriting and evaluate only a subset of the view combinations without sacrificing soundness or completeness .
+Given that relational algebra ( and the corresponding SQL fragment ) has the same expressive power as SPARQL [ 8 ] , one
+VF SQL : SELECT F.s , F.o , N’.s , N’.o , L.s , L.o FROM name N , friend F , name N’ , lives L
+WHERE N.s =F.s AND N.o =.P1fi AND
+N’.s =F.o AND L.s =F.o
+VR SQL : SELECT R.s , R.o , N’.s , N’.o , L.s , L.o FROM name N , related R , name N’ , lives L
+WHERE N.s =R.s AND N.o =.P3fi AND
+N’.s =R.o AND L.s =R.o
+VFoF SQL : SELECT F.s , F’.o , N’.s , N’.o , L.s , L.o FROM name N , friend F , friend F’ , name N’ , lives L
+WHERE N.s =F.s AND N.o =.P2fi AND
+F.o =F’.s AND N’.s =F’.o AND L.s =F’.o
+VRoR SQL : SELECT R.s , R’.o , N’.s , N’.o , L.s , L.o FROM name N , related R , related R’ , name N’ , lives L
+WHERE N.s =R.s AND N.o =.P4fi AND
+R.o =R’.s AND N’.s =R’.o AND L.s =R’.o
+( a ) SQL translation of VF , VR , VFoF and VRoR . vfriend : SELECT fs , fo FROM VF SQL UNION SELECT fs , fo FROM VFoF SQL vrelated : SELECT rs , ro FROM VR SQL UNION SELECT rs , ro FROM VRoR SQL vlives : SELECT ls , lo FROM VF SQL UNION SELECT ls , lo FROM VFoF SQL UNION SELECT ls , lo FROM VR SQL UNION SELECT ls , lo FROM VRoR SQL
+( b ) Secure predicate tables definitions
+QU SQL : SELECT F.o , R.o , L.o FROM vfriend F , vlives L , vlives L’ , vrelated R WHERE F.s =person0 AND F.o =L.s AND R.s =person0 AND R.o =L’.s AND L.o =L’.o
+( c ) SQL translation of query QU .
+Figure 2 : Attempting a relational/SQL rewriting might be tempted to address the SPARQL rewriting problem by considering the corresponding SQL setting and applying the solutions in SQL . Although this seems promising since some RDF stores do use a relational back end ( eg , Jena SDB [ 2 ] , Virtuoso [ 3 ] , C store [ 4 ] , etc ) , we show here that for a number of reasons such an approach does not reduce the complexity . To translate our setting to the relational case , we use one of the most efficient relational storage strategies for RDF , namely , predicate tables [ 4 ] ( column store style storage ) ; our observations are independent of this choice . So , we have a database with five tables : name ( s , o ) , lives ( s , o ) , friend ( s , o ) , related ( s , o ) , and works ( s , o ) , whose contents are easily inferred by the corresponding triples in Figure 1(a ) . In Figures 2(a ) and ( c ) , we show the SQL translations of the views and query of Figure 1(b ) . During this translation , we need to create the corresponding view predicate tables of the base database tables . So , as shown in Figure 2(b ) , we need to create the vfriend table which contains the friend subjects and objects returned by the VF SQL and VFoF SQL views ( similarly for vrelated and vlives ) . How can we rewrite QU SQL to a query over the base five tables ? Since view expansion is supported in SQL , we can replace in QU SQL the vfriend , vrelated , and vlives tables with their definitions in Figure 2(b ) , and in turn replace VF SQL , VFoF SQL , VR SQL and VRoR SQL with their definitions in Figure 2(a ) . Finally , it is not hard to see that the rewriting of QU SQL results in a union of 64 queries , the same blow up in size , as the one observed in SPARQL . So , moving from SPARQL to SQL does not reduce the complexity of the problem ( more exposition in Section 5 ) ; we will validate this observation in Section 4 . Such move is also prohibitive as there is an increasing number of stores ( eg , Jena TDB [ 2 ] , 4store [ 1 ] ) using native RDF storage . For these stores , translation to SQL does not work . Therefore , it is necessary to have a native and efficient SPARQL rewriting algorithm , which has the advantage of being generic since it works on any existing RDF store irrespectively of the storage model used .
+Summary of our contributions : 1 . We study the rewriting of SPARQL queries over virtual SPARQL views , and propose a native SPARQL rewriting algorithm ( Section 2 ) , and prove that it generates sound and complete rewritings . 2 . We propose several optimizations of the basic rewriting
+WWW 2011 – Session : Query and Ontology LanguagesMarch 28–April 1 , 2011 , Hyderabad , India656 algorithm to reduce the complexity ( Section 3.1 ) and size of the rewritten queries ( Sections 3.2 and 3.3 ) , while employing novel optimization techniques customized for our needs . 3 . We present extensive experiments on two RDF stores ( Section 4 ) on the scalability and portability of our algorithms . The optimizations result in order of magnitude improvements in rewritten query sizes and evaluation times over our basic rewriting algorithm in SPARQL ; the latter is comparable to applying rewriting techniques in SQL after translating SPARQL queries into SQL queries .
+We survey the related work in Section 5 and conclude the paper in Section 6 .
+2 . QUERY REWRITING IN SPARQL
+SPARQL , a W3C recommendation , is a pattern matching query language . The most common SPARQL queries have the following form : Q := ( SELECT | CONSTRUCT ) RD ( WHERE GP ) , where GP are triple patterns , ie , triples involving variables and/or constants , and RD is the result description . Given an RDF graph G , a triple pattern on G searches for a set of subgraphs of G , each of which matches the pattern ( by binding pattern variables to values in the subgraph ) . For SELECT queries , RD is a subset of variables in the graph pattern , similar to a projection in SQL . This is the case for query QU in Figure 1(b ) . For CONSTRUCT queries , RD is a set of triple templates that construct a new RDF graph by replacing variables in GP with matched values . This is the case for the views in Figure 1(b ) . Finally , we consider boolean SPARQL queries of the form ASK GP which indicate whether GP exists , or not , in G . Similar to SQL where research considered set before bag semantics , for our nonboolean SPARQL queries we assume set semantics whose importance for SPARQL has already been noted [ 22 ] . The central technical problem in this paper is the rewriting problem as follows : given a set of views V = {V1 , V2 , . . . , Vl} over an RDF graph G , and a SPARQL query Q over the vo . cabulary of the views , compute a SPARQL query Q over G ( G ) = Q(V(G) ) . Like [ 26 ] , we consider two crite . such that Q ria on the correctness of a rewriting , namely , soundness and completeness .
+. ie , Q
+( G ) ⊆ Q(V(G ) )
+. 1 . The rewriting is sound iff Q 2 . The rewriting is complete iff Q(V(G ) ) is contained in
+( G ) is contained in Q(V(G) ) ,
+( G ) , ie , Q(V(G ) ) ⊆ Q .
+. Q Soundness and completeness suffice to show that Q(V(G ) ) = ( G ) . We will prove our rewriting meet the two criteria .
+( G )
+. Q 2.1 Rewriting Algorithm
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18 and object can either be variables or constants ) . Even if a triple has a variable in its predicate , we can simply substitute such a triple by a set of triple patterns , each triple in the set binding the predicate variable to a constant predicate from the active domain of predicates in the RDF store .
+Computing variable mappings between triple patterns in SQR is similar to computing substitutions between conjunctive queries [ 6 ] . Formally , a substitution is a mapping between the corresponding elements ( subject , predicate , and object ) in a pair of triples that maps : ( i ) a variable in the first triple to another variable or constant in the second triple ; or ( ii ) a constant in the first triple to the same constant in the second triple . Or , conversely , a substitution cannot map a constant in the first triple to a variable in the second , or map two different constants in the triples . For example , a substitution exists from ( ?f0 , vfriend , ?f1 ) to ( person0 , vfriend , ?f5 ) , which maps the variable ?f0 to the constant person0 and the variable ?f1 to the variable ?f5 . There is no substitution from the second to the first triple since we cannot map the constant person0 to the variable ?f0 . 1 Input : Views V , query Q with GP(Q)=(sQ
+1 , pQ
+1 , oQ
+1 ) , . . . , as a union of conjunctive queries
+( sQ n , pQ n , oQ n )
+' i , pQ
+2 Output : a rewriting Q 3 for each ( sQ 4 i ) , 1 ≤ i ≤ n do i , oQ Set CandVi to ∅ . for each view Vj ∈ V do Vj 1 , o Let RD(Vj )=(s k ) , 1 ≤ k ≤ m do Vj
+Vj 1 ) , . . . , ( s
+Vj m , p
+Vj 1 , p Vj Vj k , p k , o Vj k then for each ( s i = p if pQ
+Vj m , o
+Vj m )
+Vj k ) of subjects ( similarly objects ( oQ i ,
+Set variable mapping Φijk to undefined for the pair ( sQ Vj k ) ) do if var . mapping φ : sQ i
+→ s i , s o if φ maps two variables then Φijk(s
+Vj k exists then Vj k ) = sQ i else Φijk ( s
+Vj k ) = s if var . mapping φ : s
+Vj k
+Vj k ( s Vj k
+→ sQ is a constant ) i exists then if φ maps a variable to a constant then
+Φijk ( s
+Vj k ) = sQ i if Φijk is defined then For any variable v' Φijk maps v' Add ( Vj , Φijk ) to CandVi to ∅
+'
+Vj k ) , to a fresh variable ( a new variable ) in RD(Vj ) not in ( s
+Vj k , p
+Vj k , o
+19 Set the query rewriting result Q 20 for each entry in Cartesian product CandV1 × . . .× CandVn do
+22
+23
+21
+, . . . ,Φ njn kn is compatible then
+, Φ2j2 k2 if Φ1j1 k1 RD(q' ) = RD(Q ) GP(q' ) = GP(Φ1j1 k1 ( Vj1 ) , . . . ,Φ njn kn ( Vjn ) ) ' ∪ q' ' = Q Q 24 ' 25 return Q Algorithm 1 : SPARQL Query Rewriting ( SQR ) Algorithm
+The first challenge in query rewriting ( as mentioned in the introduction ) is to determine which views can be used for the rewriting . In SPARQL , the crucial observation to address this challenge is that if a variable mapping exists between a triple pattern ( sv , pv , ov ) in the result description RD(Vj ) of a view Vj and one of the triple patterns ( sq , pq , oq ) in the graph pattern GP(Q ) of query Q , then view Vj can be used to rewrite Q . Using this observation , we present Algorithm 1 ( SQR ) to perform the rewriting in two steps . In the first step ( lines 3 18 ) , the algorithm determines , for each triple pattern pi( ¯Xi ) in user query , the set CandVi of candidate views that have a variable mapping to this triple pattern . For ease of presentation , we assume that in our SPARQL queries the predicate in each triple pattern is a constant ( the subject
+Unlike substitutions that are directional , ie , the mapping is always from one triple to another , the variable mappings computed here are more complex ; since for their creation we need to compose the ( partial ) substitutions that exist between the two triples in both directions . As an example , consider the triples ( person0 , vfriend , ?f5 ) and ( ?f6 , vfriend , person1 ) . There is no substitution between the two triples in either of the directions . However , the variable mappings used by our algorithm attempt to compute partial substitutions between the two triples and use those to compute a variable mapping . In our example , our algorithm computes a partial substitution from the first triple to the second that maps ?f5 to constant person1 . It also computes a partial substitution from the second triple to the first that maps ?f6 to constant
+WWW 2011 – Session : Query and Ontology LanguagesMarch 28–April 1 , 2011 , Hyderabad , India657 ( VF
+( VFoF
+, Φ111 ) : Φ111 ( ?f0 , Φ121 ) : Φ121 ( ?f2 ( a ) CandV1 for triple ( person0 , vfriend , ?f5 )
+, ?l1)= ( person0 , ?f5 , ?l4)= ( person0 , ?f5
+, ?n1 , ?n4
+, ?f1 , ?f4
+, ?ν
+0 , ?ν
+2
+, ?ν
+1 ) , ?ν
+3 )
+( VF
+( VFoF ( VR ( VRoR
+, Φ213 ) : Φ213((?f1 ,?l1,?f0,?n1))=(?f5 ,?l5,?ν4,?ν5 ) , Φ223 ) : Φ223((?f4 ,?l4,?f2,?n4))=(?f5 ,?l5,?ν6,?ν7 ) , Φ233 ) : Φ233((?r1 ,?l1,?r0,?n1))=(?f5 ,?l5,?ν8,?ν9 ) , Φ243 ) : Φ243((?r4 ,?l4,?r2,?n4))=(?f5 ,?l5,?ν10,?ν11 )
+GP(q’)={ person0 name .Pfi , person0 friend ?f
+( b ) CandV2 for triple ( ?f5 ' 3 , ?f
+?f5 lives ?ν
+3 , ?ν
+8 name .P fi , ?ν ( c ) Rewritten body of QU
+8 related ?f5 , ?f5 name ?ν part
+, vlives , ?l5 ) ' 3 friend ?f5 , ?f5 name ?ν 2 , }
+9 , ?f5 lives ?l5
+Table 1 : Variable mapping example person0 . The combination of the two partial substitutions constitutes a variable mapping . Eventually , this is used to compute a new triple of the form ( person0 , friend , person1 ) . The computed triple is such that a substitution exists from each of the initial triples to it .
+After the var . mapping computation , Algorithm SQR ( lines 19 23 ) constructs in its second step the rewriting as a union of conjunctive queries . Each query in the union is generated by considering one combination from the Cartesian product of the sets CandVi ( i ∈ [ 1 , n] ) . While considering each combination , we need to make sure that the corresponding variable mappings from individual predicates are compatible , ie , they do not map one variable in the query Q to two different constants ( from the views ) . For the variables only appearing in GP of the views , they are mapped to fresh ( ie , new ) variables by default . For each compatible combination , we generate one query in the union .
+1 with tVF
+To illustrate this , consider triples tQU
+1 = ( person0 , vfriend , ?f5 ) and tQU 2 = ( ?f5 , vlives , ?l5 ) , from QU of Figure 1 . For tQU 1 , CandV1 = {(VF , Φ111 ) , ( VFoF , Φ121)} , where both Φ111 and Φ121 are shown in Table 1(a ) ( the subscripts of Φs are defined in Algorithm SQR and labelled in Figure 1(b) ) . Similarly , Table 1(b ) shows CandV2 for tQU 2 . To get Φ111 , SQR first considers tQU 1 = ( ?f0 , vfriend , ?f1 ) from VF ( lines 3 8 ) . Then , for the pair of subjects ( person0 , ?f0 ) ( line 10 ) , a var . mapping φ exists ( line 14 ) from ?f0 to person0 . Therefore Φ111 assigns the constant to the variable ( line 15 ) . Next , the pair of objects ( ?f5 , ?f1 ) is considered ( line 10 ) and as a result Φ111 assigns ?f1 to ?f5 ( lines 11 12 ) . The remaining variables ( ?n1 and ?l1 ) in VF are assigned to fresh/new variables respectively ( ?v0 and ?v1 ) ( line 17 ) . This concludes the computation of Φ111 . Other Φ ’s are computed accordingly . To illustrate , part of QU consisting only we consider the ( partial ) query QU of triples tQU part ( lines 20 24 ) , one for each combination of Φ ’s in CandV1 and part , using CandV2 . Table 1(c ) shows the rewriting for QU ( VFoF , Φ121 ) in CandV1 and ( VR , Φ233 ) in CandV2 .
+2 . Then , there are 8 rewritings of QU
+1 and tQU
+. Theorem 1 . The rewriting Q of SQR is sound and com plete ( see proof in [ 18] ) . computing variable mappings O(|Q| × . The cost of Algorithm SQR is influenced by the cost of |RD(Vj)| ) , but is dominated by the generation of rewritings and is thus equal to O(( |Vj| ) is the size of Q j ( resp . Vj ) .
+) , where |Q| ( resp .
+|Vj| )
+.
+|Q| j
+In SQR , as long as a view predicate is mentioned in a query , the view automatically becomes a candidate for rewriting the query ( modulo an incompatibility check ) . The key reason is that the RDF model is , in a sense , schema less . This schema less nature of the data model is the main reason behind the exponential blow up of the rewriting . As an example , using SQR to rewrite query QU over the views of Figure . 1 results in a rewriting Q that is a union of 64 queries ; all of which must be evaluated in principle for the rewriting to be sound and complete . However , a number of these queries can either be ( i ) optimized and replaced by more succinct and equivalent queries ; or ( ii ) dropped from consideration altogether because they result in an empty set . Going back to our motivating example , remember that actually only 4 queries suffice for the rewriting . Therefore , the challenge we address next is to perform such optimizations without sacrificing soundness or completeness .
+3 . OPTIMIZING REWRITINGS
+3.1 Optimizing Individual Rewritings
+In the rewriting of QU , each rewriting q . generated by Algorithm SQR joins four views ( one view from the CandV of each of the four predicates vfriend , vlives , vrelated , lives in QU ) . One such rewriting involves views VF for vfriend , VF for vlives , VR for vrelated , and VR for vlives . That is , the rewriting uses two copies of both VF and VR . Since the join ( eg , vfriend joined with vlives ) in QU is done in a similar way as that in the view ( correspondingly , VF ) , there is redundancy to have two copies of VF for this join ; the similar situation happens to VR . The question is whether it is possible to get an equivalent rewriting by merging view copies , and thus generate a simpler query to evaluate . Indeed , one copy from each view suffices : the two copies of VF are due to predicates vfriend and vlives being joined on variable ?f5 in QU . But in the CONSTRUCT of VF these two predicates are joined in a similar way . Therefore , one copy of VF suffices since it already returns all the triples joinable by the two predicates ( ie , the view self join is equivalent to the view itself ) .
+1 Inputs : ( V , Φ1 ) from CandV1 , ( V , Φ2 ) from CandV2 2 Output : ( V , Φmerge ) 3 Continue merge = f alse ; 4 for each triple pattern ( s , p , o ) in Φ1(RD(V ) ) do 5
+6
+Let ( s’ , p , o’ ) be the corresponding pattern in Φ2(RD(V ) ) if {s , o} ∩ {s' , o'} ( = ∅ then Continue merge = true ;
+7 if Continue merge == f alse then return ( V , ∅ ) ; 8 for each triple pattern ( s , p , o ) in Φ1(RD(V ) ) do 9 10 Create corresponding merged pattern ( sM , p , oM ) for Φmerge 11
+Let ( s’ , p , o’ ) be the corresponding pattern in Φ2(RD(V ) )
+'
+12
+13
+14
+15
+'
+'
+; goto 14 ; is a fresh variable then sM = s ; goto 14 ; then sM = s else return ( V , ∅ ) if s is a fresh variable then sM = s if s if s = s if o is a fresh variable then oM = o if o if o = o then oM = o else return ( V , ∅ )
+; goto 8 ; is a fresh variable then oM = o ; goto 8 ;
+'
+'
+'
+16 17 return ( V , Φmerge )
+Algorithm 2 : Candidate View Merging
+Algorithm 2 detects such situations by accepting as input two copies of a view V that are used in rewriting a query , one as the candidate view for predicate p1 and the other for its joinable predicate p2 , with variable mappings Φ1 and Φ2 , respectively . The algorithm considers the variable mappings between the query and the views and attempts to construct a new mapping Φmerge that merges the two input mappings . If Φmerge exists , the two copies of V can be merged to simplify the rewriting . During merging , should multiple occurrences of the same predicate appear in the same V , they are treated as distinct predicates . A key observation during
+WWW 2011 – Session : Query and Ontology LanguagesMarch 28–April 1 , 2011 , Hyderabad , India658 the construction of Φmerge is that all the variables and constants appearing in the query are treated as constants ( thus only fresh variables are treated as variables for the purpose of merging the view copies ) . This ensures that views are merged not only because they are copies of the same view , but also because their predicates are joined in precisely the same way as in the query ( lines 4 7 ) . Each time view copies are merged , we must also account for any variable mappings that have been applied to the views , due to their relationships with the views used for rewriting other predicates . Algorithm 2 ensures that the effects of such variable mappings are also merged ( lines 8 16 ) . If Φmerge in the output of Algorithm 2 is ∅ , the two copies of V can not be merged .
+To illustrate , consider in the rewriting of QU the var . mapping ( VF , Φ111 ) for predicate vfriend and ( VF , Φ213 ) for predicate vlives . Applying the two mapping functions respectively on VF would result in two copies of VF joined on ?f5 . Since in VF the triple patterns of vfriend and vlives are joined in the same way as that in QU , Φ111 and Φ213 can be merged ; Φmerge(?ν4 , ?f5 , ?ν0 , ?ν1 ) = ( person0,?f5,?ν5,?l5 ) . Therefore , the rewriting from Algorithm SQR involving two copies of VF can be simplified into a rewriting with one copy .
+Theorem 2 . Query q . merge resulting from ( i ) replacing the two copies of view V in query q . with one ; and ( ii ) applying Φmerge computed by Algorithm 2 , in place of Φ1 and Φ2 ; is equivalent to q .
+( see proof in [ 18] ) .
+The cost of Algorithm 2 is O(|V| ) . Since , in the worst case , there can be as many view copies of a view V as the size of the query , optimizing with Algorithm 2 each conjunctive query generated at lines 22 23 of SQR costs O(|Q| × |V| ) . 3.2 Pruning Rewritings with Empty Results
+Due to the schema less nature of RDF , a sound and complete rewriting of an input query requires that we construct rewritings by considering every possible combination of predicates from the input views , which often results in a certain number of rewritings with empty results . ( This observation is unique to RDF/SPARQL , in comparison to the query rewriting results in relational or XML case . ) For example , a sound part ( see Section 2.1 ) inand complete rewriting of query QU cludes the rewriting q . joins triples from VFoF and VR and essentially looks for persons that are relatives of friends of friends of person0 . Looking at the triples in Figure 1 , it is clear that no current base triples satisfy the constraints of q . . The question is then how can we detect such empty rewritings , and more importantly , how to do this in a light weight fashion . in Table 1(c ) . Rewriting q . fi
+Consider a simple case where a rewriting involves a join between two predicates ( ?y1 , p1 , ?y2 ) and ( ?y3 , p2 , ?y4 ) , where the join equates ?y2 and ?y3 . Denote the value set of a variable ?x as A(?x ) . If we store A(?x ) for every variable in any triple pattern , this problem is trivial , ie , we simply check A(?y3 ) = ∅ . Unfortunately , this straightwhether A(?y2 ) forward solution is expensive space wise . In general , a negative result exists for the boolean set intersection problem , ie , given two sets A1 and A2 , checking if A1 and A2 intersects requires linear space , even if one is willing to settle to a constant success probability [ 7 , 17 ] . However , we can design a space efficient heuristic that works well in practice .
+The basic idea is to first determine the value set for each distinct variable involved in the rewriting , and then construct a synopsis for each value set . In our example , we can estimate the size of intersection of A(?y2 ) and A(?y3 ) based on their synopses . If the intersection size is estimated to be above some preset threshold with a reasonable probability , we consider the predicates as joinable ; otherwise we issue an ASK query to verify if the join is actually empty ; if it is , we remove this and other rewritings involving predicates ( ?y1 , p1 , ?y2 ) and ( ?y3 , p2 , ?y4 ) . Note that our pruning step does not affect the soundness and completeness of our solution , as before pruning , we always issue an ASK query to make sure that rewriting has an empty result . In general , an ASK query is much cheaper than the corresponding SELECT query especially when the graph pattern is nonselective , and the synopses are used to avoid issuing unnecessary ASK queries ( for those rewritings that are very likely to be non empty ) . The synopses should satisfy two key requirements . First , we should be able to estimate the size of intersection of multiple value sets ( not just binary intersection ) since a rewriting might include a join of m predicates on m variables . Let ?x1 , ?x2 , . . . , ?xm denote these variables . To simplify notation , we use Ai to denote A(?xi ) . Second , the synopses of each variable should be able to estimate the distinct elements in its value set ( as well as support distinct elements estimation under the set intersection operator ) . This requirement comes from the observation that we can estimate the size of an intersection |A1 A2| by simply estimating the size of A2 ) where D is the number of distinct elements in D(A1 A1 and A2 , respectively . In what follows , we show that the KMV synopsis [ 9 ] meets both requirements . fi fi k−1
+For a set A1 , we denote its KMV synopsis as σ(A1 ) . The construction of σ(A1 ) is as follows . Given a collision resistant hash function h that generates ( roughly ) uniformly random hash values in its domain [ 1 , M ] , σ(A1 ) simply keeps the k smallest hash values from all elements in A1 , ie , σ(A1 ) = {h(v1 ) , . . . , h(vk)} , where vi ∈ A1 , and h(v ) ≥ max(σ(A1 ) ) if v ∈ A1 and h(v ) /∈ σ(A1 ) . Then , 'D(A1 ) = max(σ(A1))/M is an unbiased estimator for D(A1 ) [ 9 ] . Furthermore , it is also possible to estimate the distinct number of elements in a general compound set ( produced based on A1 , . . . , Am with set union , intersection and difference operators ) [ 9 ] . In our case , we are only interested in estimating D(I ) where cussion in [ 9 ] , we can obtain an unbiased estimator 'D(I ) I = A1 inspired by the disas follows . Define σ(Ai ) ⊕ σ(Aj ) as the set consisting of the k smallest values in σ(Ai ) σ(Aj ) , and let σ1m = σ(A1 ) ⊕ σ(A2 ) ··· ⊕ σ(Am ) . Furthermore , let : σ(Am )
+A2 ···fi σ1m fi ff 'D(I ) =
+.
+( 1 ) fi k − 1
+and ,
+Am . Specifically , fi
+σ(A1 )
+KI = fi ff
+···
+KI k max(σ1m)/M
+We can show that ( see proofs in [ 18] ) , by extending similar arguments from [ 9 ] :
+Lemma 1 . For k > 1 , 'D(I ) in Equation 1 is an unbiased Lemma 2 . If D(I ) > 0 , ∈ ( 0 , 1 ) and k ≥ 1 , let T = kD(I)/j , it follows : estimator for D(I ) .
+(
+Pr
+≤
+D(I )
+|'D(I ) − D(I)| KI = j ffff T T ) ffff T − T ) i=k k − 1 ( 1 − )T k − 1 ( 1 + )T i i i=k ff i
+Δ(T , k , ) =
+= Δ(kD(I)/j , k , ) = δ , T−i i
+( 2 )
+1 − k − 1 ff ( 1 − )T 1 − k − 1
+( 1 + )T
+T−i
+WWW 2011 – Session : Query and Ontology LanguagesMarch 28–April 1 , 2011 , Hyderabad , India659 D(I )
+| .D(I)−D(I)|
+In practice , given the observation of 'D(I ) and KI , we can set T = k'D(I)/KI and substitute T in Equation 2 . Thus , ( ≤ we can obtain the confidence value δ for Pr for any error value . That said , our pruning technique works as follows . We preset a small threshold value τ > 1 , a probability threshold θ ∈ [ 0 , 1 ) and a relative error value ∈ ( 0 , 1 ) . For we estimate their intersection size as 'D(I ) by Equation 1 , any m value sets of m variables to be joined in a rewriting , 'D(I)/(1+ ) > τ and δ > θ ( ie , if D(I ) is larger than τ with and δ = Pr as above . Then , we check if a probability ≥ θ ) . If this check returns false , we issue an ASK query to verify if the corresponding rewriting is empty ; if yes , we can safely prune this rewriting . Otherwise ( either the check returns true or the ASK returns nonempty ) , we consider that I is not empty and keep the current rewriting . In practice , we observe that the above procedure can be simplified by just checking if 'D(I ) ≤ τ for a small threshold
+| .D(I)−D(I)|
+≤ ff
+D(I ) value τ > 1 ( without using δ , θ and ) , which performs almost equally well .
+To illustrate , consider again the rewriting in Table 1(c ) of part . To detect whether the rewriting is empty , we query QU estimate the intersection size of the join in Table 1(c ) using Equation 1 . For the example , the equation indicates that the intersection is not larger than τ , and therefore we issue an ASK query . The ASK query evaluates the rewriting of Table 1(c ) over the triples of Figure 1(a ) . Since there are no triples for persons that are relatives of friends of friends of part is pruned . person0 , the ASK query returns false . Thus , QU Discussion on synopsis updates . The KMV synopsis supports insertions ( of a new item to the multiset the synopsis was initially built from ) but not deletions ( hence , it does not support the general update , which can be modeled as a deletion followed by an insertion ) [ 9 ] . However , we can still use the KMV synopsis to provide a quick estimation for pruning rewritings with empty results in case of updates to RDF stores , by only updating the synopses with the insertions and ignoring the deletions . Clearly , over the time , this will lead to an overestimation of the intersection size for multiple sets . However , such an overestimation only gives us false positives but not false negatives , ie , we will not mistakenly prune any rewritings that do not produce an empty result . Of course , as the number of deletions increases , this approach will lead to too many false positives ( rewritings that do produce empty results cannot be detected by checking their synopses ) Hence , we can periodically rebuild all synopses after seeing enough number of deletions wrt a user defined threshold . 3.3 Optimizing the Generation of Rewritings The pruning technique presented in Section 3.2 considers rewritings in isolation , to decide if a rewriting is empty or not . One way to integrate Algorithm SQR with the pruning technique will be : generating all the possible rewritings in one shot followed by a pruning step to remove empty rewritings from evaluation . However , such an integration ignores some inherent relationships between the rewritings , ie , that different rewritings share similar sub queries . If we can quickly determine a common sub query ( ie , partial rewriting ) is empty , it will save time that otherwise is needed to determine whether the rewritings contained in this sub query are empty or not . In what follows , we show how one can optimize the rewriting by taking advantage of these common sub queries . To illustrate , consider our running example and the rewriting of QU over the views in Figure 1(b ) . One generated rewriting q . 1 for QU involves views VF , VR , VR , VR with appropriate variable mappings since each view is in the CandV of predicate friend , lives , related and lives , respectively . Similarly , another generated rewriting q . 2 involves views VF , VR , VRoR , VR . The key observations here is that ( i ) both rewritings involve a join of views VF and VR ; and ( ii ) from the optimization of the previous section , the join of views VF and VR is empty since the set of friends of “ Eric ” ( see Figure 1(c ) ) is disjoint from his relatives . Therefore , both rewritings q . 2 can safely be removed ( and every other rewriting involving a join of the two views over the corresponding predicates ) . By detecting with a single check the empty join between views VF and VR , the algorithm optimized SQR ( OSQR , see Algorithm 3 ) terminates immediately the branch of rewritings ( including q . 2 ) involving these two views . To remove them from consideration , Algorithm SQR must check each generated individual rewriting independently . Algorithm OSQR addresses this shortcoming by building individual rewritings in a step wise fashion . This way , OSQR detects and terminates early any branch of rewritings involving views whose join result is empty . 1 Input : Views V , query Q with GP(Q)=(sQ
+1 and q .
+1 and q .
+1 , pQ
+1 , oQ
+1 ) , . . . ,
+( sQ n , pQ n , oQ n )
+'
+2 Output : a rewriting Q 3 Set the query rewriting result Q 4 Generate CandVi for each triple pattern ( sQ 5 Set SubQ to ∅ ; initialize a stack STACK to store view to ∅ . as a union of conjunctive queries i , pQ i , oQ i ) , 1 ≤ i ≤ n .
+' combinations for SubQ . 6 Pick a triple pattern ( sQ |CandVi| . 7 Add ( sQ 8 push each combination ( SubQ , {V , V ∈ CandVi} ) into STACK . 9 while STACK is non empty do i ) , with the smallest size of i ) into SubQ ; i , pQ i , pQ i , oQ i , oQ
+Pop a combination R from STACK ; extract SubQ from R . if SubQ contains all triple patterns in user query then
+Generate a rewriting q from R ’s view set ( lines 21 23 in SQR ) . Q = Q
+' ∪ q ; goto line 9 .
+13 14 Get all triple patterns that can be joined with SubQ but not
+'
+10
+11
+12
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25 j ) with the smallest size of j , oQ j , pQ in SubQ ; Pick the triple pattern ( sQ |CandVj| . for each view V in CandVj do Create a copy R' if V is redundant with existing views in R' Merge V with the view set of R' ( Sec 31 ) else Add V into the view set of R' . if the estimated result of a rewriting from R' ( Sec 3.2 ) then
+' of R and a copy SubQ of SubQ . then is empty
+Issue an ASK query corresponding to the rewriting . if ASK query confirms the result is empty then goto line 16 . Add ( sQ Push R' to replace SubQ in R' j , oQ in STACK . j ) in SubQ j , pQ
+'
+;
+Algorithm 3 : The Optimized SQR ( OSQR ) Algorithm
+In a nutshell , Algorithm OSQR works as follows . The algorithm uses a structure STACK where each element in STACK stores a sub query SubQ of Q along with a candidate view combination for rewriting SubQ . Initially , STACK and SubQ are empty . The first sub query considered corresponds to a triple pattern in Q , and we pick the pattern with the smallest size of |CandV| ( ie , the number of views in CandV ) . Intuitively , this triple pattern is the most selective and by considering the most selective predicates in order ( in terms of their |CandV| ) , we maximize the effects of early terminating
+WWW 2011 – Session : Query and Ontology LanguagesMarch 28–April 1 , 2011 , Hyderabad , India660 a branch of rewritings once we detect the rewriting for SubQ results in an empty set ( a larger portion of the rewritings for Q that contain this rewriting for SubQ is pruned earlier in this manner ) . After the first pattern , the algorithm considers one pattern added at each step . The way the pattern is picked ( line 14 ) ensures that it can be joined with the current SubQ at the head of STACK , which increases the chance of optimization with techniques described in Section 3.1 and Section 32 Again , when more than one patterns are under consideration , the most selective one is picked . After a pattern is added and a candidate view for the pattern is picked , the view redundant with the existing view set for SubQ will be merged into the view set ( lines 18 19 ) . If the current rewriting for SubQ has an empty result ( lines 21 23 ) , the rewriting is not extended further and not pushed back into STACK . We use CandV1 and CandV2 in Tables 1(a ) and 1(b ) to illustrate OSQR . Since |CandV1| is smaller in size ( line 6 ) , it first initializes STACK = {({vfriend },{VF} ) , ( {vfriend },{VFoF})} ( line 8 ) . OSQR processes CandV2 next ( line 15 ) . It iterates through CandV2 from ( VR , Φ233 ) and detects that VF in CandV1 can not be merged with VR in CandV2 ( line 18 ) . Therefore , OSQR adds ( vlives,VR ) to R ( line 20 ) . Assume OSQR detects an empty result ( line 21 ) , ( eg , the join of VF and VR for “ Eric ” is actually empty ) , OSQR issues an ASK query . If ASK returns negative ( ie , empty ) , OSQR will skip lines 24 25 to avoid pushing ( {vfriend , vlives },{VF , VR} ) into STACK . The above procedure iterates until STACK is empty . 4 . EXPERIMENTS
+.
+We implemented our rewriting algorithms and optimization components in C++ and evaluated them on two RDF stores , namely , 4store [ 1 ] and Jena TDB [ 2 ] . Our relational database experiments were conducted using MySQL . For KMV synopsis , we set k=16 and τ = 2 whenever the synopses were used ( the simplified version of the checking procedure from Section 3.2 was adopted ) .
+Here , we report the experimental results that compare the basic SPARQL query rewriting ( SQR ) algorithm with the optimized SQR ( OSQR ) algorithm , with detailed evaluation of the impact of individual optimization components . We used two key performance metrics , ie , the number of rewritings generated through query rewriting and the end to end evaluation time , including query rewriting and execution . Also we studied the scalability of our algorithms along multiple dimensions , ie , the size of query |Q| , views |V| and |CandV| . In experiments , we used the popular RDF benchmark LUBM [ 15 ] ( which considers a setting in the university domain that involve students , departments , professors , etc . ) to generate a dataset of 10M triples as the base data , over which views are defined using SPARQL queries . We run all experiments on a 64 bit Linux machine with a 2GHz Intel Xeon(R ) CPU and 4GB of memory . 4.1 Experimental Results with 4Store
+Native SPARQL rewriting vs . SQL expansion : In the introduction , we claim that translating SPARQL queries/views to SQL does not resolve the challenges addressed by our work . Here , we illustrate experimentally this is indeed the case . For the experiment we use the setup shown in Figure 3 . In more detail , we use the seven view templates to instantiate 56 different views . Specifically , we create 14 views using template V1 ( each view with a different parameter in P1 ) , 12
+V1 :CONSTRUCT { ?x1 name ?n1 V2 :CONSTRUCT { ?x2 email ?e2 V3 :CONSTRUCT { ?x3 degreeFrom ?d3 V4 :CONSTRUCT { ?x4 phone ?p4 V5 :CONSTRUCT { ?x5 teacherOf ?c5 V6 :CONSTRUCT { ?x6 interest ?i6 V7 :CONSTRUCT { ?x7 worksFor ?w7
+} WHERE { ?x1 name ?n1 , ?x1 worksFor .P1fi} } WHERE { ?x2 email ?e2 , ?x2 worksFor .P2fi} } WHERE { ?x3 degreeFrom ?d3 , ?x3 worksFor .P3fi} } WHERE { ?x4 phone ?p4 , ?x4 worksFor .P4fi} } WHERE { ?x5 teacherOf ?c5 , ?x5 worksFor .P5fi} } WHERE { ?x6 teacherOf ?i6 , ?x6 worksFor .P6fi} } WHERE { ?x7 worksFor ?w7 , ?x7 worksFor .P7fi}
+( a ) Views templates
+Q:SELECT { 1 ?x , 1 ?n , 1 ?e , 1 ?d , 2 ?p , 3 ?c , 4 ?i , 5 ?w }
+WHERE { 1 ?x name ?n , 1 ?x email ?e , 1 ?x degreeFrom ?d ,
+2 ?x phone ?p , 3 ?x teacherOf ?c , 4 ?x interest ?i , 5 ?x worksFor ?w }
+( b ) Query template
+Figure 3 : Experimental Setup 1
+75
+60
+45
+30
+15
+0
+SQR OSQR SQL
+SQR OSQR SQL
+1600
+) s d n o c e S
+( e m T i
+1200
+800
+400
+3
+4
+5 |Q|
+6
+7
+0
+3
+4
+5 |Q|
+6
+7
+)
+4
+0 1 × ( s g n i t i r w e r f o
+. m u N
+( a ) Rewritten queries over query size
+( b ) Eval . time over query size
+Figure 4 : SPARQL rewriting vs . SQL expansion views using template V2 ( using the same first 12 of the 14 parameters used for V1 ) , 10 views using template V3 ( using the same first 10 of the parameters used for V1 and V2 ) , 8 views using template V4 ( using the same first 8 of the parameters used for V1 , V2 , and V3 ) , 6 views using template V5 ( using the same first 6 of the parameters used for V1 , V2 , V3 and V4 ) , 4 views using template V6 ( using the same first 4 of the parameters used for V1 , V2 , V3 , V4 , and V5 ) , and 2 views using template V7 ( using the same first 2 of the parameters used for all the other views ) . Each view exposes some aspect of a student ’s data ( eg , name , email ) . In terms of the query , we execute a different query in each iteration of the experiment . In iteration i , the query involves all the predicates in Figure 3(b ) with an annotation j ≤ i . So , the query initially has 3 predicates , and in each iteration we add one more predicate , up to a size of 7 . Given the above setup , it is not hard to see that ( i ) the CandV for predicate name has 14 views , that for predicate email has 12 , and finally for predicate worksFor has only 2 views ; and ( ii ) for any two predicates pi and pj there are min(|CandVi| , |CandVj| ) non empty joins between the two candidate views .
+We also translate the SPARQL queries/views and the underlying RDF data to SQL and relational data . For the relational representation of RDF data we use ( fully indexed ) predicate tables [ 4 ] , which provide one of the most efficient representations of RDF in terms of query performance . Then , we compare algorithms SQR and OSQR as well as the corresponding relational/SQL based representation ( denoted as SQL in our figures ) . Figure 4 shows the comparison results . As the size of the input query increases , Algorithm OSQR results in between one and four orders of magnitude less queries as part of the rewriting process , while both algorithms SQR and the SQL view expansion result in the same number of queries . Meanwhile , Algorithm OSQR is up to two orders of magnitude faster than both SQR and SQL , in terms of the evaluation times for query rewriting and execution .
+To illustrate that the above result holds for different queries and views we perform the same experiment with an alternative setup . In this setting , a query has three predicates
+WWW 2011 – Session : Query and Ontology LanguagesMarch 28–April 1 , 2011 , Hyderabad , India661 } V1:CONSTRUCT { ?x1 email ?e1 , ?x1 course ?c1 } V2:CONSTRUCT { ?x2 phone ?p2 , ?x2 course ?c2 } V3:CONSTRUCT { ?x3 degree ?d3 , ?x3 course ?c3 } V4:CONSTRUCT { ?x4 email ?e4 , ?x4 course ?c4 V5:CONSTRUCT { ?x5 email ?e5 , ?x5 course ?c5 }
+WHERE { ?x1 email ?e1 , ?x1 course ?c1 , ?x1 member ?u1 , ?u1 subOrg .P1fi} WHERE { ?x2 phone ?p2 , ?x2 course ?c2 , ?x2 member ?u2 , ?u2 subOrg .P2fi} WHERE { ?x3 degree ?p3 , ?x3 course ?c3 , ?x3 member ?u3 , ?u3 subOrg .P3fi} WHERE { ?x4 email ?e4 , ?x4 course ?c4 , ?x4 member ?u4 , ?u4 subOrg .P3fi} WHERE { ?x5 email ?e5 , ?x5 course ?c5 , ?x5 member ?u5 , ?u5 subOrg .P5fi}
+Q : SELECT { ?x , ?e , ?c , ?d } WHERE { ?x email ?e , ?x course ?c , ?x degreeFrom ?d }
+( a ) Views templates
+( b ) Query template
+Figure 5 : Experimental Setup 2 s g n i t i r w e r f o
+. m u N
+1000
+800
+600
+400
+200
+0
+SQR OSQR SQL
+10 12 14 16 18 20
+Max|CandV|
+600
+450
+300
+150
+) s d n o c e S
+( e m T i
+0
+SQR OSQR SQL
+10 12 14 16 18 20
+Max|CandV|
+( a ) Rewritten queries over max CandV
+( b ) Eval . time over max CandV
+Figure 6 : SPARQL rewriting vs . SQL expansion and retrieves the email , degree , and all the courses taken by each student ( see Figure 5(b) ) . The query is evaluated over views that have one of five view templates , denoted by Vi , 1 ≤ i ≤ 5 ( shown in Figure 5(a) ) . The templates are defined so that CandVcourses = {V1 , V2 , V3 , V4 , V5} , CandVdegree = {V3} , and CandVemail = {V1 , V4 , V5} . Notice that if each template is instantiated only once , SQR results in 15 rewritings . Normally , one expects that only a few of the rewritings are non empty and hence we make 2 of the 15 rewritings nonempty , those involving templates V3 and V4 . To do this , we make sure that the same variable P3 is used for both view templates V3 and V4 and thus both templates are instantiated from the same university . Notice that definition wise , view templates V1 , V4 and V5 are identical . However , we make sure that the three templates are instantiated from different universities so that they are non overlapping in their contents . We create multiple instances of view templates using students from different departments , and by always populating pairs of instances of templates V3 and V4 from the same department , we make sure they join . Figure 6 shows the number of rewritings and evaluation times for SQR , OSQR and the corresponding relational/SQL setting . In the experiment , we start by instantiating each template twice ( 10 views in total ) , and proceed by picking a template and adding view instances in a way that linearly increases the cardinality of CandVcourses ( the largest CandV set ) . Figure 6 shows that as the size of the largest CandV set increases , OSQR generates up to an order of magnitude less rewritings than SQR and the SQL view expansion , resulting in up to an order of magnitude savings in evaluation times .
+Optimizing Individual Rewritings : In Section 3 we introduced three orthogonal optimizations and in algorithm OSQR we incorporated all of them into a single algorithm . It is interesting to see what are the effects of each optimization in isolation , to the size of the rewriting and the evaluation time of the rewritten query . In the next three experiments we investigate exactly this , starting here with an experiment that studies the effects of optimizing individual
+V1 :CONSTRUCT { ?x1 name ?n1 , ?x1 email ?e1 , ?x1 takes ?c1 } WHERE { ?x1 name ?n1 , ?x1 email ?e1 , ?x1 takes ?c1 } V2 :CONSTRUCT { ?x2 phone ?p2 , ?x2 course ?c2 , ?x2 member ?u2 } WHERE { ?x2 phone ?p2 , ?x2 course ?c2 , ?x2 member ?d2 } V3 :CONSTRUCT { ?x3 phone ?p3 , ?x3 course ?c3 , ?x3 degree ?d3 } WHERE { ?x3 phone ?p3 , ?x3 course ?c3 , ?x3 degree ?d3 } V4 :CONSTRUCT { ?x4 name ?n4 , ?x4 email ?e4 , ?x4 takes ?c4 } WHERE { ?x4 name ?n4 , ?x4 email ?e4 , ?x4 takes ?c4 } V5 :CONSTRUCT { ?x5 phone ?p5 , ?x5 course ?c5 , ?x5 member ?u5 } WHERE { ?x5 phone ?p5 , ?x5 course ?c5 , ?x5 member ?u5 } V6 :CONSTRUCT { ?x6 phone ?p6 , ?x6 course ?c6 , ?x6 degree ?d6 } WHERE { ?x6 phone ?p6 , ?x6 course ?c6 , ?x6 degree ?d6 }
+( a ) Views templates ' } Q:SELECT { ?x , 1 ?e , 2 ?p , 3 ?c , 4 ?n , 5 ?u , 6 ?u WHERE { 1 ?x email ?e , 2 ?x phone ?p , 3 ?x takes ?c , 4 ?x name ?n , 5 ?x member ?u , 6 ?x degree ?u
+' }
+( b ) Query template
+Figure 7 : Experimental Setup 3
+SQR OSQR−M
+) s d n o c e S
+( e m T i
+200
+150
+100
+50
+0
+SQR OSQR−M
+Crash
+2
+4
+|Q|
+6
+300
+200
+100 s g n i t i r w e r f o
+. m u N
+0
+1
+2
+3
+4
+5
+6
+|Q|
+( a ) Rewritten queries over query size
+( b ) Eval . time over query size
+Figure 8 : Optimizing Individual Rewritings rewritings ( presented in Section 31 ) To this end , we switch off in OSQR all other optimizations but merging views ( denoted as OSQR M ) and compare it with SQR . In terms of the experimental setup , this is shown in Figure 7 . We define 6 views over our base data , with each view exposing some aspect of a student ’s data ( eg , email , phone ) . As for the queries , we execute 6 different queries , with each query increasingly bringing together data from the views . The return values and predicates of the query executed in iteration i are marked appropriately in Figure 7(b ) . Figure 8 shows the results of the comparison between SQR and OSQR M , as the input query size increases . Figure 8(a ) shows that both algorithms result in the same number of rewritings ; note that merging does not influence the number of generated rewritings ( this is the focus of the other optimizations ) . Merging optimizes each individual rewriting , and this becomes apparent in the evaluation time of the rewritings ( see Figure 8(b) ) . As the size of query |Q| increases , so is the potential for merging views ( the same view might appear in the candidate view set of more predicates ) , which is confirmed in Figure 8(b ) — savings in evaluation time of OSQR M , compared to SQR , start from 10 % to 70 % for queries with 2 to 5 predicates . As |Q| increases , so is the size of each rewriting ( since the rewriting ultimately integrates the where clauses of candidate views ) . In our experiments , when a ( rewritten ) query has approximately 16 predicates , the engine of 4store crashes , therefore , it is impossible to execute a rewriting from SQR when |Q| ≥ 6 . Since merging results in smaller rewritings , OSQR M can handle larger input queries .
+Pruning Rewritings with Empty Results : As before , we switch off in OSQR all other optimizations but pruning empty rewritings ( denoted as OSQR P ) and compare it with SQR . The experimental setup used here is shown in Figure 9 . Using the view template in Figure 9(a ) , we generate 10 views , where each view has a different value for the vari
+WWW 2011 – Session : Query and Ontology LanguagesMarch 28–April 1 , 2011 , Hyderabad , India662 V:CONSTRUCT {?x1 name ?n1 , ?x1 email ?e1,?x1 course ?c1 WHERE { ?x1 name ?n1 , ?x1 course ?c1 , ?x1 email ?e1 , ?x1 member .Pfi }
+}
+Q:SELECT { ?x , ?n , ?e , ?c }
+WHERE { ?x name ?n , ?x email ?e ,
+?x course ?c }
+( a ) Views templates
+( b ) Query template
+Figure 9 : Experimental Setup 4 s g n i t i r w e r f o
+. m u N
+1000
+SQR OSQR−P
+800
+600
+400
+200
+0 2
+4
+6
+8 |CandV|
+10
+600
+400
+200
+) s d n o c e s ( e m T i
+0 2
+SQR OSQR−P
+4
+6
+8 |CandV|
+10
+( a ) Rewritten queries over max CandV
+( b ) Eval . time over max CandV
+Figure 10 : Pruning Empty Rewritings able Pfi Our instantiation is such that we use ten different departments from the same university as the values for variable Pfi In this manner , we make sure that the views are non overlapping . The experiment has 8 iterations . The same query Q ( shown in Figure 9(b ) ) is evaluated across all iterations over a set of i + 2 views at iteration i . Notice that the CONSTRUCT statements of all views are identical to the graph pattern of the Q . It is not hard to see that for SQR , the CandV for each predicate of Q ( name , email , course ) contains all the views . Therefore , SQR will create ( i + 2)3 rewritings at iteration i . Contrarily , OSQR P does not generate rewritings involving different views since these lead to empty results ; synopses and ASK queries , which are less expensive , are executed to detect these empty results , and therefore in each iteration i essentially only i+2 queries need to be executed by OSQR P . Figure 10 shows the comparison . Through synopses and ASK queries , OSQR P produces an order of magnitude less rewritings than SQR , resulting in an order of magnitude faster evaluation times for query Q .
+Optimizing the Generation of Rewritings : Here , we investigate the influence of sub query ( ie , triple pattern ) ordering to OSQR . Since the objective of ordering is to improve the effectiveness of pruning , in OSQR we only switch off merging views ; the algorithm is denoted as OSQR R . We consider the same experimental setup with the one used in our first experiment , shown in Figure 3 . For this setup , Figure 11 compares the performance of OSQR R using 3 different reordering strategies . The figure shows the number of ASK queries issued during query rewriting ( to detect empty rewritings ) , and the evaluation time of the rewritten query . Note that all the three reordering strategies result in the same number of nonempty rewritings , and only the numbers of ASK queries issued during rewriting are different ; the latter affects the evaluation times , as shown in Figure 10 . Using the proposed ordering on the size of CandV , OSQR R detects the optimal ordering ( which considers p1 , p2 , . . . , p7 in order ) and generates up to an order of magnitude less ASK queries than either a random or the worst ( p7 , p6 , . . . , p1 ) ordering , resulting in near 60 % savings in evaluation times . 4.2 Experimental Results from Jena TDB
+Using the same query and view definitions , we have run the same set of experiments on Jena TDB , to demonstrate the flexibility and the store independent property of our algorithms . In general , the results from Jena TDB are highly
+OSQR−R Random Worst
+K S A f o r e b m u N
+400
+300
+200
+100
+0
+3
+4
+5 |Q|
+6
+7
+) s d n o c e s ( e m T i
+20
+15
+10
+5
+0
+OSQR−R Random Worst
+3
+4
+5 |Q|
+6
+7
+( a ) ASK queries over query size
+( b ) Eval . time over query size
+Figure 11 : Optimizing Rewriting Generation
+)
+3
+0 1 × ( s g n i t i r w e r f o
+SQR OSQR
+600
+400
+200
+. m u N
+0
+3
+4
+5 |Q|
+6
+7
+) s d n o c e s
+2
+0 1 × ( e m T i
+800
+600
+400
+200
+0
+SQR OSQR
+3
+4
+5 |Q|
+6
+7
+( a ) Rewritten queries over query size
+( b ) Eval . time over query size
+Figure 12 : SQR vs . OSQR on Jena TDB
+1000
+SQR OSQR
+500 s g n i t i r w e r f o
+. m u N
+150
+) s d n o c e s ( e m T i
+100
+50
+SQR OSQR
+0
+10
+15
+Max(|CandV| )
+20
+0
+10
+15
+Max(|CandV| )
+20
+( a ) Rewritten queries over max CandV
+( b ) Eval . time over max CandV
+Figure 13 : SQR vs . OSQR on Jena TDB consistent with our observations from 4store . As is evident from Figure 12 , the overall performance in Jena TDB of OSQR is several orders of magnitude better than the SQR in the first experiment using the setup in Figure 3 . The situation is similar when using the experimental setup of Figure 5 and the results are shown in Figure 13 . These trends are highly consistent with what we have observed from their comparison in 4store ( Figures 4 and 6 , respectively ) . 4.3 Concluding remarks
+Our experiments clearly illustrate the advantages of OSQR over SQR . In [ 18 ] , we show , in a full set of experiments , that these results are not limited to 4store but carry over to Jena . Our experiments show that : we have realized the first practical rewriting solution ( OSQR ) which provides , in real time , sound and complete access of RDF data , independent of underlying RDF stores , with good efficiency in practice ( to rewrite and evaluate a query over tens to hundred of views ) and without the need to materialize intermediate data .
+5 . RELATED WORK
+Query rewriting over views , motivated by a view based approach to access control , has been well studied in relational ( eg , [ 24 ] ) and XML ( eg , [ 13,14 ] ) database . However , to the best of our knowledge , our work is the first on native query rewriting in SPARQL . SPARQL query rewriting combines the challenges that arise in the relational and XML settings : like
+WWW 2011 – Session : Query and Ontology LanguagesMarch 28–April 1 , 2011 , Hyderabad , India663 the relational case , SPARQL query rewriting needs to synthesize multiple views ; like the XML case , SPARQL query rewriting generates a query of exponential size . Previous work on rewriting SPARQL queries typically adopted a rule based approach . In [ 12 ] , the authors perform rewritings using predefined rewriting rules , whereas our rewriting techniques can dynamically compose the right views to rewrite a user query . Similarly in [ 10 ] , the authors identify a set of tightest restrictions under which an XPath query can be rewritten over multiple views in PTIME . Such restrictions are expressed as rules during the rewriting , therefore this approach is rulebased as well . Reference [ 11 ] presents theoretical results for rewriting a query over multiple data sources ; the authors studied the rewriting problem in the presence of embedded constraints from up to infinite data sources , and focused on the problem of deciding the right data sources that satisfy integrity constraints ( ie , the expressibility and the support for the sources ) . Unlike our work , the rewriting algorithm in [ 11 ] does not guarantee completeness , and the optimization issue was not addressed .
+Although our proposed SPARQL query rewriting techniques face similar challenges as the classical techniques for answering queries using views [ 16 ] and rewriting queries on semi structured data [ 21 ] , the actual rewriting steps differ significantly . In particular , relational techniques surveyed in [ 16 ] can not efficiently address the problem in SPARQL . For example , the pruning power of MiniCon [ 23 ] vanishes due to the fact that all the variables in SQL translated views ( see Figure 2(b ) ) are distinguished variables [ 23 ] . Furthermore , our computation of variable mappings and selection of candidate views are distinct from the query containment techniques discussed in [ 23 ] . The exponential size of the rewriting is also unique to our setting , which forces us to address new challenges not found in [ 16 ] . To address those challenges , we propose novel optimization techniques to remove empty rewritings from execution .
+Existing works on general query rewriting in RDF store [ 5 , 20 ] specify view definition in customized high level languages , and perform query rewriting in an ad hoc manner . In contrast , our work defines views in SPARQL , thus having more expressive power and wider applicability ; furthermore , our SPARQL rewriting techniques are principled and independent of the underlying RDF stores .
+6 . CONCLUSION
+We studied the classical problem of query rewriting over views in the context of SPARQL and RDF data . We proposed the first sound and complete query rewriting algorithm for SPARQL , with novel optimizations that ( i ) simplify individual rewritings by removing redundant triple patterns coming from the same view ; ( ii ) eliminate rewritings with empty results based on a light weight synopsis construction and efficient value set intersection computation to estimate the size of joined triple patterns ; and ( iii ) prune out big portions of the search space of rewritings ( that lead to empty results ) by optimizing the sequence of sub query rewriting . Evaluation of our rewriting algorithm over two RDF stores showed its portability and its scalability in terms of query and view size . This work opens the gate to several interesting directions in future research , such as how to efficiently deal with variable predicates ( instead of enumerating all predicates in the data to replace them ) in query and view definition , how to partially materialize the views with the query rewriting in SPARQL to further improve the efficiency , and also , how to include other SPARQL features such as FILTER and OPTIONAL into the algorithm . 7 . ACKNOWLEDGMENT
+This work was done in part when Wangchao Le ( intern ) and Min Wang were with IBM . Wangchao Le and Feifei Li were partially supported by NSF Grant CNS 0831278 . 8 . REFERENCES [ 1 ] 4store scalable RDF storage . http://4storeorg/ [ 2 ] Jena semantic web framework . http://jenasourceforgenet [ 3 ] Virtuoso universal server . http://virtuosoopenlinkswcom [ 4 ] D . J . Abadi , A . Marcus , S . R . Madden , and K . Hollenbach .
+Scalable semantic web data management using vertical partitioning . In VLDB , 2007 .
+[ 5 ] F . Abel and et al . Enabling advanced and context dependent access control in RDF stores . In ISWC , 2007 .
+[ 6 ] S . Abiteboul , R . Hull , and V . Vianu . Foundations of
+Databases . Addison Wesley , 1995 .
+[ 7 ] N . Alon , Y . Matias , and M . Szegedy . The space complexity of approximating the frequency moments . In STOC , 1996 .
+[ 8 ] R . Angles and C . Gutierrez . The expressive power of
+SPARQL . In ISWC , pages 114–129 , 2008 .
+[ 9 ] K . Beyer , P . J . Haas , B . Reinwald , Y . Sismanis , and
+R . Gemulla . On synopses for distinct value estimation under multiset operations . In SIGMOD , 2007 .
+[ 10 ] B . Cautis , A . Deutsch , and N . Onose . Xpath rewriting using multiple views : Achieving completeness and efficiency . In WebDB , 2008 .
+[ 11 ] B . Cautis , A . Deutsch , and N . Onose . Querying data sources that export infinite sets of views . In ICDT , 2009 .
+[ 12 ] G . Correndo , M . Salvadores , I . Millard , H . Glaser , and
+N . Shadbolt . SPARQL query rewriting for implementing data integration over linked data . In EDBT , 2010 .
+[ 13 ] W . Fan , C Y Chan , and M . Garofalakis . Secure XML querying with security views . In SIGMOD , 2004 .
+[ 14 ] W . Fan , F . Geerts , X . Jia , and A . Kementsietsidis .
+Rewriting regular XPath queries on XML views . In ICDE , pages 666–675 , 2007 .
+[ 15 ] Y . Guo , Z . Pan , and J . Heflin . LUBM : A benchmark for
+OWL knowledge base systems . Journal of Web Semantics , 2005 .
+[ 16 ] A . Y . Halevy . Answering queries using views : A survey .
+VLDB J . , 10(4):270–294 , 2001 .
+[ 17 ] B . Kalyanasundaram and G . Schintger . The probabilistic communication complexity of set intersection . SIAM J . Discret . Math . , 5(4):545–557 , 1992 .
+[ 18 ] W . Le , S . Duan , A . Kementsietsidis , F . Li , and M . Wang .
+Query rewriting over SPARQL views . Technical report . http://ww2csfsuedu/∼le/rdfviewpdf
+[ 19 ] M . Lenzerini . Data integration : A theoretical perspective .
+In PODS , pages 233–246 , 2002 .
+[ 20 ] G . Manjunath and et al . Semantic views for controlled access to the semantic web . In Tech . Rep . HPL 08 15 , 2008 . [ 21 ] Y . Papakonstantinou and V . Vassalos . Query rewriting for semistructured data . In SIGMOD , pages 455–466 , 1999 .
+[ 22 ] J . P´erez , M . Arenas , and C . Gutierrez . Semantics and complexity of SPARQL . ACM Trans . Database Syst . , 34(3):1–45 , 2009 .
+[ 23 ] R . Pottinger and A . Halevy . MiniCon : A scalable algorithm for answering queries using views . VLDB J . , 2001 . [ 24 ] S . Rizvi , A . Mendelzon , S . Sudarshan , and P . Roy .
+Extending query rewriting techniques for fine grained access control . In SIGMOD , pages 551–562 , 2004 .
+[ 25 ] J . D . Ullman . Information integration using logical views .
+In ICDT , pages 19–40 , 1997 .
+[ 26 ] Q . Wang and et al . On the correctness criteria of fine grained access control in relational databases . In VLDB , 2007 .
+WWW 2011 – Session : Query and Ontology LanguagesMarch 28–April 1 , 2011 , Hyderabad , India664

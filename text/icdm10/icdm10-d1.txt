@@ -1,0 +1,577 @@
+2010 IEEE International Conference on Data Mining
+Fast and Flexible Multivariate Time Series Subsequence Search
+Kanishka Bhaduri
+MCT Inc . , NASA ARC
+KanishkaBhaduri 1@nasagov
+Qiang Zhu
+CSE Dept , UCR qzhu@csucredu
+Nikunj C . Oza , Ashok N . Srivastava
+NASA Ames Research Center
+{NikunjCOza , AshokNSrivastava}@nasagov
+Abstract—Multivariate Time Series ( MTS ) are ubiquitous , and are generated in areas as disparate as sensor recordings in aerospace systems , music and video streams , medical monitoring , and financial systems . Domain experts are often interested in searching for interesting multivariate patterns from these MTS databases which can contain up to several gigabytes of data . Surprisingly , research on MTS search is very limited . Most existing work only supports queries with the same length of data , or queries on a fixed set of variables . In this paper , we propose an efficient and flexible subsequence search framework for massive MTS databases , that , for the first time , enables querying on any subset of variables with arbitrary time delays between them . We propose two provably correct algorithms to solve this problem — ( 1 ) an 𝑅∗ tree Based Search ( RBS ) which uses Minimum Bounding Rectangles ( MBR ) to organize the subsequences , and ( 2 ) a List Based Search ( LBS ) algorithm which uses sorted lists for indexing . We demonstrate the performance of these algorithms using two large MTS databases from the aviation domain , each containing several millions of observations . Both these tests show that our algorithms have very high prune rates ( >95 % ) thus needing actual disk access for only less than 5 % of the observations . To the best of our knowledge , this is the first flexible MTS search algorithm capable of subsequence search on any subset of variables . Moreover , MTS subsequence search has never been attempted on datasets of the size we have used in this paper .
+I . INTRODUCTION
+Many data mining application domains generate large multivariate time series ( MTS ) databases . Examples of such domains include earth sciences , music , video , medical monitoring , aerospace systems , and financial systems . Domain experts are often interested in searching for particular patterns—waveforms over subsets of variables with some delays between them .
+The motivation for this research comes from applications in any domain where an entity can be described as a multivariate sequence and one needs to search for entities having specific characteristics defined by a particular combination of some or all of those features . Suppose that an airline has a large database of one million flights of multivariate time series that show the settings of the control surfaces ( usually discrete signals ) , the pilot inputs ( discrete ) , as well as the heading , speed , and readings from the propulsion systems ( all usually continuous ) . In many such databases , the number of recorded parameters from a modern aircraft is nearly 1000 . The safety analyst may want to find all situations in
+1550 4786/10 $26.00 © 2010 IEEE DOI 101109/ICDM201036 the database that correspond to a “ go around ” situation in which a landing has been aborted and the aircraft has been directed to circle back for another landing .
+One can find such situations using a subset of the fields in the time series database where the event “ Landing Gear Retracted ” occurs just after altitude descends below 2000 feet . Another search for indicators of an “ unstable approach ” may include searching on parameters such as speed , descent rate , vertical flight path , and several cockpit configuration parameters . Again , this search would be done on about a dozen parameters out of the 1000 parameters that may be recorded on the aircraft . The events would be separated in time and may or may not occur on a particular flight .
+Fig 1 shows an MTS from a real aviation dataset of CarrierX 1 . Each MTS contains the data collected from multiple sensors of an aircraft during a flight . We plot only six variables for clarity . In the figure , the 𝑥 axis refers to the different parameters while the 𝑦 axis refers to time . Typically , queries by the analyst may look like :
+1 . Return all flights where the altitude monotonically changes from 10000 ft to 5000 ft , speed decreases from 300 knots to 200 knots , and landing gear is down . Such a combination of parameter values may be precursors to unstable approaches while landing .
+2 . Return all small cap stocks whose daily price drops by 10 % over 3 days just before a strong sell off ( 30 % over 10 days ) in at least 𝑚 out of 𝐾 stocks and then increases by at least 15 % over the remaining 30 days . This could be a signature indicative of insider trading in an attempt to unfairly control the share prices in the specific sector .
+None of the current research in MTS search [ 1][2][3][4 ] support the types of queries described here . Current algorithms in this area require that the query be of the same length as that of the entire MTS and that all queries be on a fixed set of variables ( usually all the variables ) . Additionally , current algorithms do not allow for any time lag between the variables in the query .
+In this paper we address the following problem : given a large database of multivariate time series data representing entities , we wish to provide a search technology that allows analysts to rapidly identify entities with particular character
+1We cannot release the name of the carrier due to the data sharing agreement .
+48 q[t1:t2],1
+δ 1 e m T i
+5000
+4000
+3000
+2000
+1000
+0 q[t3:t4],3
+δ 2 q[t5:t6],4
+Parameters
+Sample MTS dataset and query 𝑄 . 𝑥 axis refers to different Figure 1 . parameters and 𝑦 axis refers to time . Components of query and time delays are also shown . istics such as the scenarios described above . We assume that the user supplies a query consisting of waveforms over several variables — typically substantially fewer than the total number of variables present in the database . Additionally , the user may choose ( at search time ) how many and which variables to query , ie , this need not be fixed in advance ( during index building time ) . This requires tremendous flexibility of the search algorithm . Also the query may cover any desired length of time up to the maximum length of the available time series . The waveforms may have some timeshifts between them . The user also supplies a threshold for each variable describing the maximum allowable difference between the query variable and the corresponding variable in any matches that are returned . The MTS search algorithm must return all matches with no false dismissals or false positives . The specific contributions of this paper are as follows : ( 1 ) We propose two algorithms — an 𝑅∗ tree based search algorithm ( 𝑅𝐵𝑆 ) , and a list based search algorithm ( 𝐿𝐵𝑆 ) for efficient searching of massive MTS subsequences defined on an arbitrary subset of variables with arbitrary time delays . ( 2 ) We have demonstrated the usefulness of our algorithm by searching for this “ go around ” pattern in a real commercial aviation dataset . ( 3 ) To the best of our knowledge , the datasets that we have used for testing the performance of our algorithms are much larger than those reported in the literature .
+The rest of the paper is organized as follows . In Section II , we discuss work related to this area of research . In Section III , we describe the notation and give a precise definition of the MTS search problem . In Section IV we describe a fast UTS subsequence search algorithm leading to the MTS search algorithm in Section V . We analyze the algorithms in Section VI . In Section VII we demonstrate the performance of our algorithm experimentally . We provide conclusions and descriptions of future work in Section VIII .
+49
+II . RELATED WORK
+In general , prior research on MTS is limited . Yang and Shahabi [ 1 ] present a PCA based similarity technique for comparing two MTS . Given a database of MTS this technique first computes the covariance matrix between two MTS . Then eigenvectors and eigenvalues of the covariance matrix are used as a measure of similarity between the MTS . This work is extended in [ 5 ] in which the authors propose the use of kernel PCA instead of traditional PCA . Distance based index structure for MTS has been discussed by Yang and Shahabi [ 6 ] . The work by Lee et al . [ 4 ] addresses the problem of searching in multi dimensional sequences . The multi dimensional sequence is partitioned into subsequences , packed into MBR and then indexed using the 𝑅∗ tree scheme . Vlachos et al . [ 3 ] proposes an index structure for multi dimensional time series which can handle multiple distance functions such as LCSS and DTW .
+There exist a plethora of work on subsequence search for univariate datasets ( UTS ) . Popular techniques for performing entire length time series search include the ones proposed by Keogh and Ratanamahatana [ 7 ] and the references therein . One of the early works of subsequence matching is by Faloutsos et al . ( FRM ) [ 8 ] in which the authors have proposed a Discrete Fourier Transform ( DFT)/𝑅∗ tree based indexing scheme . In this algorithm , input time series is first broken into overlapping window sequences of fixed length and then 6 DFT coefficients are extracted from each sequence . These 6 dimensional representations are then packed into a minimum bounding rectangle ( MBR ) and indexed using an 𝑅∗ tree data structure . On receiving a query , the same process is applied ( extracting DFT coefficients ) and then searched in the 𝑅∗ tree . Candidate MBRs are then checked with the actual database to remove false alarms . We compare this algorithm with our algorithms in the experimental section . A dual approach to this one , proposed by Moon et al . [ 9 ] , is to decompose the input time series into disjoint sequences and the query sequence into sliding windows . However , as the size of the time series increases to millions of points , storing all the points in the index may become challenging . To alleviate this problem , Traina et al . [ 10 ] recently proposed a technique of using multiple reference points to speed up the search . Our algorithm is different than theirs in the following sense : ( 1 ) [ 10 ] only talks about range queries whereas we can perform arbitrary subsequence matching and nearest neighbor search , and ( 2 ) unlike [ 10 ] which only works for univariate time series , we can perform multivariate subsequence search on an arbitrary number of variables and arbitrary time delays among those variables . Several other techniques exist for subsequence matching [ 11][12][13 ] .
+At this point , we would like to mention that none of the existing algorithms for multivariate search is applicable in our problem setting . This is primarily because most of them require that all the variables be used for the query . In our problem , we query over an arbitrary subset of variables and thus , to apply the existing algorithms , we need build and store a separate index for all possible combinations of input features . For example , the real CarrierX dataset that we have used in our experiments has 16 variables , and therefore to allow any subset of variables in the query , we need to build and store 216 = 65536 indices which is impractical for storage and computational reasons . This motivates us to provide a different solution to this problem which alleviates these issues by building a much smaller number of indices ( linear in the number of features ) .
+III . BACKGROUND
+In this section we define the notations that we have used in the rest of this paper and also present a formal problem definition .
+A . Notations First , we define a UTS database . A UTS database 𝑈 𝐷𝐵 consists of ∣𝐷∣ UTS . For ease of explanation , we assume that each UTS is stored in a separate file ; multiple UTS can also be stored in the same file in other applications . The 𝑖 th file stores a time series 𝑦(𝑖 ) = {𝑦(𝑖 ) 2 , . . .} , where 𝑘 ∈ ℝ or {0 , 1} . The superscript refers to the file id each 𝑦(𝑖 ) while the subscript refers to the sample point in that file . Let 𝑦(𝑖 ) and 𝑦(𝑗 ) be two UTS sequences in two different files 𝑦(𝑖 ) of 𝑈 𝐷𝐵 . Then , ( 1 ) 𝐿 denotes the length ( number of points ) of 𝑦(𝑖 ) , ( 2 ) 𝑦(𝑖 ) [ 𝑎:𝑏 ] denotes the subsequence that includes entries in positions 𝑎 through 𝑏 for UTS in the 𝑖 th file , and ( 3 ) 𝑑𝑖𝑠𝑡(𝑦(𝑖)[𝑎:𝑏 ] , 𝑦(𝑗 ) [ 𝑎 : 𝑏 ] ) denotes the Euclidean distance between two univariate subsequences .
+1 , 𝑦(𝑖 )
+(
+)
+It is natural to extend this definition to a multivariate database 𝑀 𝐷𝐵 in which each file contains a set of vectors . Let 𝑑 be the number of features or attributes across all the files in 𝑀 𝐷𝐵 . Denoting vectors of dimension 𝑑 in bold , we can similarly write the MTS stored in the 𝑖 th file as y(𝑖 ) = {y(𝑖 ) 𝑑 or {0 , 1}𝑑 . Let 𝑤 denote the size of a sliding window containing 𝑤 consecutive samples of a UTS .
+2 , . . .} , where y(𝑖 )
+𝑘 ∈ ℝ
+1 , y(𝑖 )
+B . Problem definition
+We first define 𝜖 nearest neighbors 𝜖 NN of UTS . Definition 3.1 ( 𝜖 NN UTS search ) : Given a user defined threshold 𝜖 , 𝑈 𝐷𝐵 , and a UTS subsequence 𝑄 of length 𝑤 , ( which we call the query ) , UTS 𝜖 NN returns all the subsequences 𝑆𝑖 of length 𝑤 from 𝑈 𝐷𝐵 , such that , 𝑑𝑖𝑠𝑡(𝑆𝑖 , 𝑄 ) < 𝜖 . Our next definition deals with multivariate query 𝑄 . query 𝑄 consists of the following components :
+Definition 3.2 ( Multivariate Query 𝑄 ) : A multivariate ∙ any ( sub)set of variables 𝑄.𝑣𝑎𝑟 ⊂ {1 , . . . , 𝑑} ∙ a set of UTS subsequences {𝑄.𝑠𝑒𝑞𝑖} for each variable
+𝑖 ∈ 𝑄.𝑣𝑎𝑟 , and
+Definition 3.3 ( 𝜖 NN MTS search ) : Given
+∙ time delays 𝛿1 , 𝛿2 , . . . between the sequences in 𝑄.𝑣𝑎𝑟 We are now in a position to define 𝜖 NN for MTS search . 𝑀 𝐷𝐵 , a multivariate query 𝑄 , and user defined thresholds 𝝐 = {𝜖1 , 𝜖2 , . . .} for each variable in 𝑄 , MTS 𝜖 NN returns a table {𝑀 𝑇 𝑆 𝑖 , 𝐵𝑒𝑔𝑖𝑛 𝑜𝑓 𝑓 𝑠𝑒𝑡1 , 𝐵𝑒𝑔𝑖𝑛 𝑜𝑓 𝑓 𝑠𝑒𝑡2 , . . . ,} such that ( 1 ) UTS 𝜖 NN is satisfied by every feature in 𝑄 , ( 2 ) the subsequences are found in the same MTS file , and ( 3 ) the Begin offset ’s are delayed by 𝛿1 , 𝛿2 , . . . in which 𝐵𝑒𝑔𝑖𝑛 𝑜𝑓 𝑓 𝑠𝑒𝑡𝑗 denotes the starting time point for Qseq𝑗
+IV . FAST UTS SUBSEQUENCE SEARCH
+When a query 𝑄 defined in Section III B contains only one variable , it becomes a univariate time series search . For clarity and ease of exposition , we will start with solving this problem . We assume there is a minimal length for all queries and it is set to 𝑤 . Smaller choice of 𝑤 provides better granularity of search while increasing both the indexing and the search time . We first discuss the 𝑅𝐵𝑆 algorithm in detail and then discuss the salient differences with our 𝐿𝐵𝑆 algorithm .
+A . Overview of algorithm
+For a univariate query 𝑄 on the 𝑣 th variable , the bruteforce method to find all its 𝜖 NN is to compare it with all subsequences of length 𝐿(𝑄 ) for every offset of time series 𝑦(𝑖 ) ( ∀𝑖 = 1 , 2 , . . . ,∣𝐷∣ ) , which is time consuming and impractical .
+A classic data mining solution to speed up this process is to find a lower bound of the distance measure and use this bound to prune irrelevant candidates . This lower bound should be : ( 1 ) computationally more efficient than computing the distances between all subsequences , and ( 2 ) tight ( very close ) with respect to the original distance , so that we can prune sufficiently .
+One such technique for deriving a lower bound , also used in the literature [ 10][14 ] , is using a reference subsequence based on the triangle inequality . Fig 2 illustrates the basic idea of pruning . First , we randomly pick a subsequence 𝑅 ( of the same length 𝑤 ) , and calculate its distance to all the remaining subsequences . Then , we order them by their distance to 𝑅 . Only 𝑆1 and 𝑆2 are shown for clarity in the figure . Note that these two steps are done before the query 𝑄 arrives and only need to be done once . When a query 𝑄 is applied , we calculate the distance 𝑑𝑖𝑠𝑡(𝑄 , 𝑅 ) . All candidates whose distances are not in the range [ 𝑑𝑖𝑠𝑡(𝑄 , 𝑅 ) − 𝜖 , 𝑑𝑖𝑠𝑡(𝑄 , 𝑅 ) + 𝜖 ] ( eg 𝑆2 in Fig 2 ) can be pruned . This is due to the triangle inequality : 𝑑𝑖𝑠𝑡(𝑄 , 𝑆2 ) ≥ ∣𝑑𝑖𝑠𝑡(𝑄 , 𝑅 ) − 𝑑𝑖𝑠𝑡(𝑆2 , 𝑅)∣ > 𝜖 .
+Finally , for all candidates in this range ( eg 𝑆1 in Fig 2 ) , we do an exact calculation to remove the false positives . In order to reduce the number of such false positives , we use multiple reference points to build several indices and then
+50 join the candidates from these indices to get the final set of candidates . We discuss this in detail in the next section .
+𝜖
+𝑑𝑖𝑠𝑡(𝑄 , 𝑅 )
++ 𝜖
+𝑅
+𝑆1
+𝑄
+𝑆2
+Figure 2 . Candidate subsequences ( 𝑆1 , 𝑆2 ) ordered by their distance to a reference subsequence 𝑅 . When a query 𝑄 is applied , a range based on 𝑑𝑖𝑠𝑡(𝑄 , 𝑅 ) can be used to prune candidates . processed , all the MBR ’s are appended to file 𝑚𝑏𝑟𝑘 and the next UTS is processed . Finally , each of these 𝑚𝑏𝑟𝑘 files are indexed using an RTreeBuild routine and the spatial indices are saved on disk .
+We would like to point out that while Faloutsos et al . [ 8 ] also use MBR to combine subsequences to reduce the index space , they map each subsequence into 6 DFT coefficients while we map each subsequence into a single value viz . distance to the reference point . So in our case , each MBR is a two dimensional point , leading to better scalability .
+B . RBS algorithm details
+𝑅∗
+tree based algorithm ( 𝑅𝐵𝑆 ) uses the concept of spatial indexing to store and retrieve time series subsequences . In order to make this indexing more efficient , we devise a novel technique of incorporating the triangular inequality directly into this 𝑅∗ tree scheme . We can control the amount of pruning and the corresponding search time by using multiple reference points against which the triangular inequality is applied . To the best of our knowledge , using spatial indexing along with multiple global reference points for time series subsequence search has never been explored before .
+We first discuss the index building algorithm followed by the search algorithm . Alg . 1 presents the pseudo code of 𝑅𝐵𝑆 build index . The inputs are 𝑈 𝐷𝐵 and length of the sliding window 𝑤 . The output is a set of spatial indices 𝐼𝑛𝑑𝑒𝑥1 , . . . , 𝐼𝑛𝑑𝑒𝑥𝑟 . In the first step , we select 𝑟 subsequences randomly 𝑅1 , . . . , 𝑅𝑟 of size 𝑤 from 𝑈 𝐷𝐵 which we call reference points . Then , for each subsequence 𝑆 of length 𝑤 from the 𝑖 th UTS ( 𝑦(𝑖 ) ) in 𝑈 𝐷𝐵 , we find the Euclidean distance of 𝑆 from the 𝑘 th reference point 𝑅𝑘 . Therefore , each subsequence of length 𝑤 gets mapped to a 1 D point ( its distance to 𝑅𝑘 ) . Next , we arrange several such 1 D points into a minimum bounding rectangle or MBR as follows . Each entry of the MBR consists of the 𝑢𝑡𝑠 𝑖𝑑 , 𝑚𝑖𝑛 , 𝑚𝑎𝑥 , 𝐵𝑒𝑔𝑖𝑛 𝑂𝑓 𝑓 𝑠𝑒𝑡 , 𝐸𝑛𝑑 𝑂𝑓 𝑓 𝑠𝑒𝑡 , where 𝑚𝑖𝑛 and 𝑚𝑎𝑥 are the minimum and maximum values ( here distances to 𝑅𝑘 ) of all points included in that MBR . 𝐵𝑒𝑔𝑖𝑛 𝑂𝑓 𝑓 𝑠𝑒𝑡 and 𝐸𝑛𝑑 𝑂𝑓 𝑓 𝑠𝑒𝑡 are the beginning and end time points of all the elements in this MBR . For any UTS , the first point included in the MBR is trivially {𝑢𝑡𝑠 𝑖 , 𝐷𝑖𝑠𝑡 , 𝐷𝑖𝑠𝑡 , 1 , 1} , where 𝐷𝑖𝑠𝑡 is the distance of the first sequence to 𝑅𝑘 . For all other subsequences , we first compute 𝐷𝑖𝑠𝑡 , and then check if adding this point to the existing MBR will increase its marginal cost , a heuristic proposed by Faloutsos et al . [ 8 ] . Due to shortage of space we do not describe it here . If the new marginal cost ( after adding the new point ) is greater than the old cost ( without the point ) , a new MBR is started with this new point as the sole entry , else the old MBR is updated . The CheckMC routine in the pseudo code performs this task . Once all the subsequences of 𝑢𝑡𝑠 𝑖 are
+Algorithm 1 : Build Index for 𝑅𝐵𝑆 Input : 𝑈 𝐷𝐵 , 𝑤 Output : Indices 𝐼𝑛𝑑𝑒𝑥1 , . . . , 𝐼𝑛𝑑𝑒𝑥𝑟 Initialization : Select 𝑟 reference points 𝑅1 , . . . , 𝑅𝑟 ; begin for k = 1 to r do for uts i in UTS Database do 𝑛𝑀 𝐵𝑅 ← 1 ; 𝐷𝑖𝑠𝑡 ← 𝑑𝑖𝑠𝑡(𝑅𝑘 , 𝑦𝑢𝑡𝑠 𝑖 [ 1:𝑤 ] ) ; 𝑚𝑏𝑟(𝑛𝑀 𝐵𝑅 ) ← {𝑢𝑡𝑠 𝑖 , 𝐷𝑖𝑠𝑡 , 𝐷𝑖𝑠𝑡 , 1 , 1} ; 𝑀 𝑎𝑥𝑂𝑓 𝑓 𝑠𝑒𝑡 ← ( 𝐿(𝑢𝑡𝑠 𝑖 ) − 𝑤 + 1 ) ; for j = 2 to MaxOffset do
+𝐷𝑖𝑠𝑡 ← 𝑑𝑖𝑠𝑡(𝑅𝑘 , 𝑦𝑢𝑡𝑠 𝑖 [ 𝑢𝑑 , 𝑛𝑒𝑤𝑀 𝐵𝑅 ] ← CheckMC(𝑚𝑏𝑟 , 𝐷𝑖𝑠𝑡 ) ; if 𝑢𝑑 == 0 then 𝑛𝑀 𝐵𝑅 = 𝑛𝑀 𝐵𝑅 + 1 ; 𝑚𝑏𝑟(𝑛𝑀 𝐵𝑅 ) ← 𝑛𝑒𝑤𝑀 𝐵𝑅 ;
+[ 𝑗:𝑗+𝑤−1] ) ;
+Append 𝑚𝑏𝑟 to file 𝑚𝑏𝑟𝑘 ; 𝐼𝑛𝑑𝑒𝑥𝑘 ← RTreeBuild(𝑚𝑏𝑟𝑘 ) ; Save 𝐼𝑛𝑑𝑒𝑥𝑘 , 𝑅𝑘 ;
+When a query 𝑄 of length 𝑤 is provided , we use the search code shown in Alg . 2 . The inputs in this case are the UTS query 𝑄 , 𝑈 𝐷𝐵 , the set of indices , the set of reference points , 𝑤 , and 𝜖 . The output is 𝜖 NN of 𝑄 . First , for each reference point 𝑅𝑘 , we find the distance 𝐷𝑘 of the query from it . Then we perform a range query search {𝐷𝑘− 𝜖 , 𝐷𝑘 + 𝜖} using the RTreeSearch routine . We call this step the first level of pruning . The output of the search code are a set of candidate MBR ’s which intersect the query MBR . In the second level of pruning , we intersect the candidate MBRs found using different reference points . This reduces the number of false alarms dramatically as we show in our experiments , leading to very high prune rate and very low search time . Once a compact candidate set is found , we do disk access to retrieve those candidates and remove false alarms .
+We now discuss how 𝑅𝐵𝑆 handles queries longer than
+𝑤 in the following two cases :
+∙ 𝐿(𝑄 ) = 𝑛𝑤 ( 𝑛 > 1 ) : We first divide 𝑄 into 𝑛 disjoint subsequences of length 𝑤 , and search the indices set for ( 𝑛 ) . Finally , we each of them with the threshold 𝜖/ do an exact calculation of full length candidates ( over all 𝑛 parts ) to remove false alarms . The correctness of this approach relies on the following Theorem [ 8 ] .
+√
+51
+Algorithm 2 : 𝑅𝐵𝑆 𝜖 NN Search on UTS Input : 𝑈 𝐷𝐵 , 𝑄 , 𝐼𝑛𝑑𝑒𝑥1 , . . . , 𝐼𝑛𝑑𝑒𝑥𝑟 , 𝑅1 , . . . , 𝑅𝑟 , 𝑤 , 𝜖 Output : 𝜖 NN of 𝑄 begin
+𝜖 NN ← ∅ ; for 𝑘 = 1 to 𝑟 do
+𝐷𝑘 = 𝑑𝑖𝑠𝑡(𝑄.𝑠𝑒𝑞1 , 𝑅𝑘 ) ; 𝐶𝑎𝑛𝑑𝑘 = RTreeSearch(𝐼𝑛𝑑𝑒𝑥𝑘 , {𝐷𝑘 − 𝜖 , 𝐷𝑘 + 𝜖} ) ; 𝑘=1 𝐶𝑎𝑛𝑑𝑘} ;
+𝐶𝑎𝑛𝑑𝐴𝑙𝑙 ← {∩𝑟 forall the {𝑢𝑡𝑠 𝑖 , 𝑏 , 𝑒} ∈ 𝐶𝑎𝑛𝑑𝐴𝑙𝑙 do
+[ 𝑏:𝑒 ] from 𝑢𝑡𝑠 𝑖 file on disk ;
+Fetch 𝑦(𝑢𝑡𝑠 𝑖 ) 𝐷𝑖𝑠𝑡 = 𝑑𝑖𝑠𝑡(𝑦(𝑢𝑡𝑠 𝑖 ) , 𝑄.𝑠𝑒𝑞1 ) ; if 𝐷𝑖𝑠𝑡 ≤ 𝜖 then 𝜖 NN ← 𝜖 NN
+[ 𝑏:𝑒 ]
+∪{𝑢𝑡𝑠 𝑖 , 𝑏 , 𝑒} ;
+Theorem 4.1 : If 𝑑𝑖𝑠𝑡(𝑄 , 𝑆 ) < 𝜖 , then for at least one pair of disjoint sequences 𝑄𝑖 and 𝑆𝑖 of length 𝑤 , we have 𝑑𝑖𝑠𝑡(𝑄𝑖 , 𝑆𝑖 ) < 𝜖/
+( 𝑛 ) .
+√
+∙ 𝐿(𝑄 ) = 𝑛𝑤 + 𝑣
+( 0 < 𝑣 < 𝑤 ) : We can ignore the last subsequence of length 𝑣 and perform search on the 𝑛𝑤 disjoint subsequences as described before . We only consider the last subsequence when we perform the exact calculation . C . 𝐿𝐵𝑆 algorithm details
+In RBS , the smallest unit of search is an MBR . Now , for one reference point , RBS has a prune rate directly proportional to the number of MBR ’s searched times the number of points in that MBR . Although the search time for RBS can be very low , large sizes of candidate set increase the overall search time to fetch all the potential candidates from the disk . To alleviate this problem , we present another novel algorithm LBS , in which the search unit is a subsequence in the input space . This algorithm directly exploits the triangular inequality to effectively prune bad candidates by choosing a random subsequence as a reference subsequence . Moreover , to increase the prune rate further , we have used multiple reference points .
+As before , the inputs to LBS are 𝑈 𝐷𝐵 and length of the sliding window 𝑤 . The output is a set of sorted lists as indices . In the first step , similar to RBS , we compute the distances of all the subsequences from a few reference points 𝑅1 , . . . , 𝑅𝑟 . We store these distances ( as the key ) along with the offset and 𝑈 𝑇 𝑆−𝑖𝑑 into a list called 𝐼𝑛𝑑𝑒𝑥𝑘 , for reference point 𝑅𝑘 . In the next step we simply sort these 𝑘 lists and store them along with the reference points .
+During searching , when a query 𝑄 of length 𝑤 is provided , for each reference point 𝑅𝑘 , we find the distance 𝐷𝑖𝑠𝑡𝑘 of the query from 𝑅𝑘 . Then we collect those candidates from 𝐼𝑛𝑑𝑒𝑥𝑘 whose key ( distance ) lies in the range 𝐷𝑖𝑠𝑡𝑘 ± 𝜖 . This is a direct application of the triangle inequality . As before , we intersect the candidate sets for all the reference points finally do a disk access to remove false alarms . We do not present the pseudo code here due to shortage of space .
+V . FLEXIBLE MTS SUBSEQUENCE SEARCH
+We now describe our algorithm for MTS query search . In our problem setting , we have substantially more variables to index compared to the number of variables given in a typical query . Moreover , the query variables are not known apriori which severely restricts the use of existing MTS search algorithms . The algorithm we propose here has excellent performance for the multivariate queries that we want to execute .
+As before , we split the discussion into two parts . The index building algorithm is very similar to the one presented for UTS search . Alg . 3 presents the pseudo code . The first step is to decompose the MTS database 𝑀 𝐷𝐵 into a series of univariate time series databases 𝑈 𝐷𝐵(1 ) , . . . 𝑈 𝐷𝐵(𝑑 ) , one for each feature in the MTS . Then we select 𝑟 reference points for each UTS independently , and use Alg . 1 to build indices for each of the 𝑑 UTS ’s . Thus for 𝑑 features , we will have 𝑑 × 𝑟 number of sorted lists for 𝐿𝐵𝑆 algorithm and 𝑑 × 𝑟 number of 𝑅∗ trees for 𝑅𝐵𝑆 . We store these indices along with the reference points on disk .
+Algorithm 3 : MTS Build Index using 𝑅𝐵𝑆 Input : 𝑀 𝐷𝐵 , 𝑤 Output : 𝐼𝑛𝑑𝑒𝑥 for MTS search begin
+Convert 𝑀 𝐷𝐵 into 𝑈 𝐷𝐵(1 ) , . . . , 𝑈 𝐷𝐵(𝑑 ) ; for f = 1 to d do Select 𝑅(𝑓 ) Index each 𝑈 𝐷𝐵(𝑓 ) using Alg . 1 .
+1 , . . . , 𝑅(𝑓 ) for 𝑈 𝐷𝐵(𝑓 ) ;
+𝑟
+// each feature
+Given a search query 𝑄 having 𝑣 sequences for 𝑣 variables and 𝑣−1 time delays between them , the goal of MTS search algorithm ( Alg . 4 ) is to return all matching multivariate patterns from 𝑀 𝐷𝐵 . To solve this , we first take the first variable ( call it 𝑄.𝑣𝑎𝑟(1 ) ) of 𝑄 and do a search on the index corresponding to feature 𝑄𝑣𝑎𝑟(1 ) The FindCandidates function in Alg . 4 performs this search by first finding a candidate set from each index file of 𝑄.𝑣𝑎𝑟(1 ) and then joining them over multiple reference points . This routine is similar to Alg . 2 ( except the disk access part ) . This generates an MTS table as : {𝑀 𝑇 𝑆 𝑖𝑑 , 𝐵𝑒𝑔𝑖𝑛 𝑜𝑓 𝑓 𝑠𝑒𝑡1} . Similarly , the next variable 𝑄.𝑣𝑎𝑟(2 ) is searched on the relevant index . These two searches on the indices correspond to the first this point we prune the candidates further by joining these candidate sets ( 𝐶𝑎𝑛𝑑12 ) and noting that ( 1 ) all candidates in candidate 1 and candidate 2 must have the same 𝑀 𝑇 𝑆 𝑖𝑑 , and ( 2 ) the begin offsets between any two candidates from the two sets must be delayed by an amount 𝛿1 . The JoinCandidate routine performs this join . By this second level of pruning , we add another column to the table for the second variable {𝑀 𝑇 𝑆 𝑖𝑑 , 𝐵𝑒𝑔𝑖𝑛 𝑜𝑓 𝑓 𝑠𝑒𝑡1 , 𝐵𝑒𝑔𝑖𝑛 𝑜𝑓 𝑓 𝑠𝑒𝑡2} . Note that until this point , we have not performed any actual disk level of pruning . At
+52 access , and searched only on the indices . We could continue joining the candidate sets and create a compact set for all the variables in 𝑄 . However , in our experiments ( not reported here ) , we notice that the size of the candidate set after the first two joins is very small and does not reduce further on joining other candidate sets . We validated this for several variables in the candidate sets ; in most cases , the size of the candidate set was less than 5 % of the total number of subsequences . Thus , heuristically it becomes redundant to search for the remaining variables in the index . Instead , we do a disk access to retrieve all candidates from 𝐶𝑎𝑛𝑑12 to remove the false alarms . The resulting subsequences Cand are the true nearest neighbors of 𝑄 considering the first two variables . We continue to search the remaining variables 𝑄.𝑣𝑎𝑟(3 : 𝑣 ) by retrieving them directly from the disk after noting that they must come from the same MTS and satisfy the specified time delays .
+Algorithm 4 : MTS 𝜖 NN Search using 𝑅𝐵𝑆 Input : 𝑀 𝐷𝐵 , 𝑄 , 𝐼𝑛𝑑𝑒𝑥 , 𝑅1 , . . . , 𝑅𝑟 , 𝑤 , 𝝐 Output : 𝜖 NN of 𝑄 begin
+𝐶𝑎𝑛𝑑𝑖 ← FindCandidates(𝑄.𝑣𝑎𝑟(𝑖) ) ;
+// each feature
+𝜖 NN ← ∅ ; for 𝑖 = 1 to 𝑄.𝑣𝑎𝑟 do
+𝐶𝑎𝑛𝑑 ← ∩𝑄.𝑣𝑎𝑟−1 for 𝑐 ∈ 𝐶𝑎𝑛𝑑 do
+𝑖=1
+JoinCandidates(𝐶𝑎𝑛𝑑𝑖 , 𝐶𝑎𝑛𝑑𝑖+1 , 𝛿𝑖 )
+// remove false positives
+Fetch 𝑐 from 𝑖 th MTS 𝐷𝑖𝑠𝑡1 = 𝑑𝑖𝑠𝑡(𝑐.𝑠𝑒𝑞1 , 𝑄.𝑠𝑒𝑞1 ) ; 𝐷𝑖𝑠𝑡2 = 𝑑𝑖𝑠𝑡(𝑐.𝑠𝑒𝑞2 , 𝑄.𝑠𝑒𝑞2 ) ; if 𝐷𝑖𝑠𝑡1 ≤ 𝜖1 and 𝐷𝑖𝑠𝑡2 ≤ 𝜖2 and . . . then
+𝜖 NN ← 𝜖 NN
+∪{𝑐 , 𝑖 , 𝑗} ;
+B . Storage complexity of 𝐿𝐵𝑆 and 𝑅𝐵𝑆
+For 𝐿𝐵𝑆 , we need to insert every subsequence in the sorted list for every UTS . Let 𝑇𝑖 be the length ( number of time points ) of any MTS in the 𝑖 th file . The number of subsequences for the 𝑖 th MTS is , therefore , 𝑇𝑖−𝑤+1 . Given there are 𝑑 variables in each of the MTS files , the number of subsequences to process for the 𝑖 th MTS file is 𝑑(𝑇𝑖 − 𝑤 + 1 ) . For ∣𝐷∣ total MTS files , we get the total number 𝑖=1(𝑇𝑖 − 𝑤 + 1 ) . For 𝑟 reference of subsequences as , 𝑑 𝑖=1(𝑇𝑖 − points , the overall storage complexity is 𝑂(𝑟𝑑 ∑∣𝐷∣ 𝑖=1 𝑇𝑖 ) . For 𝑅𝐵𝑆 , the index storage 𝑤 + 1 ) ) = 𝑂(𝑟𝑑 ∑∣𝐷∣ 𝑖=1 𝑀𝑖 ) , where 𝑀𝑖 are the number of complexity is 𝑂(𝑟𝑑 MBR ’s created from the 𝑖 th MTS . Since in general , 𝑀𝑖 ≪ 𝑇𝑖 , 𝑅𝐵𝑆 has a much lower index storage complexity .
+∑∣𝐷∣
+∑∣𝐷∣
+∑∣𝐷∣
+∑∣𝐷∣
+𝑖=1(𝑇𝑖 − 𝑤 + 1 ) ) = 𝑂(𝑤𝑟𝑑 ∑∣𝐷∣
+C . Running time of 𝐿𝐵𝑆 and 𝑅𝐵𝑆 For 𝐿𝐵𝑆 , the index building time is proportional to the number of distances computed for each subsequence : 𝑤(𝑇𝑖− 𝑤+1 ) . For 𝑑 variables , 𝑟 reference points and ∣𝐷∣ MTS files , the overall running time for inserting all the elements in the 𝑖=1 𝑇𝑖 ) . index is 𝑂(𝑤𝑟𝑑 𝑖=1(𝑇𝑖 − 𝑤 + 1 ) elements need to Moreover , since 𝑟𝑑 be sorted , the overall running time is the maximum of the sorting time and the insertion time . For 𝑅𝐵𝑆 , we need to do some extra computation for checking the marginal cost of each point . Let the time required for it be 𝜆 . Therefore , the 𝑖=1(𝑇𝑖−𝑤 +1) ) , overall time complexity is , 𝑂((𝑤 +𝜆)𝑟𝑑 where we have ignored the time to insert 𝑀𝑖 MBRs in the 𝑅∗ tree . The query time for both the algorithms is bounded by : 𝑂(max𝑖 ∣𝐶𝑎𝑛𝑑𝑖∣ ) + 𝑂(𝑤∣𝐶𝑎𝑛𝑑∣ ) , where the max is taken over all the candidate sets and the second term reflects the time for actual disk access and exact computation .
+∑∣𝐷∣
+VI . ANALYSIS OF ALGORITHMS
+In this section analyze the properties of the algorithms .
+D . Choice of reference points
+A . Correctness of 𝐿𝐵𝑆 and 𝑅𝐵𝑆
+Theorem 6.1 : Both 𝐿𝐵𝑆 and 𝑅𝐵𝑆 algorithms are cor rect ie they guarantee no false dismissals .
+Proof : The proof is based on the triangle inequality . For a reference point 𝑅 , query 𝑄 and any arbitrary subsequence 𝑆 , we can write by virtue of triangle inequality : ∣𝑑𝑖𝑠𝑡(𝑄 , 𝑅 ) − 𝑑𝑖𝑠𝑡(𝑆 , 𝑅)∣ < 𝑑𝑖𝑠𝑡(𝑄 , 𝑆 ) .
+Now for any query 𝑄 which belongs to 𝜖 NN of 𝑆 , 𝑑𝑖𝑠𝑡(𝑄 , 𝑆 ) < 𝜖 . Combining , we get
+∣𝑑𝑖𝑠𝑡(𝑄 , 𝑅 ) − 𝑑𝑖𝑠𝑡(𝑆 , 𝑅)∣ < 𝑑𝑖𝑠𝑡(𝑄 , 𝑆 ) < 𝜖 ie 𝑑𝑖𝑠𝑡(𝑄 , 𝑆 ) < 𝜖 ⇒ ∣𝑑𝑖𝑠𝑡(𝑄 , 𝑅 ) − 𝑑𝑖𝑠𝑡(𝑆 , 𝑅)∣ < 𝜖 ⇒ 𝑑𝑖𝑠𝑡(𝑄 , 𝑅 ) − 𝜖 < 𝑑𝑖𝑠𝑡(𝑆 , 𝑅 ) < 𝑑𝑖𝑠𝑡(𝑄 , 𝑅 ) + 𝜖 . Since in both 𝐿𝐵𝑆 and 𝑅𝐵𝑆 , we retrieve all sequences from the index in the range 𝑑𝑖𝑠𝑡(𝑄 , 𝑅 ) ± 𝜖 , both these algorithms guarantee no false dismissals .
+The choice of the reference points is crucial to the performance of our algorithms . From Th . 6.1 , a point 𝑆 is not a potential candidate to be the nearest neighbor of 𝑄 if ∣𝑑𝑖𝑠𝑡(𝑄 , 𝑅)−𝑑𝑖𝑠𝑡(𝑆 , 𝑅)∣ > 𝜖 , where 𝑅 is an arbitrarily chosen reference point . This is because , by triangular inequality , 𝑑𝑖𝑠𝑡(𝑄 , 𝑆 ) ≥ ∣𝑑𝑖𝑠𝑡(𝑄 , 𝑅 ) − 𝑑𝑖𝑠𝑡(𝑆 , 𝑅)∣ > 𝜖 too . Therefore , such an 𝑆 cannot belong to the set of nearest neighbors of 𝑄 . If , on the other hand , ∣𝑑𝑖𝑠𝑡(𝑄 , 𝑅 ) − 𝑑𝑖𝑠𝑡(𝑆 , 𝑅)∣ < 𝜖 , then we cannot prune 𝑆 since 𝑑𝑖𝑠𝑡(𝑄 , 𝑆 ) can be greater or less than 𝜖 . Therefore , the goodness of 𝑅 can be evaluated based on the size of the following set : 𝒮 = {𝑆 : ∣𝑑𝑖𝑠𝑡(𝑄 , 𝑅 ) − 𝑑𝑖𝑠𝑡(𝑆 , 𝑅)∣ < 𝜖} . Minimizing the size of 𝒮 gives a good 𝑅 . However , in the above formulation , 𝑄 is typically unknown until query time , making the optimization problem unsolvable . Our heuristic is to choose multiple reference points randomly from the database with the hope that each such point will prune many candidates and we can only work with the intersection of these sets . Our extensive
+53
+1
+0.9
+ρ
+0.8
+0.7
+FRM LBS RBS
+0.6
+0.01 0.05 0.1
+1
+0.9
+0.8
+ρ
+FRM LBS RBS
+0.7
+0.01 0.05 0.1
+1
+0.95
+0.9
+ρ
+FRM LBS RBS
+0.85
+0.01 0.05 0.1
+0.2
+Threshold ( ε )
+0.4
+0.2
+Threshold ( ε )
+0.4
+10
+8
+6
+4
+2
+) t ( e m i t i g n n n u R
+FRM LBS RBS Brute force
+0 0.01 0.05 0.1
+0.2
+Threshold ( ε )
+0.4
+12
+10
+8
+6
+4
+2
+) t ( e m i t i g n n n u R
+FRM LBS RBS Brute force
+0 0.01 0.05 0.1
+0.2
+Threshold ( ε )
+0.4
+20
+15
+10
+5
+) t ( e m i t i g n n n u R
+FRM LBS RBS Brute force
+0.2
+Threshold ( ε )
+0.4
+0 0.01 0.05 0.1
+0.2
+Threshold ( ε )
+0.4
+1
+0.9
+ρ
+0.8
+FRM LBS RBS
+0.01 0.05 0.1
+0.2
+Threshold ( ε )
+0.4
+1
+0.95
+0.9
+ρ
+FRM LBS RBS
+0.85
+0.01 0.05 0.1
+0.2
+Threshold ( ε )
+0.4
+15
+10
+5
+) t ( e m i t i g n n n u R
+FRM LBS RBS Brute force
+0 0.01 0.05 0.1
+0.2
+Threshold ( ε )
+0.4
+15
+10
+5
+) t ( e m i t i g n n n u R
+FRM LBS RBS Brute force
+0 0.01 0.05 0.1
+0.2
+Threshold ( ε )
+0.4
+15
+10
+5
+) t ( e m i t i g n n n u R
+FRM LBS RBS Brute force
+1
+0.95
+0.9
+ρ
+FRM LBS RBS
+0.85
+0.01 0.05 0.1
+0.2
+Threshold ( ε )
+0.4
+0 0.01 0.05 0.1
+0.2
+Threshold ( ε )
+0.4
+Figure 3 . Variation of 𝜌 and 𝑡 ( mean and std dev ) for different 𝑤 , averaged over ten queries for random walk dataset . Left column shows 𝜖 vs . 𝜌 and right column shows 𝑡 vs . 𝜌 for 𝑤 = 128 , 256 , 1024 from top to bottom respectively . In most cases , 𝐿𝐵𝑆 shows higher prune rate while prune rates of 𝑅𝐵𝑆 are comparable to 𝐹 𝑅𝑀 . Also the running time of all the algorithms are comparable ; in most cases , 𝐿𝐵𝑆 has the least search time .
+Figure 4 . Variation of 𝜌 and 𝑡 ( both mean and std dev ) with the number of reference points , averaged over ten queries for random walk dataset . Left column shows 𝜖 vs . 𝜌 and right column shows 𝑡 vs . 𝜌 for ∣𝑟∣ = 1 , 2 , 3 from top to bottom respectively . In most cases , 𝐿𝐵𝑆 shows higher prune rate while prune rates of 𝑅𝐵𝑆 are comparable to 𝐹 𝑅𝑀 . Also the running time of all the algorithms are comparable ; in most cases , 𝐿𝐵𝑆 has the least search time . experimental results show the effectiveness of this simple heuristic by choosing 3 5 reference points ( see Fig 6 and Fig 4 ) .
+VII . EXPERIMENTS
+To validate the performance of the 𝐿𝐵𝑆 and 𝑅𝐵𝑆 algorithms , we have run a variety of tests using both univariate and multivariate datasets . All algorithms have been implemented in Matlab and run on a 64 bit 2.33 GHz quad core dell precision 690 desktop running Red Hat Enterprise Linux version 5.4 having 2GB of physical memory . We have measured the following quantities : ∙ 𝜌 – the prune rate ( =1 − ∣𝐶∣/𝑇 ) , where 𝐶 and 𝑇 are sizes of the candidate set and the number of sliding windows
+∙ 𝑡 – running time
+A . Univariate dataset experiments
+1 ) Dataset description and experimental setup : We have used 2 univariate datasets for testing our algorithms which have been used in the literature [ 8][9 ] for UTS subsequence search . The first dataset is a random walk dataset generated synthetically ( 500,000 points ) . The second dataset is a stock market dataset having 329,112 entries . We have tested 3 algorithms on these datasets : ( 1 ) the FRM algorithm using the adaptive MBR approach [ 8 ] , ( 2 ) LBS , and ( 3 ) RBS .
+We have measured 𝜌 and 𝑡 at varying window sizes 𝑤 ( 128 , 256 , 512 , 1024 ) and the number of reference points ( 1∼5 ) . The default values of these parameters are fixed at
+512 and 3 respectively . For each choice of 𝑤 and 𝑡 , we have experimented with five different 𝜖 . The choice of each 𝜖 is such that the selectivity ( ie actual number of nearest neighbors/𝑇 ) ranges between 10−6 ∼ 10−1 [ 8 ] . 𝜌 and 𝑡 at each measurement point is an average over ten randomly generated queries . We present the results in the next section . 2 ) Results : We summarize the results of 𝐹 𝑅𝑀 , 𝐿𝐵𝑆 and 𝑅𝐵𝑆 in Figures 3 – 6 . Fig 3 shows the average and standard deviation of 𝜌 and 𝑡 for each 𝜖 , over ten queries for the random walk dataset for different values of 𝑤 . For most of the thresholds , we see that the prune rate of 𝐿𝐵𝑆 is the highest . Also , the prune rates of 𝑅𝐵𝑆 tend to be very close to the 𝐹 𝑅𝑀 algorithm for smaller number of reference points . One significant advantage of both 𝐿𝐵𝑆 and 𝑅𝐵𝑆 over 𝐹 𝑅𝑀 is that the prune rates for the former two algorithms can easily be controlled by increasing the number of reference points ; however this increases the running time as well . Also , the prune rates for all these algorithms increase with increasing 𝑤 , due to lesser number of windows to index . Fig 4 demonstrates the performance of the algorithms for varying number of reference points . As expected , the prune rate increases with increasing number of reference points . We have similar results for the random walk dataset shown in the Figures 5 and 6 . In this case , 𝑅𝐵𝑆 has a higher prune rate compared to 𝐿𝐵𝑆 or 𝐹 𝑅𝑀 . To sum up , both the 𝐿𝐵𝑆 and the 𝑅𝐵𝑆 algorithms offer an excellent prune rate for UTS search . 𝐿𝐵𝑆 offers the best prune rate of all the 3 algorithms compared here , but as
+54
+1
+0.9
+ρ
+0.8
+0.7
+FRM LBS RBS
+0.01 0.1
+1
+0.95
+ρ
+0.9
+0.85
+0.8
+FRM LBS RBS
+0.01 0.1
+1
+0.95
+ρ
+0.9
+0.85
+0.8
+FRM LBS RBS
+0.01 0.1
+0.5
+Threshold ( ε )
+0.75
+1
+0.5
+Threshold ( ε )
+0.75
+1
+0.5
+Threshold ( ε )
+0.75
+1
+) t ( e m i t i g n n n u R
+8
+6
+4
+2
+0
+10
+) t ( e m i t i g n n n u R
+8
+6
+4
+2
+0
+) t ( e m i t i g n n n u R
+10
+8
+6
+4
+2
+0
+FRM LBS RBS Brute force
+0.01 0.1
+0.5
+Threshold ( ε )
+0.75
+1
+FRM LBS RBS Brute force
+0.01 0.1
+0.5
+Threshold ( ε )
+0.75
+1
+FRM LBS RBS Brute force
+0.01 0.1
+0.5
+Threshold ( ε )
+0.75
+1
+1
+0.8
+ρ
+0.6
+FRM LBS RBS
+0.01 0.1
+ρ
+ρ
+1
+0.95
+0.9
+0.85
+1
+0.95
+0.9
+0.85
+FRM LBS RBS
+0.01 0.1
+FRM LBS RBS
+0.01 0.1
+0.5
+Threshold ( ε )
+0.75
+1
+0.5
+Threshold ( ε )
+0.75
+1
+0.5
+Threshold ( ε )
+0.75
+1
+) t ( e m i t i g n n n u R
+) t ( e m i t i g n n n u R
+) t ( e m i t i g n n n u R
+10
+8
+6
+4
+2
+0
+10
+8
+6
+4
+2
+0
+10
+8
+6
+4
+2
+0
+FRM LBS RBS Brute force
+0.01 0.1
+0.5
+Threshold ( ε )
+0.75
+1
+FRM LBS RBS Brute force
+0.01 0.1
+0.5
+Threshold ( ε )
+0.75
+1
+FRM LBS RBS Brute force
+0.01 0.1
+0.5
+Threshold ( ε )
+0.75
+1
+Figure 5 . Variation of 𝜌 and 𝑡 ( both mean and std dev ) for different 𝑤 , averaged over ten queries for stock market dataset . Left column shows 𝜖 vs . 𝜌 and right column shows 𝑡 vs . 𝜌 for 𝑤 = 128 , 256 , 1024 from top to bottom respectively . For this dataset , 𝑅𝐵𝑆 shows higher prune rate than 𝐹 𝑅𝑀 or 𝐿𝐵𝑆 . Also the running time of all the algorithms are comparable ; in most cases , 𝐿𝐵𝑆 has the least search time .
+Figure 6 . Variation of 𝜌 and 𝑡 ( both mean and std dev ) with the number of reference points , averaged over ten queries for stock market dataset . Left column shows 𝜖 vs . 𝜌 and right column shows 𝑡 vs . 𝜌 for ∣𝑟∣ = 1 , 2 , 3 from top to bottom respectively . In most cases , 𝐿𝐵𝑆 shows higher prune rate while prune rates of 𝑅𝐵𝑆 are comparable to 𝐹 𝑅𝑀 . Also the running time of all the algorithms are comparable ; in most cases , 𝐿𝐵𝑆 has the least search time . discussed before , suffers from large storage cost . On the other hand , 𝑅𝐵𝑆 uses MBRs to group similar points and hence can reduce the storage cost dramatically . In many cases , this reduces the search time as well . However , since the unit of search is an MBR ( containing several points ) and not individual points ( as in 𝐿𝐵𝑆 ) , the prune rate of 𝑅𝐵𝑆 is lower than 𝐿𝐵𝑆 . It also needs to be mentioned that if the variables are not normalized , the MBR creation heuristic ( 𝐼 adaptive in [ 8 ] ) decides on the density of each MBR based on 𝜖 . Too high a value of 𝜖 packs more points per MBR , reducing the number of MBRs . This , in turn , reduces the prune rate . Lower values of 𝜖 fragments the MBRs to only a few points in each . This increases the prune rate but increases the index search time . We test with different values of 𝜖 during building indices and always choose an 𝜖 in the middle range of those reported here .
+B . Multivariate dataset experiments
+1 ) Dataset description : We have used two large multivariate datasets for demonstrating the search capabilities of 𝐿𝐵𝑆 and 𝑅𝐵𝑆 in the multivariate domain . To the best of our knowledge , these multivariate datasets are much larger than the datasets used in the literature for multi dimensional time series search . The datasets are described next . C MAPSS dataset : The first dataset is simulated commercial aircraft engine data . The dataset contains 6,875 ( =∣𝐷∣ ) full flight recordings sampled at 1 Hz with 29 engine and flight condition parameters . This dataset has 32,640,967 tuples . We have tested our algorithm with 16 variables only .
+US Regional carrier dataset ( CarrierX ) : The second dataset is a real life commercial aviation dataset of a US regional carrier consisting of 3,573 ( =∣𝐷∣ ) flights . Each flight contains 46 variables . Domain experts identified a subset of 9 variables which are important . There are 22,207,852 tuples . For all the multivariate experiments , we have used 𝑤 = 𝐿(𝑄 ) = 256 and 3 reference points for both 𝐿𝐵𝑆 and 𝑅𝐵𝑆 . 2 ) Results : We have tested 5 randomly chosen queries , each with three different thresholds . For each query and threshold combination , the selectivities of each ranges from 10−7 ∼ 10−6 . We do not present the thresholds for each variable here due to shortage of space .
+The performance results of 𝐿𝐵𝑆 and 𝑅𝐵𝑆 on CMAPSS and CarrierX are presented in Table I . The second column refers to the five different queries we have run along with the variables for each query . The next three columns show the number of candidates generated for the first variable ( 𝐶𝑎𝑛𝑑1 ) , the second variable ( 𝐶𝑎𝑛𝑑2 ) , and after joining these two candidate sets 𝐶𝑎𝑛𝑑12 both for 𝐿𝐵𝑆 and 𝑅𝐵𝑆 . Column 𝐶𝑒𝑥𝑎𝑐𝑡 is the actual number of these candidates which are found to be less than the threshold after doing the exact calculation . The smaller the size of 𝐶𝑎𝑛𝑑12 , the fewer the number of actual disk accesses necessary . 𝜖 NN column refers to the actual number of nearest neighbors of the query after taking all the variables and time delays into consideration . The last two columns show the prune rate 𝜌 = 𝐶𝑎𝑛𝑑12/𝑇 and the query time for 𝐿𝐵𝑆 . Since the query times for 𝑅𝐵𝑆 are very similar , we do not report
+55 them here . For this experimental setup , the index building time for 𝐿𝐵𝑆 and 𝑅𝐵𝑆 on the CarrierX dataset are 7 hrs and 9 hrs respectively .
+These results show that for the two large multivariate the prune datasets , for different queries and thresholds , rates are very high ( ∼ 95% ) . Also , we notice that the sizes of the candidate sets are smaller for 𝐿𝐵𝑆 than 𝑅𝐵𝑆 for all the queries thereby generating fewer false the storage requirement of 𝐿𝐵𝑆 is positives . However , non trivial . For example , for CarrierX , we need to index approximately 22 million distances using each reference point per UTS . The total storage requirement the index will be ( 22,000,000×(4+4+4)/(1024×1024 ) ) ≈ store 250 MBytes , each UTS , {𝐷𝑖𝑠𝑡 , 𝑀 𝑇 𝑆 𝑖𝑑 , 𝐵𝑒𝑔𝑖𝑛 𝑜𝑓 𝑓 𝑠𝑒𝑡} each window sequence as a float of ( 4+4+4 ) bytes . For 𝑅𝐵𝑆 , let ’s assume that ( 1 ) we have 𝑀 MBRs on average for each reference {𝑚𝑖𝑛 𝑀 𝐵𝑅 , 𝑚𝑎𝑥 𝑀 𝐵𝑅 , point , 𝑀 𝑇 𝑆 𝑖𝑑 , 𝐵𝑒𝑔𝑖𝑛 𝑜𝑓 𝑓 𝑠𝑒𝑡 , 𝐸𝑛𝑑 𝑜𝑓 𝑓 𝑠𝑒𝑡} for each MBR . In our experiments we have 𝑀 = 5 , 174 , 619 . Then the total storage requirements ( assuming 4 bytes for each ) will be ( 5,174,619×(4+4+4+4+4)/(1024×1024 ) ) ≈ 98 MBytes , lower than that of 𝐿𝐵𝑆 . Also note that the query time for most of the queries are extremely small considering the large sizes of the datasets . assuming we for and for for
+( 2 ) we store
+From these results we conclude that : ( 1 ) query execution time of 𝐿𝐵𝑆 is expected to be much lower than 𝑅𝐵𝑆 due to higher prune rate , ( 2 ) 𝑅𝐵𝑆 has relatively higher rate of false positives compared to 𝐿𝐵𝑆 , and ( 3 ) the index storage requirements of 𝐿𝐵𝑆 may be significantly higher compared to 𝑅𝐵𝑆 . However , the choice of 𝑅𝐵𝑆 vs . 𝐿𝐵𝑆 is application dependent .
+C . Application : finding anomalous flights
+We have used the MTS search algorithm to find flight landing patterns which result in go around/aborted landing . In many cases , an aircraft on approach to landing needs to abort the landing , climb back on full throttle and try the landing again . This can happen due to improper landing configuration . Currently , most safety analysts study these events based on only one variable at a time which generates a large number of false positives . These so called exceedences or anomalies can be indicators of safety issues . The frequency of such events are tracked as a measure of safety of operations . These events can aid significantly in understanding the underlying causal factors .
+We have searched for such incidents in the CarrierX dataset using two variables : airspeed ( in knots ) and altitude ( in feet ) . A domain expert ( a retired commercial pilot ) has helped us sketch a typical go around pattern as shown in Fig 7 . The left figure shows the variation in airspeed while the right one shows the variation in altitude . Using such a query as the input and thresholds 100 , 4000 for the two variables , we have searched the CarrierX dataset . The algorithm
+56
+240
+220
+200
+180
+160
+140
+120 0
+50
+100
+150
+200
+250
+5000
+4000
+3000
+2000
+1000 0
+50
+100
+150
+200
+250
+Figure 7 . Typical pattern for “ go around ” in CarrierX dataset . Left plot shows airspeed ( knots ) vs time while right plot shows altitude ( feet ) vs . time .
+400
+350
+300
+250
+200
+150
+100
+50
+0 0 0
+Airspeed
+10000
+8000
+6000
+4000
+2000
+Altitude
+200 200
+400 400
+600 600 Time
+800 800
+1000 1000
+0 1200 1200
+300
+250
+200
+150
+100 0 0
+Airspeed
+Altitude
+200 200
+400 400
+600 600
+Time
+800 800
+1000 1000
+10000
+8000
+6000
+4000
+2000
+0
+Figure 8 . Examples of “ go arounds ” detected by our multi variate search algorithm on CarrierX dataset . The matching regions are highlighted . returned 10 hits . Fig 8 shows 2 such flight profiles . We have plotted the altitude and airspeed on the same graph with the left axis as the airspeed and the right axis as the altitude . A visual inspection of each of these flights demonstrates the usefulness of the algorithm in finding all the “ go around ” patterns ( no false positives ) . The highlighted portion shows the matched time series for each of these plots which shows that the algorithm is accurate at finding similar , not exact , motifs , ie , it has good noise tolerance . The average time taken for running the query is approx . 12 secs .
+VIII . CONCLUSION
+In this paper we present two algorithms 𝐿𝐵𝑆 and 𝑅𝐵𝑆 for finding multivariate subsequences from large MTS datasets . Both these algorithms guarantee no false dismissals . 𝑅𝐵𝑆 algorithm is novel in the sense that it organizes subsequences into MBRs and uses multiple reference points to reduce false positives . To the best of our knowledge , using spatial indexing along with multiple global reference points for time series subsequence search has never been explored before . Experiments on two massive commercial aviation related MTS datasets show that both these algorithms offer excellent prune rates ( greater than 095 ) The CMAPSS and CarrierX datasets that we have tested are much bigger than any of the MTS datasets used in the literature for multivariate subsequence search . As an application of the proposed method , we have shown how it can be used for finding a critical safety pattern from real aviation dataset , that of aborted landings . For future work , we plan to implement this algorithm on Map Reduce and explore other distance measures such as time warping .
+ACKNOWLEDGEMENTS
+This work was supported by the NASA Integrated Vehicle Health Management Project and a NASA Google Annex .
+RESULTS OF 𝐿𝐵𝑆 AND 𝑅𝐵𝑆 CMAPSS AND CARRIERX DATASET FOR FIVE DIFFERENT QUERIES AND THREE DIFFERENT THRESHOLDS PER QUERY . FOR BOTH 𝐿𝐵𝑆 AND 𝑅𝐵𝑆 , THE PRUNE RATES ARE ALWAYS GREATER THAN 0.95 , SIGNIFYING THAT LESS THAN 5 % OF THE CANDIDATES NEED TO
+Table I
+BE RETRIEVED FROM THE MTS DATABASE FOR EXACT CALCULATIONS .
+Queryid
+∣𝐶𝑎𝑛𝑑1∣
+∣𝐶𝑎𝑛𝑑2∣
+∣𝐶𝑎𝑛𝑑12∣
+𝐿𝐵𝑆
+𝑅𝐵𝑆
+𝐿𝐵𝑆
+𝑅𝐵𝑆
+𝐿𝐵𝑆
+𝑅𝐵𝑆
+𝐶𝑒𝑥𝑎𝑐𝑡
+∣𝜖 NN∣
+Prune rate 𝜌
+𝐿𝐵𝑆
+𝑅𝐵𝑆
+1 : ( 25 , 27 , 4 )
+2 : ( 20 , 29 , 5 )
+3 : ( 5 , 15 , 28 )
+4 : ( 26 , 5 , 27 )
+5 : ( 5 , 23 , 2 )
+1 : ( 29 , 23 , 28 )
+2 : ( 8 , 28 , 27 )
+3 : ( 38 , 8 , 29 )
+4 : ( 6 , 27 , 30 )
+5 : ( 28 , 8 , 29 )
+18409 81409 251981 53585 179850 317793 528470 1137522 2115994
+1311 34492 115350 101344 316085 771259
+26235 79606 133451 17338 48149 83177 935844 1500995 1760160 22039 103096 213954 1298247 1947774 5161965
+3007594 3263815 3841664 870835 1295644 1587719 4753958 4861533 5101127 2013861 2143905 2317163 4010042 4101886 4356479
+469928 523225 583050 1120516 1174920 1218440 870535 1369274 1564834 2164753 2289089 2429383 2671533 3368141 6417365
+738 7567 81330 14969 50502 141444 14725 87236 177992 57144 193974 501207 74609 164881 337201
+55610 204310 374437 16541 62316 1577348 223138 379346 527712 13866 156448 351061 184660 205164 227501
+2477549 2565309 2702600 2390063 2454707 2633060 306706 425813 550198 3655449 3894274 4634240 878140 1160134 1521911
+530788 716418 896063 74930 267710 3028623 391564 555599 705614 901583 1033504 1196446 1649628 129643 1735525
+CMAPSS 52 2668 23694 1411 13862 58905 6171 63690 174391
+344 8034 38648 12945 49908 150020
+CarrierX 96 952 2640 450 3595 54214 71342 175800 277017
+71 2204 9408 76445 105286 168155
+801400 1003839 1454776 266022 481096 633137 290593 399972 536022 86193 194616 609697 114419 203004 375037
+10226 14391 20771 26361 92246 754404 94594 213822 313020 402047 477704 568003 476399 29617 972349
+6 17 540 252 1187 20124 453 16289 79332
+5
+2060 22034
+18 332 4925
+3 15 27 3 7 885 12318 48395 102401
+10 30 48
+47559 78467 136137
+6 10 297 6 17 259 8 121 1445
+3 337 6471
+9 49 479
+3 15 27 1 3 9 7 64 269 10 30 48 2 125 882
+0.9999 0.9999 0.9992 0.9999 0.9995 0.9981 0.9998 0.9979 0.9944 0.9999 0.9997 0.9987 0.9996 0.9983 0.9951
+0.9999 0.9999 0.9998 0.9999 0.9998 0.9974 0.9966 0.9917 0.9869 0.9999 0.9998 0.9995 0.9964 0.9951 0.9921
+0.9741 0.9675 0.9529 0.9914 0.9844 0.9795 0.9906 0.9871 0.9826 0.9972 0.9937 0.9803 0.9963 0.9934 0.9879
+0.9995 0.9993 0.999 0.9987 0.9957 0.9645 0.9955 0.9899 0.9853 0.9811 0.9775 0.9733 0.9776 0.9986 0.9543
+Time ( secs )
+2.63 102.91 291.8 6.91 130.91 710.12 201.13 770.18 945.1 23.1 41.1 99.13 141.98 121.9 821.1
+3.69 9.41 15.58 28.56 119.32 694.94 69.4 147.69 197.97 3.01 17.7 44.01 64.63 92.95 197.27
+The authors would also like to thank Dr . Matthew E . Otey and Bryan Matthews for their valuable suggestions .
+[ 7 ] E . Keogh and C . Ratanamahatana , “ Exact Indexing of Dynamic Time Warping , ” KAIS , vol . 7 , no . 3 , pp . 358–386 , 2005 .
+REFERENCES
+[ 1 ] K . Yang and C . Shahabi , “ A PCA based Similarity Measure for Multivariate Time Series , ” in Proceedings of MMDB’04 , 2004 , pp . 65–74 .
+[ 2 ] —— , “ An Efficient 𝑘 Nearest Neighbor Search for Multivariate Time Series , ” Inf . Comput . , vol . 205 , no . 1 , pp . 65–98 , 2007 .
+[ 3 ] M . Vlachos , M . Hadjieleftheriou , D . Gunopulos , and E . Keogh , “ Indexing Multi Dimensional Time Series with Support for Multiple Distance Measures , ” in Proceedings of KDD’03 , New York , NY , USA , 2003 , pp . 216–225 .
+[ 4 ] S . Lee , S . Chun , D . Kim , J . Lee , and C . Chung , “ Similarity Search for Multidimensional Data Sequences , ” in Proceedings of ICDE’00 , 2000 , pp . 599–608 .
+[ 5 ] K . Yang and C . Shahabi , “ A PCA based Kernel for Kernel PCA on Multivariate Time Series , ” in Proceedings of ICDM’05 Workshops , 2005 , pp . 149–156 .
+[ 8 ] C . Faloutsos , M . Ranganathan , and Y . Manolopoulos , “ Fast Subsequence Matching in Time series Databases , ” SIGMOD Rec . , vol . 23 , no . 2 , pp . 419–429 , 1994 .
+[ 9 ] Y . Moon , K . Whang , and W . Loh , “ Duality Based Subsequence Matching in Time Series Databases , ” in Proceedings of ICDE’01 , Washington , DC , USA , 2001 , pp . 263–272 .
+[ 10 ] C . Traina , R . Filho , A . Traina , M . Vieira , and C . Faloutsos , “ The Omni Family of All purpose Access Methods : A Simple and Effective Way to Make Similarity Search More Efficient , ” The VLDB Journal , vol . 16 , pp . 483–505 , 2007 .
+[ 11 ] W . Han , J . Lee , Y . Moon , and H . Jiang , “ Ranked Subsequence Matching in Time Series Databases , ” in Proceedings of VLDB’07 , 2007 , pp . 423–434 .
+[ 12 ] A . Mueen , E . Keogh , and N . Bigdely Shamlo , “ Finding Time Series Motifs in Disk Resident Data , ” in Proceedings of ICDM’09 , Miami , 2009 , pp . 367–376 .
+[ 13 ] P . Ciaccia , M . Patella , and P . Zezula , “ M tree : An Efficient Access Method for Similarity Search in Metric Spaces , ” in Proceedings of VLDB’97 , 1997 , pp . 426–435 .
+[ 6 ] —— , “ A Multilevel Distance Based Index Structure for Multivariate Time Series , ” in Proceedings of TIME’05 , Washington , DC , USA , 2005 , pp . 65–73 .
+[ 14 ] A . Mueen , E . Keogh , Q . Zhu , S . Cash , and M . Westover , “ Exact Discovery of Time Series Motifs , ” in Proceedings of SDM’09 , 2009 , pp . 473–484 .
+57

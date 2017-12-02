@@ -1,0 +1,373 @@
+Efficient Mini batch Training for Stochastic Optimization
+Mu Li1,2 , Tong Zhang2,3 , Yuqiang Chen2 , Alexander J . Smola1,4 1Carnegie Mellon University 2Baidu , Inc . 3Rutgers University 4Google , Inc . muli@cscmuedu , tzhang@statrutgersedu , chenyuqiang@baidu.com , alex@smola.com
+ABSTRACT Stochastic gradient descent ( SGD ) is a popular technique for large scale optimization problems in machine learning . In order to parallelize SGD , minibatch training needs to be employed to reduce the communication cost . However , an increase in minibatch size typically decreases the rate of convergence . This paper introduces a technique based on approximate optimization of a conservatively regularized objective function within each minibatch . We prove that the convergence rate does not decrease with increasing minibatch size . Experiments demonstrate that with suitable implementations of approximate optimization , the resulting algorithm can outperform standard SGD in many scenarios .
+1 .
+INTRODUCTION
+The recent years have witnessed a rapid growth of data in variety and volume . The sheer amount of data has led to increasing interest in scalable optimization . Stochastic gradient descent ( SGD ) is one of the most popular methods . It has been successfully applied to large scale natural language processing [ 11 ] , deep learning [ 7 ] , matrix factorization [ 10 ] , image classification [ 17 ] , and latent variable models [ 22 ] .
+Traditional SGD processes one example per iteration . This sequential nature makes SGD challenging for distributed inference . A common practical solution is to employ minibatch training , which aggregates multiple examples at each iteration . However , the synchronization cost of mini batch training is potentially still too large for large scale applications . For instance , in a distributed implementation , machines may need to communicate with each other for every mini batch in order to synchronize the shared variables , such as gradients or parameters [ 8 ] . Given that both bandwidth and latency of networks are often 100x worse than physical memory , this overhead cannot be ignored .
+Although large mini batches are preferable to reduce the communication cost , they may slow down convergence rate in practice [ 4 ] . That is , if SGD converges by T iterations , the mini batch training with batch size b may need more than
+T /b iterations . The increase in computation diminishes the benefits of the reduced communication cost due to large b . In addition , the I/O costs increases if the data is too large to fit into memory so that one need to fetch the minibatch from disk or network [ 25 ] .
+This paper considers the problem that we want to use large mini batches to reduce communication cost but at the same time retain good convergence properties . It is known √ that for general convex objective functions , the convergence of SGD is O(1/ √ T ) ; for mini batch SGD with minibatch size b , the convergence is O(1/ bT + 1/T ) [ 8 ] . Since the √ total number of examples examined is bT while there is only b times improvement , the convergence speed degrades a with increasing minibatch size .
+To address this issue we propose an alternative mini batch update strategy that does not slow down in convergence as the mini batch size increases . The key observation is that , when a mini batch is large , it is desirable to solve a more complex optimization problem , rather than simply update the solution by the gradients . Specifically , in each iteration , we solve a conservative risk minimization subproblem . It consists of two components : the original objective function on the mini batch and a conservative penalty . Accordingly we are able to gain more from a mini batch before moving to the next . The conservative penalty reduces variance and prevents divergence from the previous consensus . For our goal we need two ingredients : a more sophisticated update strategy and secondly , an efficient means of solving the conservative subproblem such that the increase of computation does not overwhelm the reduced synchronization cost .
+Many previous works aimed at improving mini batch SGD [ 11 ] proposed to use asynchronous commuoptimization . nication . [ 23 ] studied the accelerated version . At a more fundamental level , [ 20 , 27 ] consider the problem of solving subproblems in parallel , followed by averaging . They can be viewed as the extreme case where the mini batch size is the entire partition . These strategies , however , are wasteful since no communication occurs during the compute phase . Our approach differs from previous work by the addition of a conservative penalty and the use of each data partition in a nontrivial manner beyond simple gradient computation : • We propose a new and general way of performing mini batch updates beyond simple parameter averaging .
+• We show that the proposed algorithm has an optimal √ O(1/ bT ) convergence rate , which improves [ 8 ] when the batch size b is large . Furthermore , we show it can be improved to O(log T /(λbT ) + λ/( strongly convex objective function .
+√ bT ) ) for a λ
+• We propose two strategies to solve the conservative subproblem and demonstrate how to extend them in a communication efficient distributed implementation . • We demonstrate the efficacy of the algorithm on a large scale dataset .
+2 . ALGORITHM
+For concreteness of our exposition we need to introduce the inference problem formally . Our goal is to solve w∗ = argmin w∈Ω
+φ(w ) where φ(w ) =
+1 n
+φi(w ) .
+( 1 )
+Here φi : Ω → R is a convex loss function and w is a shared parameter . This general form addresses a large group of machine learning problems . We give two examples : n i=1
+Risk Minimization [ 12 ] : Here the objective is to minimize a loss function ( x , y , w ) , such as the regression or classification error that depends on data x and label y . Moreover , one commonly adds a regularizer c(w ) . Assume there are n example pairs ( x1 , y1 ) , . . . , ( xn , yn ) , then we obtain the objective function by setting
+φi(w ) = ( xi , yi , w ) + λc(w )
+( 2 ) where λ is the regularization coefficient .
+Graphical Model Inference [ 15 , 14 ] : In undirected graph ical models ( and factor graphs ) the relationship between random variables can be encoded by clique potentials ψC ( w ) , as given by the Hammersley Clifford theorem [ 1 ] . Assume the clique set C = {C1 , . . . , Cn} , then pseudolikelihood can be decomposed into terms
+φi(w ) = log ψCi ( w ) .
+( 3 )
+Note that this only applies to fully observed models . For partial observations we need to interleave this with an expectation step ( or any other method for addressing nonconvex inference problems ) .
+A much larger family of problems has been characterized by the ADMM algorithms of [ 2 ] . They can all be viewed as special cases of the above setting where different φi(w ) only act on a subset of variables . 2.1 Mini Batch Stochastic Gradient Descent We begin with a brief review of a naive variant of minibatch SGD . During training it processes a group of examples per iteration . For notational simplicity , assume that n is divisible by the number of mini batches m . Then we partition the examples into m mini batches , each of size b = n/m . Note that this assumption is not required neither for the proof nor for the implementation . Likewise , the pre partitioning step is also not necessary in practice , however , it simplifies the exposition of what follows . Given a random minibatch I ⊂ {1 , . . . , n} of size b , we can define the objective function on I as
+φi(w ) we have φ(w ) = EI [ φI ( w ) ] .
+( 4 ) i∈I
+φI ( w ) =
+1 |I|
+In the simple case that Ω = Rd the mini batch SGD employs the following stochastic update rule : at each iteration t , we pick mini batch It ⊂ {1 , . . . , n} of size b at random and let ( 5 ) wt = wt−1 − ηt∇φIt ( w ) .
+Whenever Ω has a nontrivial shape we would need to add a projection step , which finds the nearest neighbor of wt in the feasible set Ω [ 26 ] . √ For convex φi , this method converges to the minimum objective value at a rate of O(1/ bT + 1/T ) , where T is the number of iterations [ 8 ] . Although b times more examples are processed in an iteration , the mini batch training can converge much slower than that of standard SGD with the same number of processed examples . In practice , the convergence rate slows down dramatically in terms of the number of examples processed , when we use a large mini batch size . 2.2 Efficient Mini Batch Training
+The above empirical finding was a key motivation for our approach . To gain some intuition note that for general domains Ω the update ( 5 ) can be rewritten as an optimization problem on a mini batch : wt = argmin w∈Ω
+φIt ( wt−1 ) + ∇φIt ( wt−1 ) , w − wt−1
++
+1 2ηt w − wt−12
+2
+Note that this can be regarded as an approximation of φIt ( w ) , the loss on the minibatch plus a conservative penalty relative to wt−1 . While the above optimization problem is easy to solve , the first order Taylor approximation of φIt ( w ) might be too coarse to achieve sufficient progress towards the optimal solution . Such an aggressive trade off of fast convergence in favor of computational efficiency is highly undesirable for mini batches of large sizes : often there is high overhead of switching to the next mini batch , eg due to process synchronization , data reads from disk and network communication .
+Note that SGD often uses a small step size due to the variance of the randomly chosen mini batch . However , when the size of a mini batch increases , its variance decreases . More sophisticated methods may be used towards faster convergence rate . In this paper , we propose to update the parameter by solving the following subproblem at iteration t : wt = argmin w∈Ω
+φIt ( w ) + w − wt−12
+2
+γt 2
+.
+( 6 )
+It consists of two components : the first part minimizes the objective function on mini batch It , aiming to achieve full utilization of this mini batch . The second component is a conservative constraint which limits dramatic changes of the parameter to avoid overutilization .
+Algorithm 4 shows the proposed algorithm . Compared to the SGD rule , we need to solve the more complex conservative subproblem for each mini batch . For the sake of simplicity in the theoretical analysis , we assume that the optimization is performed exactly ; in practice , an approximate solution will be sufficient , particularly in the early stages of inference . If the computational cost for this approximate optimization is not too expensive compared to SGD , then this method has similar overall complexity per step relative to SGD , while at the same time drastically reducing the amount of network communication required between steps .
+Algorithm 1 Single node template
+Input : Initial w0 , conservative coefficients γ1 , . . . , γT 1 : for t = 1 , . . . , T do 2 : 3 : randomly choose mini batch It ⊂ {1 , . . . , n} of size b solve the conservative subproblem :
+T t=1 wt = argmin w∈Ω
+4 : end for
+Under Assumption 1 and when choosing the update parameter γt = γ + λ(t − 1 ) , we have for all w∗ ∈ Ω :
+E[φ(wt ) − φ(w∗ ) ] ≤ γ 2 w∗ − w02
+2 +
+A2 b
+T t=1
+1 γt
+φIt ( w ) + w − wt−12
+2
+γt 2
+. where A2 = sup w∈Ω
+−1 n
+∇φi(w ) − ∇φ(w)2 2 . n i=1
+2.3 Theoretical Analysis
+The advantage of solving the conservative subproblem ( 6 ) is that the convergence does not slow down dramatically when the mini batch size increases . This is reflected in our main result . Before stating the theorem , we need to introduce the notion of a Bregman divergence for convex functions f as follows :
+Df ( w ; w
+) := f ( w ) − f ( w
+) − ∇f ( w
+)
+( w − w
+)
+( 7 )
+This is the difference between f ( w ) and the value of the first order Taylor expansion of f at w , when evaluated at w . The properties of Bregman divergence include : Non negativity : Df ( w ; w ) ≥ 0 Convexity : Df ( w ; w ) is convex with respect to w Linearity : Df ( w ; w ) is linear with respect to f , namely
+Df +cf ( w ; w
+) = Df ( w ; w
+) + cDf ( w ; w
+) .
+For convex functions , the modulus of strong convexity λ = 0 vanishes . This amounts to a constant update rate γ . In this case , choosing
+γ =
+2T b
+A w∗ − w02 minimizes the right hand side of the bound . Note that there is no a priori guarantee that a correspondingly small γ is feasible . However , since the variance decreases with O(1/b ) √ for increasing minibatch size , the scaling of γ = O(1/ b ) is appropriate . This yields the following aggregate regret bound
+E[φ(wt ) − φ(w∗ ) ] ≤ w∗ − w02 .
+√ 2A√ T b
+T t=1
+1 T
+√
+This means that if mini batch size is b , after T steps , we have a convergence bound of 1/ bT . Therefore increasing mini batch size does not affect convergence in terms of the number of training examples processed by the algorithm . √ For strongly convex λ > 0 , we can achieve a regret bound of O(log T /(λbT ) + λ/( 2.4 Proof of Theorem 1 bT ) ) with optimal choice of γ .
+We need the following assumption for our theorem :
+For convenience , we define the regularized mini batch loss
+Assumption 1 . We assume that for all t :
+EIt [ Dφ(wt ; wt−1 ) ] ≤ EIt
+DφIt
+( wt ; wt−1 ) + wt − wt−12
+2
+γt 2
+DφIt
+( w ; wt−1 )
+Note that Dφ(w ; wt−1 ) = EIt holds for general w that does not depend on It . However , since wt depends on It we require some γt > 0 to satisfy the condition . Essentially , Assumption 1 bounds the amount of ’s urprise’ we can expect when replacing the full Bregman Divergence by one on the subset plus a conservative penalty .
+Note that the assumption holds as long as we pick γt greater than or equal to the smoothness parameter of φ :
+φ(w ) − φ(w
+) − ∇φ(w
+)
+( w − w
+) ≤ γt 2 w − w
+2 2 .
+In other words , the counterpart of strong convexity , namely that there exists a quadratic upper bound on the amount of change , suffices to guarantee this condition . In practice , however , one may be more aggressive and allow a much smaller γt when the mini batch size is large . In fact , one may show that a choice of γt = O(1/b ) is sufficient . We have the following theorem :
+Theorem 1 . Consider the stochastic update rule ( 6 ) . As
+EI sume that φi is λ strongly convex for all i :
+φi(w ) − φi(w
+) − ∇φi(w
+)
+( w − w
+) ≥ λ 2 w − w
+2 2 . where B2 = ht(w ) = φIt ( w ) + w2 2 .
+γt 2
+Our proof relies on three lemmas . First , we upper bound wt − ¯wt2 , where ¯wt is similar to wt except for optimizing over all examples . That is , the gradients differ via ∇φ( ¯wt)− ∇φIt ( ¯wt)2 . Next we show that the expectation of the latter , namely the variance of gradient over a mini batch , is bounded from above by A2/b . Finally we characterize the progress from time t − 1 to t . The proofs of these auxiliary lemmas are presented in the Appendix .
+Lemma 1 . Let
+¯wt = argmin w∈Ω
+φ(w ) + w − wt−12
+2
+γt 2
+,
+( 8 ) be the minimizer of the conservative version of the risk . Then the difference between the full solution ¯wt and the minibatch solution wt is bounded by wt − ¯wt2 ≤ 1 γt
+∇φ( ¯wt ) − ∇φIt ( ¯wt)2 .
+Lemma 2 . Assume that w ∈ Ω and assume that we randomly choose a mini batch I of size b independent of w . Then the expected deviation between gradients is bounded by
+.∇φI ( w ) − ∇φ(w)2 n
+2 fi =
+∇φi(w ) − ∇φ(w)2 2 .
+1 n i=1 n − b n − 1
+B2 b
+≤ A2 b
+.
+Lemma 3 . Given any w∗ ∈ Ω , the expected improvement in terms of Bregman Divergence is bounded via
+E [ Dht ( w∗ , wt ) ] − E [ Dht ( w∗ , wt−1 ) ] ≤φ(w∗ ) − E [ φ(wt ) ] − E [ Dφ(w∗ ; wt−1 ) ] +
+1 γt
+A2 b
+.
+( 9 )
+Proof of Theorem 1 . Under the assumption that φi is λ strongly convex , it follows by construction that ht is strongly convex with modulus γt + λ . Consequently the Bregman divergence is bounded by Dht ( w∗ , wt ) ≥ γt + λ
+Together with Lemma 3 , we have w∗ − wt2 2 .
+φ(wt ) − φ(w∗ ) + φ(wt ) − φ(w∗ ) + w∗ − wt2 w∗ − wt2
+γt + λ
+γt+1
+E
+2
+2
+2
+2
+A2 bγt
+2
+= E ≤ E [ φ(wt ) ] − φ(w∗ ) + E [ Dht ( w∗ , wt ) ]
+≤ E [ Dht ( w∗ , wt−1 ) − Dφ ( w∗ ; wt−1 ) ] + ( w∗ , wt−1 ) − Dφ ( w∗ ; wt−1 ) fi + E.w∗ − wt−12 fi + E.w∗ − wt−12
+DφIt γt 2
+A2 bγt
+= E
++
+=
+2
+2
+A2 bγt
+γt 2 stopping criteria can be used to achieve early stopping . For instance , we may stop when the relative objective improvement is less than a thresholds . In practice we found it most convenient to use the simplest strategy : limit the maximal iteration number L . That is , the for loop will stop if we pass the mini batch L times . A major benefit of this strategy is to simplify the synchronization of the distributed implementation we will introduce in the next section .
+Algorithm 2 EMSO GD : solve ( 6 ) by gradient descent Input : previous parameter wt−1 , mini batch It conservative coefficient γt , learning rate ηt
+Output : new parameter wt 1 : wt ← wt−1 2 : for = 0 , . . . , L do 3 : update wt ← wt − ηt ( ∇φIt ( wt ) + γt(wt − wt−1 ) )
+( 10 )
+4 : end for
+The second method is motivated by [ 25 ] , where coordinate descent is applied to solve the dual form of the linear SVM in a mini batch . Unlike [ 25 ] , we directly solve the subproblem by coordinate descent in the primal form . Algorithm 3 shows the proposed algorithm , which is named EMSO CD . In each time , EMSO CD chooses a random coordinate j ∈ [ 1 , p ] , where p is the total number of coordinates , and then solves the one dimension problem w − wt−12 argmin
+φIk ( w ) +
+.
+γt 2 wj
+Here the first equality follows from the definition of γt ; the second equality follows from the definition of ht and simple algebra ; the third equality uses the fact that we are drawing It independently . Hence we have
+EIt|wt−1 DφIt
+( w∗ , wt−1 ) = Dφ(w∗ ; wt−1 ) .
+Summing over t = 1 , . . . , T , we obtain the desired bound .
+3 . PRACTICAL CONSIDERATIONS
+Our analysis assumes that we solve the conservative subproblem ( 6 ) exactly ; in practice , we only need to perform this optimization approximately . In this section , we propose two approximate approaches and their distributed implementation . 3.1 Approximation by Early Stopping
+Optimization algorithms solving the original problem ( 1 ) can often be applied to the conservative subproblem ( 6 ) : the latter consists of a part of the former with a simple quadratic term with respect to the parameter . While the most suitable optimization methods vary for different objective functions , a natural idea is to reuse the one to solve ( 6 ) but to stop it earlier . It is understood that real applications are complex ; here we propose two simple but general methods that allow us to solve ( 6 ) .
+The first one is a direct extension of SGD . Note that , if we set γ = 0 , then SGD equals to performing gradient descent with a single pass of the mini batch with wt−1 as the start point . We relax the single pass constraint such that we could obtain a more accurate solution of the conservative subproblem . The algorithm , named EMSO GD , is shown in Algorithm 2 . It solves ( 6 ) by gradient descent . Standard
+This minimization problem may have a closed form solution . But generally it could be solved by the Newton method . Similar to EMSO GD , we use the maximal iteration number as the early stop criteria .
+Algorithm 3 EMSO CD : solve ( 6 ) by coordinate descent Input : previous parameter wt−1 , mini batch It conservative coefficient γt Output : new parameter wt 1 : wt ← wt−1 2 : for = 0 , . . . , Lp do 3 : 4 : randomly choose coordinate j ∈ [ 0 , p ] update wt,j ← wt,j − ηt
+∇jφIt ( wt ) + γt(wt,j − wt−1,j )
+∇2 jjφIt ( wt ) + γt
+( 11 )
+5 : end for
+3.2 Distributed Model Averaging
+In distributed computing , we assume there are d machines , which are connected by network . Then the conservative subproblem could be solved by all these machine together . Specifically , we first divide a mini batch into d partitions , next assign one partition to each of the machines , and then obtain the solution via communication . One possible approach is that all machines communicate in each iteration when solving the subproblem . However , this may introduce a large amount of communication .
+Instead , we propose to use a more communication friendly approach where each machine solves the conservative subproblem independently , and then all machines average their name # examples # features # entries # features per example label ratio +1 : −1
+URL
+CTR KDD04 2.4 M 142 M 146 K 3.2 M 28 M 74 11 M 277 M 8.4 G 116±17 73±0.8 59±26 1:15 1:2 1:111 name L BFGS LIBLINEAR Mini Batch SGD EMSO GD EMSO CD update iteration distributed
+[ 18 ] [ 9 ] ( 5 ) ( 10 ) ( 11 ) batch batch mini batch mini batch mini batch yes no yes yes yes
+Table 1 : A collection of real datasets .
+Table 2 : Evaluated Algorithms . results . The algorithm is shown in Algorithm 4 . Note that there is no restriction in terms of the choice of methods for solving the subproblems locally . In particular , the algorithms introduced in the previous section apply .
+Algorithm 4 EMSO : Efficient Mini Batch for Stochastic Optimization Input : initialization w0 , conservative coefficients {γt}T t=1 learning rate {ηt}T t=1 , number of machines k
+1 : partition examples into m mini batches I1 , . . . , Im 2 : for t = 1 , . . . , T do 3 : 4 : 5 : 6 : 7 : randomly choose mini batch It partition It into It,1 , . . . , It,d for i = 1 , . . . , d do {in parallel} machine i get partition It,i solve the conservative subproblem on It,i by Algorithm 2 or 3 to obtain w(i ) t d
+8 : 9 : 10 : end for end for average wt = 1 d i=1 w(i ) t via communication
+4 . EXPERIMENTS 4.1 Dataset
+To evaluate the proposed algorithms , we used three binary classification datasets of varying scales , which are listed on Table 1 . KDD04 comes from the particle physics task at KDD Cup 20041 , whose goal is to classify two types of particles generated in high energy collider experiments . The URL dataset aims to detect malicious URLs2 . CTR is a private dataset containing displayed advertisements which are randomly sampled within a period of three months . The goal is to predict whether or not an advertisement will be clicked . KDD04 is a dense dataset , while the other two are extremely sparse . The largest dataset CTR has more than 100 million examples and the raw text file size is approximately 300 GB . 4.2 Setup
+For the sake of simplicity we study the case of classification via logistic regression . There the objective function can be written in the form of ( 1 ) by letting
+φi(w ) = log(1 + exp(−yixi , w) ) .
+Here we let ( yi , xi ) to be the i th sample pair .
+We evaluated five algorithms , as summarized in Table 2 . With the exception of LibLinear all algorithms were implemented in C++ using MPI for communication . The linear algebra operations are mainly performed by eigen33 , which is a highly efficient C++ template library .
+L BFGS This is a parallelized version of the classical memory limited BFGS method , as described in [ 18 ] . That is , the root machine obtains subgradients from each of the client machines to aggregate into a global subgradient . Subsequently the parameters are updated and we broadcast its new value . By construction the method is a batch optimization solver .
+LibLinear This is the single machine implementation as obtained from Chih Jen Lin ’s site4 . We include it to provide a reference point to existing and well known solvers . This is a sophisticated batch solver for convex problems .
+Mini Batch SGD This effectively computes subgradients for a small minibatch on each machine . These subgradients are then aggregated to obtain a full mini batch supgradient . After that , we take an update on the server using ( 5 ) and rebroadcast the parameters . We used an O(1/ batch algorithms . Specifically , we set
+√ t ) decay learning rate for the mini
+α
+ηt = η t + α for iteration t , where constants η and α specify the initial scale and decaying speed , respectively . We performed grid search to choose the best values by examining the convergence progress . We search the range of η ∈ {100 , . . . , 10−5} and α ∈ {100 , . . . , 104} .
+EMSO GD This uses the parameter averaging approach introduced in Algorithm 4 while performing parameter updates per client via ( 10 ) . It differs from the previous methods by taking the higher order information of the loss function into account when processing a minibatch .
+EMSO CD The key difference to EMSO GD is that it uses coordinate descent to update parameters within a minibatch . Other than that , the structure is essentially identical . For both EMSO variants we set λ = 0 , the number of inner iterations to be 5 and 2 , respectively , and search γ from {100 , . . . , 105} .
+All experiments were carried on a cluster , where each machine is equipped with four AMD Opteron Interlagos 16 core 6272 CPUs , 128GB memory and 10Gbit Ethernet .
+1http://osmotcscornelledu/kddcup/datasetshtml 2http://sysnetucsdedu/projects/url/
+3http://eigentuxfamilyorg/ 4http://wwwcsientuedutw/~cjlin/liblinear/
+4.3 Minibatch Size and Convergence
+A first sanity check is to ascertain that the convergence results regarding mini batch methods on a single node hold . For this purpose we increase the batch size from 103 to 105 . The objective values after processing 107 examples are shown on Figure 1 . As expected , when the mini batch size increases , there is an increment of objective value for minibatch SGD due to the rather crude approximation of the dataset by a first order Taylor expansion . That is , the convergence in terms of examples processed slows down . This degeneration is worst on the dataset KDD04 , which is dense and extremely unbalanced in terms of its labels . This problem is alleviated by EMSO GD . It performs 5 iterations of gradient descent in a mini batch and therefore potentially gains more information about the higher order structure than SGD .
+However , the convergence is much more stable when solving the conservative subproblem by coordinate descent . As can be seen from Figure 1 , the objective value of EMSOCD does not increase . It even slightly decreases , with the increasing mini batch sizes . A possible explanation is that , even though each mini batch is passed only twice , the coordinate descent with the previous parameter as a warm start gives satisfactory solutions to the conservative subproblem . So it provides sufficient progress to compensate for the loss due to increasing the mini batch size .
+In summary , solving conservative optimization problems on a minibatch is beneficial when compared to a naive gradient computation . 4.4 Comparison to other algorithms
+In a next step we compare the algorithms listed in Table 2 by objective value versus run time . We use the same setting as Section 4.3 for the mini batch algorithms , but only report the result with the best batch size , namely 105 for EMSOCD and 103 for the other two algorithms . Figure 2 shows the results . It can be seen that the convergence the two batch algorithms , L BFGS and LibLinear is similar : slow at the beginning but fast at the end . This is not too unsurprising given LibLinear ’s heritage .
+For the mini batch algorithms , EMSO GD is comparable to SGD : While EMSO GD converges faster in terms of number of minibatch iterations , it consumes 5 times more computational time than SGD . Note that , even with a larger mini batch size , EMSO CD is 10 times faster than the other two , and furthermore , it is faster than the batch algorithm at the end . 4.5 Minibatch Size and Synchronization Cost Recall that a major benefit of large mini batch sizes is the potential reduction in synchronization cost . Figure 3 shows the contribution of synchronization cost to the overall runtime of the algorithm when using 12 machines . Even with such a small number of computers the proportion is considerable . As expected , this cost decreases with increasing mini batch size . It is due to the increase in the amount of computation between synchronization passes . Furthermore , because both EMSO GD and EMSO CD solve a more complex optimization problem in each mini batch than SGD , their synchronization cost is correspondingly smaller than that of SGD . In addition , although coordinate descent passes a mini batch twice in our experiment , it requires significant more exponentiation operations than the gradient descent ( a
+Figure 1 : Objective value versus mini batch size after in total 107 examples are processed in a single node . From top to bottom , datasets are KDD04 , URL , and CTR , respectively , where CTR is downsampled to 4 millions examples due to the limited capacity of a single node .
+100010000100000001001500200250030035minibatchobjective SGDEMSO−GDEMSO−CD10001000010000000050101502025minibatchobjective SGDEMSO−GDEMSO−CD10001000010000001902021022023024minibatchobjective SGDEMSO−GDEMSO−CD Figure 3 : The fraction of synchronization cost as a function of minibatch size when communicating between 12 and 12 nodes .
+#nodes
+5 10 20 objective = 0.2 time speedup 879s 499s 363s
+1.00x 1.76x 2.42x objective = .1972 time speedup 2439s 1367s 962s
+1.00x 1.78x 2.54x
+Table 3 : Run time and speedup for EMSO CD to reach the same objective value when running on 5 , 10 and 20 nodes . times , and therefore has a further decreased synchronization cost .
+The convergence results under various mini batch sizes are shown in Figure 4 . We first fix the total number of examples processed to be 5 × 106 . As can be seen from the top figure , the results are similar to the single node results of Figure 1 . That is , EMSO GD slightly improves SGD while EMSO CD is resilient to increase the mini batch size . The bottom of Figure 4 shows the results by fixing the run time to be 1 , 000 seconds . The trend then is total different . Because the portion of synchronization cost decrease , more time can be allocated to process the examples , therefore a large mini batch size is faster . Furthermore , although SGD is comparable to EMSO GD in the single node experiment , as shown in Figure 2 , the latter outperforms the former here , due to the communication cost in distributed environment . In addition , there are clear advantages for EMSO CD to use large batch size , as it converges faster when the mini batch size increases . 4.6 Scalability
+We conclude our experimental evaluation by assessing runtime results for varying numbers of nodes . We primarily compare the following two algorithms : EMSO CD and LBFGS . Figure 5 shows the convergence results . As can be seen , both algorithms benefits from an increase in the number of nodes . But L BFGS gains more than EMSO CD , because the former passes the whole training data in each iteration so the portion of synchronization cost is small— 15 % comparing 30 % of EMSO CD . However , EMSO CD is
+Figure 2 : Objective value versus run time by a single node . Datasets are the same as Figure 1 , which are KDD04 , URL , and CTR from top to bottom . fast special functions library would probably address this issue ) . As a result , it consumes more CPU time than gradient descent , even though the latter processes a min batch five
+10010110210310−210−1time ( sec.)objective L−BFGSLiblinearSGDEMSO−GDEMSO−CD10010110210310−1100101time ( sec.)objective L−BFGSLiblinearSGDEMSO−GDEMSO−CD10110210310−0710−0610−0510−04time ( sec.)objective L−BFGSLiblinearSGDEMSO−GDEMSO−CD10310410530405060708090minibatchsynchronization cost ( % ) SGDEMSO−GDEMSO−CD Figure 5 : Objective function value versus run time for both EMSO CD and L BFGS using varying numbers of nodes .
+Another line of research focuses on the practical performance , especially when data cannot fit into memory . For example , [ 25 ] studied solving linear SVM in the dual form by processing a block of data at each time . [ 21 ] showed that having both I/O and computational threads working together can further improve the performance . [ 5 ] studied how to select the data block .
+Our work is different from previous ones in several aspects . First , we propose a novel mini batch algorithm that solves a regularized optimization problem in primal form at each step . We show that the method can also achieve the optimal convergence rates theoretically , and presented practical implementations of the approach . The practical performance of the resulting methods outperform minibatch SGD under various scenarios .
+Conclusion .
+In this paper we proposed a variant of mini batch SGD whose convergence rate does not degrade when the batch size increases . It solves a conservative subproblem in each iteration to maximize the utilization of the mini batch while at the same time controlling the variance via a conservative constraint . We showed that it enjoys an optimal convergence rate and proposed practical distributed implementations . Furthermore , we demonstrated its efficiency on serial and distributed experiments on large scale datasets .
+6 . REFERENCES [ 1 ] J . Besag . Spatial interaction and the statistical analysis of lattice systems ( with discussion ) . Journal of the Royal Statistical Society . Series B , 36(2):192–236 , 1974 .
+[ 2 ] S . Boyd , N . Parikh , E . Chu , B . Peleato , and
+J . Eckstein . Distributed optimization and statistical learning via the alternating direction method of multipliers . Foundations and Trends in Machine Learning , 3(1):1–123 , 2010 .
+[ 3 ] R . Byrd , S . Hansen , J . Nocedal , and Y . Singer . A stochastic quasi newton method for large scale optimization . arXiv preprint arXiv:1401.7020 , 2014 .
+Figure 4 : Objective values when varying the mini batch size using 12 nodes . Top : for a fixed total number of examples set to 5×106 . Bottom : for fixed runtime set to 1000 seconds . still 10 times faster than L BFGS , due to the faster convergence rate .
+Table 3 shows the quantitative speedup for EMSO CD to reach specific objective values . When the number of nodes doubled from 5 to 10 , there is an average 1.75x speedup for both objective values , and if the nodes number is increased by 4 times , the speedup increases to 25x
+5 . RELATED WORK AND DISCUSSION
+The idea of using mini batch in stochastic optimization has been studied by a number of researchers . For example , √ it was shown in [ 8 ] that distributed mini batch gradient can achieve a convergence rate of O(1/ T b + 1/T ) , which is comparable to that of serial SGD when the minibatch size is small . Additional studies include [ 6 , 24 , 23 ] .
+There is also a large volume of works to improve the standard mini batch approach . For example , [ 16 ] proposed to solve minw φIt ( w ) directly , while [ 3 ] presented a L BFGS style updating . In addition , [ 19 , 13 ] argued to reduce the stochastic variance via gradients computed on the whole dataset .
+10310410502020502102150220225023minibatchobjective SGDEMSO−GDEMSO−CD1031041050202050210215022minibatchobjective SGDEMSO−GDEMSO−CD10110210310−07110−06910−06710−065time ( sec.)objective 5 nodes10 nodes20 nodesEMSO−CD5 nodes10 nodes20 nodesL−BFGS [ 4 ] R . H . Byrd , G . M . Chin , J . Nocedal , and Y . Wu . Sample size selection in optimization methods for machine learning . Mathematical programming , 134(1):127–155 , 2012 .
+[ 5 ] K W Chang and D . Roth . Selective block minimization for faster convergence of limited memory large scale linear models . In Conference on Knowledge Discovery and Data Mining , pages 699–707 , 2011 .
+[ 6 ] A . Cotter , O . Shamir , N . Srebro , and K . Sridharan .
+Better mini batch algorithms via accelerated gradient methods . In NIPS , volume 24 , pages 1647–1655 , 2011 .
+[ 7 ] J . Dean , G . Corrado , R . Monga , K . Chen , M . Devin ,
+Q . Le , M . Mao , M . Ranzato , A . Senior , P . Tucker , K . Yang , and A . Ng . Large scale distributed deep networks . In Neural Information Processing Systems , 2012 .
+[ 8 ] O . Dekel , R . Gilad Bachrach , O . Shamir , and L . Xiao .
+Optimal distributed online prediction using mini batches . Technical report , http://arxivorg/abs/10121367 , 2010 .
+[ 9 ] R E Fan , J W Chang , C J Hsieh , X R Wang , and
+C J Lin . LIBLINEAR : A library for large linear classification . Journal of Machine Learning Research , 9:1871–1874 , Aug . 2008 .
+[ 10 ] R . Gemulla , E . Nijkamp , P . J . Haas , and Y . Sismanis .
+Large scale matrix factorization with distributed stochastic gradient descent . In Proceedings of the 17th ACM SIGKDD international conference on Knowledge discovery and data mining , pages 69–77 . ACM , 2011 .
+[ 11 ] K . Gimpel , D . Das , and N . A . Smith . Distributed asynchronous online learning for natural language processing . In Proceedings of the Fourteenth Conference on Computational Natural Language Learning , pages 213–222 . Association for Computational Linguistics , 2010 .
+[ 12 ] T . Hastie , R . Tibshirani , and J . Friedman . The
+Elements of Statistical Learning . Springer , New York , 2 edition , 2009 .
+[ 13 ] R . Johnson and T . Zhang . Accelerating stochastic gradient descent using predictive variance reduction . In Advances in Neural Information Processing Systems , pages 315–323 , 2013 .
+[ 14 ] M . I . Jordan . An Introduction to Probabilistic
+Graphical Models . MIT Press , 2008 . To Appear .
+[ 15 ] F . Kschischang , B . J . Frey , and H . Loeliger . Factor graphs and the sum product algorithm . IEEE Transactions on Information Theory , 47(2):498–519 , 2001 .
+[ 16 ] B . Kulis and P . L . Bartlett . Implicit online learning .
+In Proc . Intl . Conf . Machine Learning , 2010 .
+[ 17 ] Y . Lin , F . Lv , S . Zhu , M . Yang , T . Cour , K . Yu ,
+L . Cao , and T . Huang . Large scale image classification : fast feature extraction and svm training . In Computer Vision and Pattern Recognition ( CVPR ) , 2011 IEEE Conference on , pages 1689–1696 . IEEE , 2011 .
+[ 18 ] D . C . Liu and J . Nocedal . On the limited memory
+BFGS method for large scale optimization . Mathematical Programming , 45(3):503–528 , 1989 . [ 19 ] D . Mahajan , S . S . Keerthi , S . Sundararajan , and
+L . Bottou . A parallel sgd method with strong convergence . arXiv preprint arXiv:1311.0636 , 2013 .
+[ 20 ] G . Mann , R . McDonald , M . Mohri , N . Silberman , and D . Walker . Efficient large scale distributed training of conditional maximum entropy models . In Y . Bengio , D . Schuurmans , J . Lafferty , C . K . I . Williams , and A . Culotta , editors , Advances in Neural Information Processing Systems 22 , pages 1231–1239 , 2009 .
+[ 21 ] S . Matsushima , S . Vishwanathan , and A . Smola .
+Linear support vector machines via dual cached loops . In Q . Yang , D . Agarwal , and J . Pei , editors , The 18th ACM SIGKDD International Conference on Knowledge Discovery and Data Mining , KDD , pages 177–185 . ACM , 2012 .
+[ 22 ] D . Mimno , M . Hoffman , and D . Blei . Sparse stochastic inference for latent dirichlet allocation . In International Conference on Machine Learning , 2012 .
+[ 23 ] S . Shalev Shwartz and T . Zhang . Accelerated mini batch stochastic dual coordinate ascent . In Advances in Neural Information Processing Systems , pages 378–385 , 2013 .
+[ 24 ] M . Tak´aˇc , A . Bijral , P . Richt´arik , and N . Srebro .
+Mini batch primal and dual methods for svms . arXiv preprint arXiv:1303.2314 , 2013 .
+[ 25 ] H F Yu , C J Hsieh , K W Chang , and C J Lin .
+Large linear classification when data cannot fit in memory . In B . Rao , B . Krishnapuram , A . Tomkins , and Q . Yang , editors , Knowledge Discovery and Data Mining , pages 833–842 . ACM , 2010 .
+[ 26 ] M . Zinkevich . Online convex programming and generalised infinitesimal gradient ascent . In Proceedings of the International Conference on Machine Learning , pages 928–936 , 2003 .
+[ 27 ] M . Zinkevich , A . J . Smola , M . Weimer , and L . Li .
+Parallelized stochastic gradient descent . In nips23e , editor , nips23 , pages 2595–2603 , 2010 .
+APPENDIX
+Proof of Lemma 1 . Since wt = argminw∈Ω ht(w ) , we have from the first order KKT condition at wt :
+∇ht(wt )
+( wt − ¯wt ) ≤ 0
+In addition , the first order KKT condition of ( 8 ) at ¯wt com2 w − wt−12 bined with the fact that ht(w ) = φIt ( w ) + γt implies that
+2
+( ∇ht( ¯wt ) + ∇φ( ¯wt ) − ∇φIt ( ¯wt ) )
+( wt − ¯wt ) ≥ 0 .
+By substracting the first inequality from the second inequality , and rearranging terms , we obtain :
+( ∇ht ( wt ) − ∇ht ( ¯wt ) )
+≤ ( ∇φ ( ¯wt ) − ∇φIt ( ¯wt ) )
+( wt − ¯wt ) ( wt − ¯wt ) .
+( 12 )
+By additivity of Bregman divergences we have
+Dht ( ¯wt ; wt ) = DφIt hence Dht ( ¯wt ; wt ) ≥ γt 2
+( ¯wt ; wt ) + ¯wt − wt2 2 .
+¯wt − wt2 2 .
+γt 2 where the equalities follow from algebraic manipulations and the definition of Bregman divergence ; in the inequality , we used the first order KKT condition of ( 6 ) at wt , implying that
+( ∇φIt ( wt−1 ) + ∇ht(wt ) − ∇ht(wt−1 ) )
+= ∇ht(wt )
+( w∗ − wt ) ≥ 0 .
+( w∗ − wt )
+Taking expectation , we have
+EDht ( w∗ , wt ) − EDht ( w∗ , wt−1 ) ≤ φ(w∗ ) − Eφ(wt ) − EDφ(w∗ ; wt−1 ) − E(∇φ(wt−1 ) − ∇φIt ( wt−1 ) )
++ E(Dφ(wt ; wt−1 ) − Dht ( wt ; wt−1 ) )
+≤ φ(w∗ ) − Eφ(wt ) − EDφ(w∗ ; wt−1 ) − E(∇φ(wt−1 ) − ∇φIt ( wt−1 ) )
+=φ(w∗ ) − Eφ(wt ) − EDφ(w∗ ; wt−1 )
+− E(∇φ(wt−1 ) − ∇φIt ( wt−1 ) )
+( w∗ − wt )
+( ¯wt − wt ) ,
+( w∗ − wt )
+( 14 ) where the second inequality follows from E(Dφ(wt ; wt−1 ) − Dht ( wt ; wt−1 ) ) ≤ 0 , which is a consequence of Assumption 1 . The equality holds because
+E(∇φ(wt−1 ) − ∇φIt ( wt−1 ) ) w∗
+= E(∇φ(wt−1 ) − ∇EIt|wt−1 φIt ( wt−1 ) )
+= 0 = E(∇φ(wt−1 ) − ∇φIt ( wt−1 ) ) ¯wt . w∗
+Note further that
+≤ ≤
+( ¯wt − wt ) − E(∇φ(wt−1 ) − ∇φIt ( wt−1 ) )
+2 E ¯wt − wt2 E∇φ(wt−1 ) − ∇φIt ( wt−1))2 2 E∇φ( ¯wt ) − ∇φIt ( ¯wt)2 E∇φ(wt−1 ) − ∇φIt ( wt−1))2
+2
+2/γt
+≤ A2/(γtb ) , where the first inequality follows from Cauchy Schwarz inequality , the second inequality is due to Lemma 1 , and the third inequality is due to Lemma 2 . Plugging the above estimate into ( 14 ) , we obtain the desired bound .
+Similarly Dht ( wt ; ¯wt ) ≥ γt
+2 ¯wt − wt2
+2 . It follows that
+γtwt − ¯wt2
+2 ≤ Dht ( ¯wt ; wt ) + Dht ( wt ; ¯wt ) = ( ∇ht(wt ) − ∇ht( ¯wt )
+≤ ( ∇φ( ¯wt ) − ∇φIt ( ¯wt ) ) ≤ ∇φ( ¯wt ) − ∇φIt ( ¯wt)2wt − ¯wt2 ,
+( wt − ¯wt ) ( wt − ¯wt ) where the second inequality is due to ( 12 ) . The third inequality is Cauchy Schwarz inequality .
+Proof of Lemma 2 . This bound is essentially a conversion of variances from a minibatch I to the full set when using sampling without replacement . To simplify notation := ∇φi(w ) − ∇φ(w ) and we use the abbreviation of ψi ψI = ∇φI ( w ) − ∇φ(w ) . Note that by construction and therefore B2 = Ei inequality follows since A2 is a uniform upper bound on the variance over all w ∈ Ω . This yields
+.ψI2 fi = EI
+2
+EI
+Ei [ ψi ] = EI [ ψI ( w ) ] = ψ
+ψi
+( 13 )
+.ψi2fi and B2 ≤ A2 . The latter flflflflfl2 flflflflfl 1
+
+ +
+1 b2 EI
+B2 b
+B2 b i=j∈I
+ψj + i,j∈I i=j i∈I
+2
+ψi
+ψj
+ψi
+ψj
+ψi
+= b i ψj +
+ψ
+B2 b
+− B2 b b − 1 n − 1 b − 1 bn(n − 1 ) b − 1 bn(n − 1 )
+1 b2 EI
+=
+=
+=
+= 0 +
+B2 b i,j n − b n − 1
+<
+A2 b
+The last equality used the fact that ψi has zero mean .
+( w∗ − wt )
+Proof of Lemma 3 . We have Dht ( w∗ , wt ) − Dht ( w∗ , wt−1 )
+= Dht ( wt−1 , wt ) + ( ∇ht(wt−1 ) − ∇ht(wt ) ) ( wt − wt−1 ) ( w∗ − wt )
+( wt − wt−1 )
++ ( ∇ht(wt−1 ) − ∇ht(wt ) )
+≤ Dht ( wt−1 , wt ) + ∇φIt ( wt−1 ) + ( ∇ht(wt−1 ) − ∇ht(wt ) )
+=φ(w∗ ) − φ(wt ) − Dφ(w∗ ; wt−1 ) − ( ∇φ(wt−1 ) − ∇φIt ( wt−1 ) )
++ ( Dφ(wt ; wt−1 ) − Dht ( wt ; wt−1) ) ,
+( w∗ − wt )

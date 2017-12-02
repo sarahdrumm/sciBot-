@@ -1,0 +1,943 @@
+Incremental and Decremental Training for Linear
+Classification
+Cheng Hao Tsai
+Dept . of Computer Science National Taiwan Univ . , Taiwan r01922025@csientuedutw
+Chieh Yen Lin
+Dept . of Computer Science National Taiwan Univ . , Taiwan r01944006@csientuedutw
+Chih Jen Lin
+Dept . of Computer Science National Taiwan Univ . , Taiwan cjlin@csientuedutw
+ABSTRACT In classification , if a small number of instances is added or removed , incremental and decremental techniques can be applied to quickly update the model . However , the design of incremental and decremental algorithms involves many considerations . In this paper , we focus on linear classifiers including logistic regression and linear SVM because of their simplicity over kernel or other methods . By applying a warm start strategy , we investigate issues such as using primal or dual formulation , choosing optimization methods , and creating practical implementations . Through theoretical analysis and practical experiments , we conclude that a warm start setting on a high order optimization method for primal formulations is more suitable than others for incremental and decremental learning of linear classification .
+Categories and Subject Descriptors I52 [ Pattern Recognition ] : Design Methodology—Classifier design and evaluation
+Keywords warm start ; incremental learning ; decremental learning ; linear classification
+1 .
+INTRODUCTION
+In supervised learning , when a small amount of data is added or removed , the classification model may not change much . Therefore , incremental and decremental algorithms are useful to update the model without re training the problem from scratch . However , the design of good incremental and decremental learning algorithms is never easy . First , they are often extended from a standard learning method , but the resulting procedure may become very complicated . Second , applying incremental and decremental algorithms is not guaranteed to be faster than re training the data from scratch . Third , the scenarios to use incremental and decre mental learning may significantly vary according to applications , so designing software for general use is difficult .
+In this paper , we study incremental and decremental algorithms for logistic regression ( LR ) and linear support vector machine ( SVM ) . The decision to work on linear rather than kernel classifiers comes from a long journey of attempting to support incremental and decremental learning in our SVM software LIBSVM [ 4 ] . Although many users have requested this function and some studies have been conducted , we were hampered by two difficulties . First , extending the commonly used decomposition methods to flexibly enlarge or shrink the cached kernel elements during training is complicated . Note that adding or removing data causes a “ two dimensional ” change of rows and columns of the kernel matrix . Second , existing extensions of decomposition methods for incremental or decremental learning may not effectively reduce the running time . Recently , in contrast to using kernels , linear classification has been shown to give comparable accuracy on some applications ( see , eg , a survey in [ 19] ) . The popularity of linear classification has motivated us to study incremental and decremental learning again . However , the goal becomes to support this functionality in another software LIBLINEAR [ 8 ] for large scale linear classification .
+We point out that the difficulties occurred in incremental and decremental learning for kernel classifiers may be alleviated for linear classifiers because more optimization algorithms are applicable . For kernel classifiers , it is rather restrictive to design optimization algorithms because the model is represented by a linear combination of training instances . Therefore , the optimization problem must be designed to find coefficients for this linear combination . In contrast , as we will explain in Section 2 , there are more options in solving optimization problems for linear classifiers . We show that this difference between linear and kernel classifiers strongly affects their extensions to incremental and decremental training .
+In Section 3 , we apply a warm start strategy for incremental and decremental training of linear classification . The optimal solution of training past data is modified as an initial solution for solving the new problem after data addition or removal . We consider in Section 4 three representative optimization algorithms for linear classification . They differ in several aspects such as solving primal or dual formulation , and using first order ( ie , gradient ) or second order information of the optimization problem . Our main findings are that the warm start setting is in general more effective to improve the primal initial solution than the dual and that the warm start setting more effectively speeds up
+343 a high order optimization method than a low order one . After addressing some implementation issues , we have successfully finished an extension of the software LIBLINEAR for incremental and decremental learning . It is available at http://wwwcsientuedutw/~cjlin/papers/ws
+This paper is organized as follows . In Section 2 , we show the formulations of SVM and LR , and discuss existing methods for incremental and decremental learning . In Section 3 , we propose a warm start setting , followed by analyzing the difference between using primal and dual forms . The comparison between high order and low order optimization methods is described in Section 4 . In Section 5 , we discuss implementation issues for building a solid tool . Experiments are presented in Section 6 . Section 7 concludes our work . Supplementary materials with additional results and programs for experiments are also available at the abovementioned web site .
+2 . SVM , LR , AND THEIR INCREMENTAL
+AND DECREMENTAL TRAINING
+Assume we are given ( label , feature vector ) pairs of training data ( yi , xi ) ∈ {−1 , 1} × Rn , i = 1 , . . . , l . Linear classification involves the following optimization problem . min w f ( w ) where f ( w)≡ 1 2 wT w+C
+ξ(w ; xi , yi ) . ( 1 ) i=1 l where ξ(w ; xi , yi ) is the loss function and C is a user specified parameter . Common loss functions include ξL1(w ; xi , yi ) ≡ max(0 , 1 − yiwT xi ) , ξL2(w ; xi , yi ) ≡ max(0 , 1 − yiwT xi)2 , ξLR(w ; xi , yi ) ≡ log(1 + e
+−yiwT xi ) . and
+( 3 )
+( 4 )
+( 2 )
+If ( 2 ) or ( 3 ) is used , then problem ( 1 ) is SVM [ 1 , 7 ] . If ( 4 ) is used , then we have logistic regression . The three loss functions in ( 2) (4 ) have different differentiability .
+L1 loss : L2 loss : LR loss : not differentiable differentiable but not twice differentiable twice differentiable
+Many convex optimization methods have been considered to find the optimal w . Alternatively , from optimization theory or the representer theorem [ 12 ] , the optimal w is a linear combination of training instances with coefficients α . w = yiαixi .
+( 5 )
+Then we can instead solve an optimization problem over α . A common way is to derive the dual problem of ( 1 ) . f D(α ) ≡ l max
+α h(αi , C ) − 1 2 l l
+αiαjK(i , j ) − l l i=1
+α2 i 2 d i=1
+( 6 ) i=1 i=1 j=1 subject to 0 ≤ αi ≤ U,∀i = 1 , . . . , l , where K(i , j ) = yiyjxT i xj and
+U =
+C ∞ d =
+0 1 2C for L1 loss SVM and LR , for L2 loss SVM .
+Further , h(αi , C ) = for L1 loss and L2 loss SVM ,
+αi C log C − αi log αi − ( C − αi ) log(C − αi ) for LR .
+We define 0 log 0 = 0 , so h(0 , C ) = 0
+( 7 ) l for all three losses . Besides ( 6 ) , the dual problem can also be represented by the following matrix form . max
+αT ¯Qα subject to 0 ≤ αi ≤ U,∀i = 1 , . . . , l , h(αi , C ) − 1 2 i=1
+α
+( 8 ) where ¯Q = Q + D ∈ Rl×l , Qij = K(i , j ) , and D is diagonal with Dii = d,∀i . We refer to ( 1 ) as the primal problem .
+We briefly discuss the difference between linear and kernel classifiers . A kernel classifier maps data to a high ( maybe infinite ) dimensional space , so problem ( 1 ) cannot be directly solved . Instead , by kernel tricks we solve an optimization problem of α like ( 6).1 In contrast , for linear classifiers , it is more flexible to design optimization algorithms because we can solve problems of w or α . We will show in Section 3 that this difference between linear and kernel classifiers has an impact on their incremental and decremental training . 2.1 Existing Methods
+Most existing studies on incremental or decremental training focus on kernel rather than linear classifiers . By considering the dual problem of kernel SVM , [ 3 ] and subsequent works [ 9 , 11 , 13 , 16 ] investigate how to maintain the optimality condition when data are slightly changed . Note that at an optimum , all αi ∈ ( 0 , U ) correspond to the solution of a linear system . They propose methods to quickly identify these αi ’s for the new data and efficiently solve the linear system . A kernel sub matrix is required to be enlarged or shrunk . Careful implementations are essential as we can see that [ 13 ] wrote “ incremental SVM may not be so easy to implement . ” The only work known to us that solves the primal problem is [ 14 ] . They propose a Newton method for both kernel and linear SVM . However , their method is not scalable because matrix inversions are needed .
+3 .
+INCREMENTAL AND DECREMENTAL LEARNING WITH WARM START
+We consider a warm start setting by adjusting the optimal solution before data change as the initial solution of the new optimization problem . Because optimization algorithms are iterative procedures , we hope that a good initial solution can reduce the number of iterations to save the training time . Let
+( yi , xi ) , i = 1 , . . . , l be the original training set , and w∗ and α∗ be optimal solutions of the primal and the dual problems , respectively . For the primal problem with the variable w , the number of variables is independent of data change because w ’s size is the same as the number of features . Therefore , w∗ can be directly used such that
+¯w ≡ w
+∗ is the new initial solution . In contrast , if a dual problem is used , α ’s size is changed after data addition or removal . For incremental learning , we assume
+( yi , xi ) , i = l + 1 , . . . , l + k
+1 Besides ( 6 ) , other optimization problems over α may be considered ; see , for example , [ 6 ] .
+344 ( yi , xi ) , i = 1 , . . . , k max
+α are removed , and consider the following feasible ¯α as the initial dual solution . subject to 0 ≤ αi ≤ U,∀i = 1 , . . . , l + k . i=1 j=1 i=1
+¯α = [ α
+∗ k+1 , . . . , α
+∗ l ]T .
+( 9 )
+For LR and L1 loss SVM , the upper bound U becomes are instances being added , and the following ¯α is considered as the initial dual solution . l , 0 , . . . , 0]T ∈ R(l+k)×1 . ∗
+∗ 1 , . . . , α
+¯α = [ α
+For ¯αl+1 , . . . , ¯αl+k , any value in [ 0 , U ] can be chosen to ensure the feasibility . Because it is unclear which value is the best , we simply consider the zero value . For decremental learning , we assume instances
+We hope that an initial solution closer to the optimum helps to reduce the running time . Subsequently , we check the initial objective values of solving the primal and the dual problems . A finding is that the primal initial point is closer to the optimal point if the change of data is not significant . 3.1 Initial Values for Incremental Learning The optimization problem after considering new data is l+k i=1 wT w + C
+1 2
+ξ(w ; xi , yi ) .
+( 10 )
+The primal and dual initial values are , respectively ,
+¯wT ¯w+C
+ξ( ¯w ; xi , yi)+C
+ξ( ¯w ; xi , yi ) ( 11 ) min w l
+1 2 and l i=1 l+k i=l+1 l
+∗ i , C ) + h(α h(0 , C ) − 1 2 i=1 1 2
+¯wT ¯w + C
+=
+ξ( ¯w ; xi , yi ) , i=1 l+k .α∗T 0Tfi i=l+1
+¯Q ···
+α∗
+0
+( 12 ) where ( 12 ) comes from ( 7 ) , and the property of same primal and dual optimal values in training the original set . Then dual initial value ≤ new optimal objective value
+≤ primal initial value because ¯w and ¯α are feasible solutions of the new primal and dual problems , respectively .
+We argue that the primal initial value is usually closer to the optimal objective value of the new problem than the dual . A scaled form of problem ( 1 ) is min w
+1
+2Cl wT w +
+1 l
+ξ(w ; xi , yi ) ,
+( 13 ) which minimizes the average loss with regularization . If the original and new data points follow a similar distribution , and the original optimal solution w∗ describes the average loss well , then the optimal w of ( 10 ) should be similar to w∗ . Therefore , ( 11 ) may be a good approximation of the new optimal objective value .
+For the dual initial objective value , from ( 10) (12 ) , we suspect that it may be far away from the new optimal value because of lacking the following term l+k
+C
+ξ( ¯w ; xi , yi ) . i=l+1 l i=1 parameter C must be adjusted for a larger training set . That is , to keep the same amount of total training losses , the following optimization problem can be considered . i=1
+ξ(w ; xi , yi ) , l+k αiαjK(i , j ) − l+k l+k l+k min w
+1 2 wT w + ∆I C l+k i=1 h(αi , ∆I C ) − 1 2 where ∆I = l/(l + k ) . The corresponding dual problem is
+α2 i 2 d ∆I
+( 14 )
+U = ∆I C .
+We then consider the following initial solutions primal : ¯w dual : ∆I ¯α .
+( 15 )
+( 16 )
+We must scale ¯α because of the new upper bound in ( 15 ) , but ¯w can still be used without modification . We have new optimal objective value
+≤ primal initial value l
+=
+1 2
+¯wT ¯w + ∆I C
+Further , l+k dual initial value = − 1 2
+,l+k l j=1 i=1
+ξ( ¯w ; xi , yi ) + ∆I C i=1 l+k i=1 h(∆I ¯αi , ∆I C )
+∆I ¯αi∆I ¯αjK(i , j ) + l+k i=l+1
+( 17 )
+ξ( ¯w ; xi , yi ) . l+k i=1
+( ∆I ¯αi)2 d ∆I
+( 18 )
+=∆I C
+ξ( ¯w ; xi , yi ) + l(l + 2k ) 2(l + k)2
+¯wT ¯w , i=1 where details of deriving ( 18 ) are in Appendix . Because l+k i=l+1 l(l + 2k )
+2(l + k)2 ≤ 1
+2 and ∆I C
+ξ( ¯w ; xi , yi ) is lacked ,
+( 19 )
+( 18 ) tends to be too small . Thus , even if the parameter C has been adjusted , the dual initial solution may still be farther away from the optimum than the primal . In Section 6 , we will conduct experiments to confirm our findings . 3.2 Initial Values for Decremental Learning
+The optimization problem after data removal is min w
+1 2 wT w + C
+ξ(w ; xi , yi ) .
+( 20 ) i=k+1 l
+The corresponding dual problem is max
+α h(αi , C ) − 1 2 i=k+1 i=k+1 j=k+1 subject to 0 ≤ αi ≤ U,∀i = k + 1 , . . . , l .
+αiαjK(i , j ) − l
+α2 i 2 d
+( 21 ) i=k+1
+Using the initial points defined in ( 9 ) , the primal and dual initial objective values are , respectively , l l l l
+One may question the above conclusion on the superiority of the primal initial value by claiming that the regularization
+¯wT ¯w + C
+1 2
+ξ( ¯w ; xi , yi )
+( 22 ) i=k+1
+345 and l i=k+1
+=
+1 2
+, l k h(α i , C ) − 1 ∗ 2 k
+¯wT ¯w + C − 1 2 l l l
+∗ i α
+∗ j K(i , j ) +
+α i )2d
+∗
+( α i=k+1 j=k+1 i=k+1
+ξ( ¯w ; xi , yi ) i=k+1
+∗ i α
+∗ j K(i , j ) .
+α
+( 23 ) i=1 j=1
+Details are in Appendix . Similar to ( 10 ) , we have dual initial value ≤ new optimal objective value
+≤ primal initial value because ¯w and ¯α are feasible solutions of the new primal and dual problems , respectively .
+For decremental learning , we can also argue that the primal initial objective value is usually closer than the dual to the optimal objective value of the new problem . By ( 1 ) , ( 20 ) , and the same explanation for incremental learning , if not many data are removed , the optimal w should not change significantly . In contrast , because of the k k i=1 j=1
+− 1 2
+∗ i α
+∗ j K(i , j ) .
+α term in ( 23 ) , the dual initial objective value should be less close to the new optimal value .
+Like incremental learning , we discuss the situation of adjusting the parameter C to maintain a similar total training loss . The following optimization problem is considered . min w
+1 2 wT w + ∆DC
+ξ(w ; xi , yi ) , i=k+1 where ∆D = l/(l − k ) . The dual problem is the same as ( 21 ) except that C becomes ∆DC , d becomes d/∆D , and U = ∆DC for L1 loss SVM and LR . Like ( 16 ) , the following initial solutions can be used . l primal : ¯w dual : ∆D ¯α .
+For initial objective values , we have new optimal objective value
+≤ primal initial value =
+¯wT ¯w + ∆DC l i=k+1
+( 24 )
+ξ( ¯w ; xi , yi )
+1 2
+Dα
+∆2 l l l i=k+1 and l
+1 2
+=
+1 2 dual initial value = l i=k+1 j=k+1
+¯wT ¯w + ∆DC l
+D−∆D
+− ∆2
+2 i=k+1 j=k+1 i , ∆DC)− ∗ h(∆Dα j K(i , j ) −l i=k+1 ∗ ∗ i α
+( ∆Dα i=k+1 k k
+∗ i )2 d 2∆D
+∗ i α
+∗ j K(i , j )
+α
+ξ( ¯w ; xi , yi ) − ∆D 2 ∆D−1
+∗ j K(i , j ) +
+∗ i α i=1
+α
+2 j=1
+¯wT ¯w , ( 25 ) where the details of ( 25 ) are in supplementary materials because of space limitation . If not many data are removed , ∆D ≈ 1 and the last two terms in ( 25 ) are close to zero . Then the difference between ( 24 ) and ( 25 ) is similar to that between ( 22 ) and ( 23 ) without changing C . Therefore , even if the regularization parameter has been adjusted , the dual initial solution tends to be farther away from the optimum than the primal . m u m i t p o o t e c n a t s i d m u m i t p o o t e c n a t s i d
+◦ time
+×
+◦ × time
+( a ) Linear convergence
+Superlinear
+( b ) quadratic convergence or
+Figure 1 : An illustration on how optimization methods may affect the effectiveness of a warm start setting . The y axis is log scaled . ◦ : initial solution × : optimum . The dashed horizontal line indicates the initial distance to the optimum .
+4 . OPTIMIZATION METHODS AND INCRE
+MENTAL/DECREMENTAL LEARNING The effectiveness of a warm start strategy may be strongly related to the optimization method . We use Figure 1 to illustrate this point . If an initial solution is close to the optimum , then a high order optimization method may be advantageous because of the fast final convergence ; see Figure 1(b ) . Therefore , higher order methods such as quasi Newton or Newton may be preferred for incremental and decremental learning .
+Interestingly , for linear classification , lower order methods such as stochastic gradient ( SG ) or coordinate descent are more commonly used than high order methods . The reason is that low order methods can quickly return a useful model . On the contrary , a high order method like Newton methods may take considerable time to finish the first few iterations for obtaining an approximate solution .
+To investigate if high order methods become useful for incremental and decremental learning , in the rest of this section , we briefly describe three methods that will be detailedly compared in Section 6 . Newton method to solve the primal problem . Coordinate descent method to solve the primal problem . Coordinate descent method to solve the dual problem . The Newton method uses second order information , while the coordinate descent method considers only gradient ( ie , first order ) information . 4.1 Solving Primal Problem by a Trust Re gion Newton Method
+We consider the Newton method in LIBLINEAR to solve the primal problem ( 1 ) . It is a trust region Newton ( TRON ) method developed in [ 15 ] . Because differentiability is required , this method is not applicable to L1 loss SVM .
+At current iterate w , TRON obtains an approximate Newton step d within the trust region by solving the following sub problem . d q(d ) min q(d ) ≡ ∇f ( w)T d + subject to d2 ≤ ∆ , dT∇2f ( w)d
+1 2 where is an approximation of f ( w + d)− f ( w ) and ∆ is the size of the trust region . Afterward by checking the ratio between
+( 26 )
+346 real function value reduction f ( w + d ) − f ( w ) and the estimated reduction q(d ) , TRON decides if w should be updated and then adjusts the current trust region ∆ . The subproblem ( 26 ) is solved by the conjugate gradient method , so matrix inversion is not needed . For LR , whose objective function is twice differentiable , [ 15 ] shows that TRON has quadratic convergence . 4.2 Solving Primal Problem by a Coordinate
+Descent Method
+We consider the coordinate descent method in [ 5 ] to solve the primal problem ( 1 ) . This method updates one component wi of w at a time . wi ← wi + arg min d f ( w + dei ) ,
+( 27 ) where ei ≡ [ 0 , . . . , 0 , 1 , 0 , . . . , 0]T is zero except the ith element . The work [ 5 ] applies a Newton method to approximately solve the one variable sub problem in ( 27 ) , which does not have a closed form solution . Their approach , applicable to L2 loss SVM and LR , requires only ∇if ( w ) and ∇2 iif ( w ) at each step . Therefore , this method is a low order one in compared with TRON that needs the whole Hessian matrix . The linear convergence is established in [ 5 ] . We refer to this method as PCD . 4.3 Solving Dual Problem by a Coordinate De scent Method
+For solving dual problem ( 6 ) , we consider the coordinate d max
+αi + arg min f D(α + dei ) , 0 descent methods in [ 10 , 18 ] that update αi at a time by αi ← min , ( 28 ) where f D(· ) is the dual objective function . A difference between ( 28 ) and ( 27 ) is that in ( 28 ) we must ensure the new αi is in [ 0 , U ] . The one variable problem in ( 28 ) has a closedform solution for L1 loss and L2 loss SVM , but for LR , we need an optimization procedure to obtain an approximate solution . It is shown in [ 10 , 17 ] that this dual coordinate descent method linearly converges .
+, U
+5 .
+IMPLEMENTATION ISSUES
+Although warm start is a simple strategy , its implementation may be complicated . Recall in Section 1 we mentioned that the need to maintain the kernel cache is the main obstacle for us to support incremental and decremental learning in the kernel SVM software LIBSVM . Now for linear classification , although the implementation is more straightforward , many issues still need to be addressed in this section .
+We begin with checking if additional information must be maintained in the model after training . If the primal problem is considered , then ¯w is readily available because the previously obtained w must be stored for prediction . In contrast , the dual solution α is not maintained in a linear classifier even if a dual based solver is used . The reason is because we can generate and store w by ( 5 ) for prediction . Therefore , to employ a dual solver for incremental and decremental learning , α must be additionally stored . Unfortunately , maintaining α is a complicated task because of the following concerns on the correspondence between α and data instances . If new instances are randomly inserted into the existing set , it is difficult to maintain the mapping between α and
+Table 1 : Data statistics : Density is the average ratio of non zero features per instance .
+Data set ijcnn webspam news20 rcv1 real sim yahoo japan l : #instances n : #features 22 254 1,355,191 47,236 20,958 832,026
+49,990 350,000 19,996 20,242 72,309 140,964 density 41.37 % 33.51 % 0.03 % 0.16 % 0.24 % 0.16 % instances . Similarly , for decremental learning , the indices of removed instances must be known , though in practice this information may not be available .
+The task of multi class classification is often decomposed to several binary classification problems , so a set of α vectors must be maintained . The storage cost can be high if both numbers of instances and classes are large . Further , if each binary problem involves a subset of data ( eg , the one against one approach for multi class classification ) , the above mentioned problem of mapping α and data occurs .
+Therefore , the implementation of dual solvers with warm start is more complicated than that of primal solvers .
+Stopping conditions of optimization algorithms are another implementation issues because some relative conditions depend on the initial point . For example , the TRON implementation in LIBLINEAR employs the following condition .
+∇f ( wk)2 ∇f ( w0)2
+≤ · min(l+ , l− ) l
+,
+( 29 ) where w0 is the initial point , wk is the current iterate , is the user specified stopping tolerance , and l+ and l− are numbers of positive and negative data , respectively . For standard linear classification , in general w0 = 0 is used . However , with a warm start setting , the initial w0 is better than 0 , so a smaller ∇f ( w0)2 appears in the denominator in ( 29 ) . Then the stopping condition becomes too strict under the same . To address this problem , in our implementation , ∇f ( w0)2 in ( 29 ) is fixed to be ∇f ( 0)2 .
+6 . EXPERIMENTS
+In this section , we experimentally compare primal and dual solvers with the warm start strategy . We consider data sets ijcnn , webspam , news20 , rcv1 , real sim and yahoo japan , where details are shown in Table 1 . All sets except yahoojapan are available at LIBSVM data set.2 All the experiments are conducted on a 2.50 GHz computer with 16 GB of RAM . To evaluate methods for incremental learning , we ranr − 1 1 parts as original data , and part as new data . domly divide each data set to r parts so that
+Therefore , the solution of training the r − 1 parts is used to construct the initial point for training the whole set of r parts . We consider r = 5 , 50 and 500 to investigate the effectiveness of the warm start method under different levels of data changes . Note that a larger r means a smaller increase of the data . Our setting ensures that the enlarged set remains the same regardless of different r values . We need 2http://wwwcsientuedutw/~cjlin/libsvmtools/ datasets/
+347 this property so in figures for comparison only one curve is drawn for the approach without a warm start setting . For decremental learning , we use the following setting to ensure that the reduced set is the same regardless of r . We split 1/5 data to r parts and have
+4/5 data + 1 part of 1/5 data as the original data and 4/5 data as the reduced set .
+Our evaluation is by the relative difference to the optimal function value :
+| f ( w ) − f ( w∗ )
+| and | f D(α ) − f D(α∗ )
+|
+( 30 ) f ( w∗ ) f D(α∗ ) for primal and dual based algorithms , respectively . Note that optimal w∗ and α∗ are not available , so we obtain their approximations by running a huge number of iterations of optimization methods . 6.1 Analysis on Initial Values
+In Sections 3.1 and 3.2 , we discuss properties of primal and dual initial solutions . To confirm our analysis , Table 2 shows the relative difference between initial and optimal function values for incremental and decremental learning . We check two values of the regularization parameter : C = 1 and C = 128 . Because of space limitation , we consider only logistic regression , although results for l2 loss SVM ( in Tables III and IV of supplementary materials ) are similar.3 As a comparison , we include results without the warm start setting by using w = 0 and α = 0 as initial points for primal and dual based methods , respectively . Note that fD(0 ) = 0 , so
+| f D(0 ) − f D(α∗ ) f D(α∗ )
+| = 1 .
+In contrast , primal f ( 0 ) is larger . For example , for logistic loss , f ( 0 ) = Cl log(2 ) . Therefore , without a warm start setting , the primal initial point is far away from the optimal solution . This situation can be clearly seen in Table 2 .
+We further make the following observations . First , from results of each row of Table 2 , the warm start setting significantly reduces the distance from the primal initial solution to the optimum . In contrast , the improvement on the dual initial solution is only modest .
+Second , with the warm start setting , if C = 1 , the distance of the primal initial solution to the optimum is smaller than that of the dual . In particular , for data with a small number of features ( eg , ijcnn ) , the primal initial solution is very close to the optimum . This result confirms the calculation in Sections 3.1 and 32 However , the difference becomes smaller for some sparse data ( eg , news20 ) . An explanation is that because of more features , more instances are needed to have a stable optimal w .
+Third , if a larger C = 128 is used , the superiority of the primal initial solution becomes less clear . For sparse data , it is sometimes worse than the dual initial solution under the incremental learning scenario . This result is reasonable because a large C causes a better fitting of the original data . Then the solution w is sensitive to the increase of data . However , we notice that for these data sets , a large C is often not needed . Interestingly , for decremental learning with a large C , the primal initial point is competitive for
+3We did not consider L1 loss SVM here because our primalbased optimization methods require the differentiability of the objective function . sparse data . The reason might be that the remained data have been used in training the original set . In contrast , for incremental learning , some unseen instances are added to form the new training set .
+Finally , we observe that under a larger r both primal and dual initial solutions are closer to the optimum . This result follows from our setting that a larger r implies a smaller change of the data . If the change of data is minor , then the initial solution ¯w or ¯α is almost good enough to be a model for the modified problem . For example , even under r = 5 , if C = 1 and the primal based algorithm TRON is used for incremental learning , the default stopping condition of LIBLINEAR is reached within two Newton iterations for all data sets except webspam . 6.2 Comparison of Optimization Methods for
+Incremental and Decremental Learning
+In Figures 2 and 3 , we compare the three optimization methods discussed in Section 4 . Each sub figure shows the relationship between the training time and the relative difference to the optimal function value ; see ( 30 ) . Because of space limitation , we present results of only logistic regression and leave the results of L2 loss SVM in supplementary materials . We can make the following observations .
+First , the warm start strategy is useful regardless of opIf data are not significantly changed timization methods . ( ie , larger r ) , the improvement is dramatic .
+If without applying warm start , DCD is the fastest among the three optimization methods . This situation has been know from earlier works such as [ 10 ] . However , with warm start settings TRON becomes competitive . Generally TRON benefits more from warm start than DCD . For example , in Figure 2(b ) , if r = 500 , to reach 10−8 relative difference , the warm start strategy reduces the DCD ’s training time from 4.5 to 3 seconds , while TRON ’s training time from 40 to around 10 seconds . This result confirms our conjecture in Figure 1 that warm start strategies are more helpful for high order optimization methods .
+Although the warm start setting significantly improves the training speed of TRON for solving the primal problem , from Figures 2 and 3 , DCD is still faster in general . Past works ( eg , [ 10 ] ) have shown that DCD may become inferior to TRON if C is larger or feature values are in a large numerical range . In Figures I and II of supplementary materials , we present results of using C = 128 . For data such as ijcnn , webspam , rcv1 and real sim , we can clearly see that TRON is generally faster than DCD .
+The two primal based methods ( PCD and TRON ) share the same initial point . PCD quickly decreases the function value , but becomes slow in the end . In contrast , TRON is overall superior because of fast final convergence .
+7 . CONCLUSIONS
+This research has lead to an extension of LIBLINEAR for incremental and decremental learning . Currently we choose TRON as the underlying solver because of the following results obtained in this research work . The warm start setting generally gives a better primal initial solution than the dual ( Section 3 ) .
+The warm start setting more effectively speeds up a high order optimization method such as TRON ( Section 4 ) .
+For implementation , a primal based method is more straight forward than a dual based method ( Section 5 ) .
+348 Table 2 : Relative objective value difference between the initial point and the optimal solution . Logistic regression is considered . wo ws : without warm start . The better value between primal and dual is boldfaced .
+Data set
+Formulation
+C = 1
+C = 128 ijcnn webspam news20 rcv1 real sim yahoo japan
+Primal Dual Primal Dual Primal Dual Primal Dual Primal Dual Primal Dual wo ws 2.4e+00 1.0e+00 2.1e+00 1.0e+00 1.3e+00 1.0e+00 2.4e+00 1.0e+00 3.8e+00 1.0e+00 2.4e+00 1.0e+00 r = 5 3.4e−04 1.9e−01 1.2e−04 1.9e−01 1.7e−02 1.6e−01 1.4e−02 1.5e−01 1.2e−02 1.5e−01 1.6e−02 1.9e−01 r = 50 2.2e−05 1.8e−02 8.5e−06 1.9e−02 1.3e−03 1.4e−02 9.9e−04 1.3e−02 1.1e−03 1.4e−02 1.3e−03 1.8e−02 r = 500 1.3e−06 1.2e−03 1.4e−06 2.1e−03 1.3e−04 1.4e−03 1.5e−04 1.7e−03 1.4e−04 1.7e−03 1.7e−04 2.4e−03 ( a ) Incremental learning
+Data set
+Formulation
+C = 1 ijcnn webspam news20 rcv1 real sim yahoo japan
+Primal Dual Primal Dual Primal Dual Primal Dual Primal Dual Primal Dual wo ws 2.3e+00 1.0e+00 2.0e+00 1.0e+00 1.2e+00 1.0e+00 2.2e+00 1.0e+00 3.5e+00 1.0e+00 2.3e+00 1.0e+00 r = 5 3.3e−04 4.6e−02 1.1e−04 1.0e−02 1.3e−02 8.5e−03 1.1e−02 3.6e−03 8.9e−03 5.2e−03 1.3e−02 1.0e−02 r = 50 3.2e−05 5.0e−03 1.1e−05 9.0e−04 1.5e−03 8.2e−04 1.1e−03 3.4e−04 1.1e−03 6.3e−04 1.4e−03 1.1e−03 r = 500 1.9e−06 2.2e−04 1.9e−06 9.1e−05 1.4e−04 4.0e−05 1.7e−04 3.6e−05 1.6e−04 9.4e−05 2.0e−04 1.9e−04 ( b ) Decremental learning wo ws 2.5e+00 1.0e+00 2.4e+00 1.0e+00 2.5e+01 1.0e+00 3.4e+01 1.0e+00 3.4e+01 1.0e+00 1.1e+01 1.0e+00 wo ws 2.5e+00 1.0e+00 2.4e+00 1.0e+00 2.3e+01 1.0e+00 3.3e+01 1.0e+00 3.4e+01 1.0e+00 1.2e+01 1.0e+00 r = 5 4.0e−04 1.9e−01 2.7e−04 2.0e−01 5.6e−01 1.6e−01 8.2e−01 2.0e−01 5.5e−01 2.2e−01 6.7e−01 2.4e−01 r = 50 2.5e−05 1.9e−02 4.5e−05 2.0e−02 4.6e−02 1.3e−02 5.8e−02 1.5e−02 5.9e−02 2.2e−02 5.9e−02 2.2e−02
+C = 128 r = 5 4.1e−04 4.2e+00 2.6e−04 3.5e−01 7.2e−02 2.8e−01 1.1e−01 4.6e−01 1.1e−01 9.9e−01 1.4e−01 8.6e−01 r = 50 3.8e−05 6.5e−01 5.7e−05 9.6e−02 8.2e−03 3.9e−02 8.8e−03 4.5e−02 1.2e−02 8.5e−02 1.4e−02 1.1e−01 r = 500 1.4e−06 1.2e−03 2.9e−06 2.3e−03 2.2e−03 9.5e−04 1.7e−02 2.1e−03 5.2e−03 1.8e−03 8.3e−03 3.5e−03 r = 500 2.1e−06 2.5e−02 4.5e−06 9.3e−03 5.6e−04 2.2e−04 1.7e−03 7.8e−04 1.7e−03 5.8e−03 2.4e−03 1.9e−02
+With the release of the software , we hope feedbacks from real applications can lead us to refine the methods for incremental and decremental learning .
+[ 6 ] O . Chapelle . Training a support vector machine in the primal . Neural Comput . , 19:1155–1178 , 2007 .
+[ 7 ] C . Cortes and V . Vapnik . Support vector network .
+8 . ACKNOWLEDGMENTS
+This work was supported in part by the National Science Council of Taiwan via the grant 101 2221 E 002 199 MY3 . The authors thank Chia Hua Ho for fruitful discussion .
+9 . REFERENCES [ 1 ] B . E . Boser , I . Guyon , and V . Vapnik . A training algorithm for optimal margin classifiers . In COLT , 1992 .
+[ 2 ] L . Bottou and C J Lin . Support vector machine solvers . In Large Scale Kernel Machines . 2007 .
+[ 3 ] G . Cauwenberghs and T . Poggio . Incremental and decremental support vector machine learning . In NIPS . 2001 .
+[ 4 ] C C Chang and C J Lin . LIBSVM : A library for support vector machines . ACM TIST , 2:27:1–27:27 , 2011 .
+[ 5 ] K W Chang , C J Hsieh , and C J Lin . Coordinate descent method for large scale L2 loss linear SVM . JMLR , 9:1369–1398 , 2008 .
+MLJ , 20:273–297 , 1995 .
+[ 8 ] R E Fan , K W Chang , C J Hsieh , X R Wang , and C J Lin . LIBLINEAR : A library for large linear classification . JMLR , 9:1871–1874 , 2008 .
+[ 9 ] S . Fine and K . Scheinberg . Incremental learning and selective sampling via parametric optimization framework for SVM . In NIPS . 2001 .
+[ 10 ] C J Hsieh , K W Chang , C J Lin , S . S . Keerthi , and S . Sundararajan . A dual coordinate descent method for large scale linear SVM . In ICML , 2008 .
+[ 11 ] M . Karasuyama and I . Takeuchi . Multiple incremental decremental learning of support vector machines . IEEE TNN , 21:1048–1059 , 2010 .
+[ 12 ] G . S . Kimeldorf and G . Wahba . A correspondence between Bayesian estimation on stochastic processes and smoothing by splines . Ann . Math . Stat . , 41:495–502 , 1970 .
+[ 13 ] P . Laskov , C . Gehl , S . Kr¨uger , and K R M¨uller .
+Incremental support vector learning : Analysis , implementation and applications . JMLR , 7:1909–1936 , 2006 .
+349 [ 14 ] Z . Liang and Y . Li . Incremental support vector machine learning in the primal and applications . Neurocomputing , 72(10):2249–2258 , 2009 .
+[ 15 ] C J Lin , R . C . Weng , and S . S . Keerthi . Trust region
+Newton method for large scale logistic regression . JMLR , 9:627–650 , 2008 .
+[ 16 ] A . Shilton , M . Palaniswami , D . Ralph , and A . C .
+Tsoi . Incremental training of support vector machines . IEEE TNN , 16:114–131 , 2005 .
+[ 17 ] P W Wang and C J Lin . Iteration complexity of feasible descent methods for convex optimization . JMLR , 2014 .
+[ 18 ] H F Yu , F L Huang , and C J Lin . Dual coordinate descent methods for logistic regression and maximum entropy models . MLJ , 85:41–75 , 2011 .
+[ 19 ] G X Yuan , C H Ho , and C J Lin . Recent advances of large scale linear classification . PIEEE , 100:2584–2603 , 2012 .
+APPENDIX Details of Deriving ( 18 ) To begin , we show that for any constant ∆ > 0 , h(∆α , ∆C ) = ∆h(α , C ) .
+( 31 )
+For L1 and L2 losses , h(α , C ) = α , so ( 31 ) obviously holds . For LR loss , h(∆α , ∆C ) =∆C log ∆C − ∆α log ∆α − ( ∆C − ∆α ) log(∆C − ∆α ) =∆C(log ∆ + log C ) − ∆α(log ∆ + log α )
+− ∆(C − α)(log ∆ + log(C − α ) )
+=∆(C log C − α log α − ( C − α ) log(C − α ) ) = ∆h(α , C ) . With ∆I = l/(l + k ) defined in Section 3.1 , we have
+∗
+( 32 ) i=1
+∗
+)α
+=
+D ∆I k
+2(l + k )
+∗T Qα
+∗
+.
+α
+Details of Deriving ( 23 ) To begin , we show that h(α i , C ) − 1 ∗ 2
+∗ i
+2 − yiα
+∗ i w
+∗T xi = Cξ(w
+∗ dα
+; xi , yi )
+( 33 ) holds for L1 , L2 and LR losses . For L1 loss SVM , i − yiα ∗ by the following optimality condition ( eg , Eq ( 17 ) in [ 2] ) .
+∗T xi ) = C max(1 − yiw i ( 1 − yiw ∗
+∗T xi = α
+∗ i w
+α
+∗T xi , 0 )
+C if 1 − yiw∗T xi > 0 , if 1 − yiw∗T xi < 0 . 0
+∗ i =
+α
+For L2 loss SVM ,
+α i − 1 ∗ 4C
+∗ i
+2 − yiα
+∗ i w
+∗T xi = α i ( 1 − yiw ∗
+α
+∗T xi ) − 1 α 4C ∗T xi , 0)2 .
+2
+∗ i
+= C max(1 − yiw
+The last equality is from the optimality condition i = 2C max(1 − yiw ∗
+∗T xi , 0 ) .
+α
+For LR , consider the following optimality condition
+∗ i = C
+α e−yiw∗ T xi
+1 + e−yiw∗ T xi
+C log C − α C in Section 3.4 of [ 18 ] . Then we have ( 33 ) by i ) − yiα i ) log(C − α i − ( C − α ∗ ∗ ∗ ∗ i log α C − α∗ − yiα ∗ ∗T xi i log −yiw∗ T xi ) .
+C − α∗ =C log(1 + e
+=C log
+∗ i w
+α∗
++ α i i i
+∗ i w
+∗T xi
+Denote the optimal value of the original problem as V ∗ . l l l
+∗
+V
+= h(α i , C ) − 1 ∗ 2
+∗ i α
+∗ j K(i , j ) +
+α
+2
+∗ i dα
+. i=1 j=1 i=1
+Next , we denote the initial value of the decremented problem as Vinit and extract the term Vinit from V ∗ to have k k i=1 j=1
+∗ j K(i , j ) +
+1 2
+∗ i α
+∗ j K(i , j )
+α l l k j=1
+α
+∗ i α
+2 +
+V
+∗
+− 1 2 i=1 ∗ dα i
+= Vinit − k k = Vinit −k k k k
+1 2
+= Vinit + C i=1 i=1 i=1
++
+∗ i , C ) k i=1 h(α ∗T xi + ∗ j K(i , j )
+∗ i w yiα
+∗ i α
+α j=1
+∗
+ξ(w
+; xi , yi ) +
+1 2 i=1 h(α i , C ) − 1 ∗ 2 i=1 k k i=1 j=1 k i=1
+2
+∗ i dα
+∗ i α
+∗ j K(i , j ) .
+α
+The second equality uses ( 5 ) and the last equality is from ( 33 ) . By the definitions of ¯w and V ∗ , and ( 12 ) , k l i=1 i=k+1
+Vinit = V
+∗ − C
+ξ( ¯w ; xi , yi ) − 1 2
+=
+1 2
+¯wT ¯w + C
+ξ( ¯w ; xi , yi ) − 1 2 k k k k j=1 i=1 i=1 j=1
+∗ i α
+∗ j K(i , j )
+α
+∗ i α
+∗ j K(i , j ) .
+α
+( ∆I ¯αi)2 d ∆I l+k ∗ i=1
+1 2 1 2
+α
+α
+=
+∗T ¯Qα
+∗ − ∆I 2 ∗T ( Q + D)α
+∗T ( Q +
+)α
+D ∆I ∗T ( Q +
+α
+α ∗ − ∆I 2
+Finally , we derive ( 18 ) in detail . l+k i=1 l+k dual initial value = − 1 2 j=1 h(∆I ¯αi , ∆I C )
+∆I ¯αi∆I ¯αjK(i , j ) +
+=∆I
+=∆I
++ h( ¯αi , C ) − ∆I 2
+∗T ( Q +
+α
+D ∆I
+)α l
+¯wT ¯w + C
+ξ( ¯w ; xi , yi ) i=1
+∗ − ∆I 2
+∗T ( Q +
+α
+D ∆I
+)α
+∗ i=1 i=1 l+k l+k 1 l l
+2 ∗T ¯Qα i=1
+α
+1 2
+=∆I C
+ξ( ¯w ; xi , yi ) +
+¯wT ¯w +
+∆I 2 l(l + 2k ) 2(l + k)2
+∆I k
+2(l + k )
+∗T Qα
+∗
+α
+¯wT ¯w . i=1
+ξ( ¯w ; xi , yi ) +
+=∆I C The second equality is from ( 31 ) and ¯αl+1 = ··· = ¯αl+k = 0 . The third equality is from ( 7 ) and ( 12 ) . The fourth equality is from ( 32 ) . The last equality uses the property w∗T w∗ = α∗T Qα∗ of optimal solutions .
+350 TRON
+DCD
+PCD l
+) g o l ( e c n e r e f f i d e u a v n o i t c n u f e v i t a e R l
+) g o l ( e c n e r e f f i d l e u a v n o i t c n u f e v i t l a e R
+) g o l ( e c n e r e f f i d l e u a v n o i t c n u f e v i t l a e R
+) g o l ( e c n e r e f f i d l e u a v n o i t c n u f e v i t l a e R
+) g o l ( e c n e r e f f i d l e u a v n o i t c n u f e v i t l a e R
+) g o l ( e c n e r e f f i d l e u a v n o i t c n u f e v i t a e R l no−warm−start warm−start−r5 warm−start−r50 warm−start−r500
+0.1 0.3 Training time ( seconds )
+0.2
+0.4 no−warm−start warm−start−r5 warm−start−r50 warm−start−r500
+10 30 Training time ( seconds )
+20
+40 no−warm−start warm−start−r5 warm−start−r50 warm−start−r500
+2
+3
+4
+5
+6
+7
+Training time ( seconds ) no−warm−start warm−start−r5 warm−start−r50 warm−start−r500
+0.2 0.6 Training time ( seconds )
+0.4
+0.8 no−warm−start warm−start−r5 warm−start−r50 warm−start−r500
+0.5
+1
+1.5
+2
+2.5
+Training time ( seconds ) no−warm−start warm−start−r5 warm−start−r50 warm−start−r500
+2
+0
+−2
+−4
+−6
+−8
+0
+2
+0
+−2
+−4
+−6
+−8
+0
+2
+0
+−2
+−4
+−6
+−8
+0
+1
+2
+0
+−2
+−4
+−6
+−8
+0
+2
+0
+−2
+−4
+−6
+−8
+0
+2
+0
+−2
+−4
+−6
+−8
+0
+5
+10
+15
+20
+Training time ( seconds )
+25 l
+) g o l ( e c n e r e f f i d e u a v n o i t c n u f e v i t a e R l
+) g o l ( e c n e r e f f i d e u a v l n o i t c n u f e v i t l a e R
+) g o l ( e c n e r e f f i d l e u a v n o i t c n u f e v i t l a e R
+) g o l ( e c n e r e f f i d e u a v l n o i t c n u f e v i t l a e R
+) g o l ( e c n e r e f f i d l e u a v n o i t c n u f e v i t l a e R
+) g o l ( e c n e r e f f i d l e u a v n o i t c n u f e v i t a e R l
+2
+0
+−2
+−4
+−6
+−8
+0
+2
+0
+−2
+−4
+−6
+−8
+0
+2
+0
+−2
+−4
+−6
+−8
+0 no−warm−start warm−start−r5 warm−start−r50 warm−start−r500
+0.05 0.15 Training time ( seconds )
+0.1
+( a ) ijcnn
+0.2 no−warm−start warm−start−r5 warm−start−r50 warm−start−r500
+2
+0
+−2
+−4
+−6
+−8
+0
+2
+0
+−2
+−4
+−6
+−8
+0
+1
+2
+0
+−2
+−4
+−6
+−8
+0
+0.2
+2
+3
+Training time ( seconds ) ( b ) webspam
+4
+5 no−warm−start warm−start−r5 warm−start−r50 warm−start−r500
+0.4
+0.6
+0.8
+1
+Training time ( seconds ) ( c ) news20
+1.2
+1.4 no−warm−start warm−start−r5 warm−start−r50 warm−start−r500
+0.05
+0.1
+0.15
+0.2
+Training time ( seconds )
+( d ) rcv1
+0.25 no−warm−start warm−start−r5 warm−start−r50 warm−start−r500
+0.4
+0.2 0.6 Training time ( seconds ) ( e ) real sim
+0.8 no−warm−start warm−start−r5 warm−start−r50 warm−start−r500
+0.5
+1
+1.5
+2
+2.5
+3
+Training time ( seconds ) ( f ) yahoo japan
+2
+0
+−2
+−4
+−6
+−8
+0
+2
+0
+−2
+−4
+−6
+) g o l ( e c n e r e f f i d l e u a v n o i t c n u f e v i t l a e R
+) g o l ( e c n e r e f f i d l e u a v n o i t c n u f e v i t l a e R
+) g o l ( e c n e r e f f i d l e u a v n o i t c n u f e v i t l a e R
+) g o l ( e c n e r e f f i d l e u a v n o i t c n u f e v i t l a e R
+) g o l ( e c n e r e f f i l d e u a v n o i t c n u f e v i t l a e R
+) g o l ( e c n e r e f f i d e u a v n o l i t c n u f e v i t l a e R
+2
+0
+−2
+−4
+−6
+−8
+0
+2
+2
+0
+−2
+−4
+−6
+−8
+0
+100 no−warm−start warm−start−r5 warm−start−r50 warm−start−r500
+4
+6
+Training time ( seconds )
+8
+10 no−warm−start warm−start−r5 warm−start−r50 warm−start−r500
+200 Training time ( seconds )
+300
+400
+500
+600
+700 no−warm−start warm−start−r5 warm−start−r50 warm−start−r500
+10
+20
+30
+Training time ( seconds )
+40
+50 no−warm−start warm−start−r5 warm−start−r50 warm−start−r500
+1
+1.5
+2
+Training time ( seconds )
+2.5
+3 no−warm−start warm−start−r5 warm−start−r50 warm−start−r500
+4
+6
+8
+10
+12
+Training time ( seconds )
+−8
+0
+0.5
+2
+0
+−2
+−4
+−6
+−8
+0
+2
+2
+0
+−2
+−4
+−6
+−8
+0 no−warm−start warm−start−r5 warm−start−r50 warm−start−r500
+100
+200
+300
+Training time ( seconds )
+400
+500
+Figure 2 : Incremental learning : running time ( in seconds ) versus the relative objective value difference . Logistic regression with C = 1 is used .
+351 TRON
+DCD
+PCD l
+) g o l ( e c n e r e f f i d e u a v n o i t c n u f e v i t a e R l
+) g o l ( e c n e r e f f i d l e u a v n o i t c n u f e v i t l a e R
+) g o l ( e c n e r e f f i d l e u a v n o i t c n u f e v i t l a e R
+) g o l ( e c n e r e f f i d l e u a v n o i t c n u f e v i t l a e R
+) g o l ( e c n e r e f f i d l e u a v n o i t c n u f e v i t l a e R
+) g o l ( e c n e r e f f i d l e u a v n o i t c n u f e v i t a e R l no−warm−start warm−start−r5 warm−start−r50 warm−start−r500
+0.1 0.3 Training time ( seconds )
+0.2
+0.4 no−warm−start warm−start−r5 warm−start−r50 warm−start−r500
+10 30 Training time ( seconds )
+20
+40 no−warm−start warm−start−r5 warm−start−r50 warm−start−r500
+2
+3
+4
+5
+6
+7
+Training time ( seconds ) no−warm−start warm−start−r5 warm−start−r50 warm−start−r500
+0.2
+0.3
+0.4
+0.5
+0.6
+0.7
+Training time ( seconds ) no−warm−start warm−start−r5 warm−start−r50 warm−start−r500
+0.5
+1
+1.5
+2
+2.5
+Training time ( seconds ) no−warm−start warm−start−r5 warm−start−r50 warm−start−r500
+2
+0
+−2
+−4
+−6
+−8
+0
+2
+0
+−2
+−4
+−6
+−8
+0
+2
+0
+−2
+−4
+−6
+−8
+0
+1
+2
+0
+−2
+−4
+−6
+−8
+0
+0.1
+2
+0
+−2
+−4
+−6
+−8
+0
+2
+0
+−2
+−4
+−6
+−8
+0
+5
+10
+15
+20
+Training time ( seconds )
+25 l
+) g o l ( e c n e r e f f i d e u a v n o i t c n u f e v i t a e R l
+) g o l ( e c n e r e f f i l d e u a v n o i t c n u f e v i t l a e R
+) g o l ( e c n e r e f f i d l e u a v n o i t c n u f e v i t l a e R
+) g o l ( e c n e r e f f i d l e u a v n o i t c n u f e v i t l a e R
+) g o l ( e c n e r e f f i d l e u a v n o i t c n u f e v i t l a e R
+) g o l ( e c n e r e f f i d l e u a v n o i t c n u f e v i t l a e R
+2
+0
+−2
+−4
+−6
+−8
+0
+2
+0
+−2
+−4
+−6
+−8
+0
+2
+0
+−2
+−4
+−6
+−8
+0
+2
+0
+−2
+−4
+−6
+−8
+0
+2
+0
+−2
+−4
+−6
+−8
+0
+0.1
+2
+0
+−2
+−4
+−6
+−8
+0 no−warm−start warm−start−r5 warm−start−r50 warm−start−r500
+) g o l ( e c n e r e f f i d e u a v l n o i t c n u f e v i t l a e R
+) g o l ( e c n e r e f f i d l e u a v n o i t c n u f e v i t l a e R
+) g o l ( e c n e r e f f i
+0.05 0.15 Training time ( seconds )
+0.1
+( a ) ijcnn
+0.2 no−warm−start warm−start−r5 warm−start−r50 warm−start−r500
+2
+1 3 Training time ( seconds ) ( b ) webspam
+4 no−warm−start warm−start−r5 warm−start−r50 warm−start−r500 l d e u a v n o i t c n u f e v i t l a e R
+) g o l ( e c n e r e f f i d l e u a v n o i t c n u f e v i t l a e R
+) g o l ( e c n e r e f f i d l e u a v n o i t c n u f e v i t l a e R
+) g o l ( e c n e r e f f i d e u a v n o l i t c n u f e v i t l a e R
+0.2
+0.4
+0.6
+0.8
+Training time ( seconds ) ( c ) news20
+1 no−warm−start warm−start−r5 warm−start−r50 warm−start−r500
+0.05 0.15 Training time ( seconds )
+0.1
+( d ) rcv1
+0.2 no−warm−start warm−start−r5 warm−start−r50 warm−start−r500
+0.2
+0.3
+0.4
+0.5
+0.6
+0.7
+Training time ( seconds ) ( e ) real sim no−warm−start warm−start−r5 warm−start−r50 warm−start−r500
+0.5
+1
+1.5
+2
+2.5
+Training time ( seconds ) ( f ) yahoo japan no−warm−start warm−start−r5 warm−start−r50 warm−start−r500
+2
+3
+4
+5
+6
+7
+Training time ( seconds ) no−warm−start warm−start−r5 warm−start−r50 warm−start−r500
+100
+200
+300
+Training time ( seconds )
+400
+500 no−warm−start warm−start−r5 warm−start−r50 warm−start−r500
+10 30 Training time ( seconds )
+20
+40 no−warm−start warm−start−r5 warm−start−r50 warm−start−r500
+0.5
+1
+1.5
+2
+2.5
+Training time ( seconds ) no−warm−start warm−start−r5 warm−start−r50 warm−start−r500
+2 6 Training time ( seconds )
+4
+8 no−warm−start warm−start−r5 warm−start−r50 warm−start−r500
+2
+0
+−2
+−4
+−6
+−8
+0
+1
+2
+0
+−2
+−4
+−6
+−8
+0
+2
+0
+−2
+−4
+−6
+−8
+0
+2
+0
+−2
+−4
+−6
+−8
+0
+2
+0
+−2
+−4
+−6
+−8
+0
+2
+0
+−2
+−4
+−6
+−8
+0
+50
+100
+150
+200
+Training time ( seconds )
+250
+300
+Figure 3 : Decremental learning : running time ( in seconds ) versus the relative objective value difference . Logistic regression with C = 1 is used .
+352

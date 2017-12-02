@@ -1,0 +1,376 @@
+Scalable Time Decaying Adaptive Prediction Algorithm
+Yinyan Tan1 , Zhe Fan1 , Guilin Li1 , Fangshan Wang1 , Zhengbing Li1 , Shikai Liu1 , Qiuling Pan1
+Eric P . Xing2 , Qirong Ho2
+1Research and Standard Department , Huawei Software Technologies CO . LTD
+2School of Computer Science , Carnegie Mellon University tanyinyan , fanzhe , liguilin , wangfangshan , zhengbing.li , liushikai , panqiuling@huawei.com epxing , qho@cscmuedu
+ABSTRACT Online learning is used in a wide range of real applications , eg , predicting ad click through rates ( CTR ) and personalized recommendations . Based on the analysis of users’ behaviors in Video On Demand ( VoD ) recommender systems , we discover that the most recent users’ actions can better reflect users’ current intentions and preferences . Under this observation , we thereby propose a novel time decaying online learning algorithm derived from the state of the art FTRL proximal algorithm , called Time Decaying Adaptive Prediction ( TDAP ) algorithm .
+To scale Big Data , we further parallelize our algorithm following the data parallel scheme under both BSP and SSP consistency model . We experimentally evaluate our TDAP algorithm on real IPTV VoD datasets using two state of theart distributed computing platforms , ie , Spark and Petuum . TDAP achieves good accuracy : it improves at least 5.6 % in terms of prediction accuracy , compared to FTRLproximal algorithm ; and TDAP scales well : it runs 4 times faster when the number of machines increases from 2 to 10 . In our real running business cases , TDAP significantly increases the degree of user activity , which brings more revenue than existing ones for our customers .
+1 .
+INTRODUCTION
+Online learning techniques [ 3 , 9 , 19 , 24 , 26 , 30 , 32 ] are powerful tools for a wide range of emerging applications , from online advertising [ 25 ] and personalized recommendation [ 2 , 28 ] , to unusual events detection [ 35 ] and suspicious URLs identification [ 23 ] . For example , in an online IPTV Video On Demand ( VoD ) recommender system for one of our customers , a giant Telcom company from Mainland China , the accuracy of prediction ( eg , AUC ) can be significantly improved at least 4 % using online learning techniques compared to traditional batch ( offline ) learning techniques [ 12 , 18 , 37 ] .
+Figure 1 : The fast changing users’ watching counts on different types of videos ( Film , TV play and Animation ) from 2015 06 01 to 2015 06 07 on an online IPTV VoD service .
+To date , people and devices ( from smart phones , to VR Boxes , to coffee machines and cars ) generate large volume of data every day , which are with fast varying ( or fastchanging ) nature ( aka concept drifting [ 11] ) . However , existing online learning techniques may not be a good fit for such fast changing data , which are usually in form of examples with features and labels in practice . Let ’s first illustrate one of such data taken from a real world application ,
+Example 1 : Figure 1 shows features about users’ watching counts on three different types of videos ( Film , TV play and Animation ) during the time period from 2015 06 01 to 2015 06 07 on an online IPTV VoD recommender system in a Telcom company from Mainland China .
+From Figure 1 , we observe that the watching counts on different types of videos vary a lot under different time period . In particular , in weekdays ( from 2015 06 02 to 201506 05 ) , the watching counts of TV play at working hours ( 08:00 18:00 ) on average are larger than those of the other two types of videos ( ie , Animation and Film ) ; Animation views are the most from 18:00 to 20:00 ; and the number of TV play increases again after 20:00 . Besides , Animation views from 08:00 to 18:00 on weekends ( from 2015 06 06 to 2015 06 07 ) and Children ’s day ( 2015 06 01 ) are larger than those of the other two , which typically differ from the case in weekdays ( as above ) .
+In short , from the above observation , we note that the varying of users’ watching counts on different types of videos between day and night , or between weekdays and holidays , typically implies that the users’ watching preferences are
+617 changing rapidly along the time series , which in fact brings a big challenge to the design of the online learning algorithm 2 for the recommender system .
+The above example raises one crucial concern to the existing online learning algorithm design : how to fit and scale those big and fast changing online data efficiently and practically ? To answer the question , a scalable time decaying online learning algorithm is in need . However , two challenges need to be addressed .
+The first challenge is that the time decaying algorithm requires to fit the fast changing online data . Unfortunately , up to date , previous works [ 19,24 , 25 , 30 , 32 ] have not addressed it well . On one hand , previous time decaying algorithms either weight data ( or examples ) by time decaying functions ( eg , [ 16 , 17 ] ) or just discard outdated examples ( eg , [ 3] ) , which require full memory or keep only recent examples , respectively . On the other hand , existing online learning algorithms ( eg , mirror descent ( MD ) algorithm like TGD [ 19 ] and FOBOS [ 30 ] , and follow the regularized leader ( FTRL ) algorithm like RDA [ 32 ] and FTRL proximal [ 24,25] ) , which do not take the changes of the data into account , may not respond the changes correctly . And worse still , the target model generated from the existing online learning algorithms may no longer be suitable for current data distribution , since older history of models are equally weighted as the recent ones in the learning procedure , which may decrease its ( ie , the target model ’s ) effectiveness .
+For the second challenge , the time decaying algorithm needs to scale the big fast changing online data . To the best of our knowledge , previous works [ 34 , 36 , 37 ] only study the parallelism of MD like algorithms . And the parallelism of FTRL like algorithms are mentioned in [ 25 ] only , no detailed solution is provided .
+Contributions . This paper addresses scalable online learning problem with fast changing data . The contributions are characterized as below .
+( 1 ) We define a problem called time decaying online convex optimization TOCO problem ( Section 2 ) , where the target model approaches to the most recent models while older history of the models are deemphasized , following a userdefined time decaying function .
+( 2 ) We propose a time decaying adaptive prediction TDAP algorithm to solve TOCO problem ( Section 3 ) , which incorporates with both the state of the art FTRL proximal algorithm and an exponential time decaying mechanism over model update . Recursive closed forms of the model update functions are proposed for computational efficiency and memory saving .
+( 3 ) To scale big data , we first parallelize the TDAP algorithm following the data parallel scheme [ 14 ] under bulk synchronous parallel ( BSP ) [ 6 ] consistency model ( Section 4 ) , in which recursive update methods considering time decaying factors are proposed , and detailed implementations are provided . To avoid the unnecessary costs due to the synchronization policy ( “ blocking ” of stragglers ) of BSP , we further parallelize the algorithm under stale synchronous parallel ( SSP ) model , with accuracy guarantees from [ 13 ] .
+( 4 ) Under real world datasets , we experimentally evaluate our algorithm on top of two well known platforms ( Section 5 ) : ( a ) general big data analytic platform Spark [ 27 ] under BSP model ; and ( b ) specific machine learning plat form Petuum [ 33 ] under SSP model . It is worth highlighting that TDAP achieves good accuracy : it improves 5.6 % prediction accuracy , compared to FTRL proximal algorithm , on both platforms ; and TDAP scales well : it runs 4x speedup when the number of machines increases from 2 to 10 . We further observe that TDAP on Petuum runs faster than that on Spark , and the former enjoys better scalability with more machines .
+In our production IPTV VoD service , when we switched from FTRL proximal to TDAP , we observed 5 % more users engaging on our service , and 10 % longer engagement time per user , approximately . We also observed that TDAP on Petuum can process approximately one order of magnitude more users than Spark , with the same cluster setup . While both TDAP on Petuum and Spark are viable , we found that deployment was easier and more efficient using Petuum .
+Organization . This paper is organized as below : In Section 2 , we review some related work and formulate our TOCO problem ; We propose our TDAP algorithm to solve the problem in Section 3 ; Section 4 then parallelize the TDAP algorithm under both BSP and SSP consistency model ; We experimentally verify our algorithm in Section 5 and conclude this paper in Section 6 .
+2 . ONLINE LEARNING ALGORITHM
+In this section , we first introduce the related work . We then give some details of the FTRL proximal algorithm since our algorithm are derived from the FTRL proximal algorithm due to its superior performance . We end this section by formulating our problem . 2.1 Related Work
+We characterize related work as follows .
+Algorithms with time decaying property . Numbers of time decaying algorithms are proposed to address the concept drifting [ 11 ] problem . On one hand , for gradual concept drifting , full memory based approaches ( eg , [ 16 ] and [ 17 ] ) use exponential or linear time decaying functions to weight data ( or examples ) , ie , the older the example , the smaller the impact . For abrupt ones , on the other hand , partial memory based methods ( eg , [ 3 ] ) are proposed by discarding examples outside a pre defined window , only recent examples in the window are taken into account .
+In contrast , we differ from the above as : ( a ) unlike full memory based methods , we do not require to store all examples , which saves memory ; ( b ) We consider all examples in model training , such that information in previous examples are not discarded ; and ( c ) Our algorithms are able to tackle both gradual and abrupt concept drifting problems , with tuning the time decaying factor ( to be seen in Section 3 ) .
+Online convex learning algorithms . Various online learning algorithms are proposed to solve the online convex optimization problem . We characterize it as the following two types : ( a ) Mirror descent ( MD ) algorithms like truncated gradient descent [ 19 ] and FOBOS [ 30 ] ; and ( b ) Followthe regularized leader ( FTRL ) algorithms like RDA [ 32 ] and FTRL proximal [ 26 ] . Moreover , [ 24 ] proves the equivalence between the mirror descent algorithms and the FTRL algorithms , and in particular , FTRL proximal outperforms the others in terms of accuracy and sparsity [ 25 ] , and are widely used in industry , eg , recommender system [ 2 , 28 ] and Advertisement system [ 25 ] .
+618 However , our algorithms differ from the previous ones in the followings : ( a ) The effects of the older history of the models on target model are scaled down with an exponential time decaying function , while existing methods do not ; and ( b ) The time decaying factors are embedded into the recursive closed form of model update functions , similar to the FTRL proximal algorithm in [ 25 ] .
+Parallelism of online learning algorithm . In the literature , there are various existing works on parallelized machine learning algorithm [ 10 , 12 , 18 ] . Meanwhile , lots of machine learning platforms are proposed [ 1 , 8 , 22 ] . Among others , relate to online learning context , techniques for parallelizing mirror descent ( MD ) algorithms , in particular , stochastic gradient descent ( SGD ) algorithm have been intensively studied . [ 36 ] proves that parallelized SGD converges well with decayed updates . [ 37 ] presents the first parallelized SGD including a detailed analysis and experimental evidence . [ 34 ] proposes a user friendly programming interface for parallelizing SGD . [ 25 ] also mentions the parallelism of the FTRL like algorithms , but no detailed solution is given . in contrast to previous works , we ( a ) propose recursive model parameters update functions embedded with exponential time decaying factors in distributed ( multi machines ) setting ; ( b ) provide practical implementations of our algorithm ( FTRL like algorithm ) for parallelism on both BSP [ 6 ] and SSP [ 13 ] consistency model in online learning scenario ; and ( c ) compare the performance on two well known platforms : ( i ) general big data analytic platform ( ie , Spark [ 27 ] ) for BSP model ; and ( ii ) specific machine learning platform ( ie , Petuum [ 33 ] ) for SSP model . We conclude some interesting results in the experiments and hope that all practitioners get enlightened from it . 2.2 FTRL Proximal Algorithm
+However ,
+In this subsection , we give the details of the FTRLproximal algorithm . We start with the optimization problem that the algorithm is proposed for . We first establish some notations to be used in the following . We denote a vector g(t ) ∈ Rd , where t indicates the t th training examples . The i th entry in vector g(t ) is defined as g(t ) , and s=1 g(s ) . We use data and examples interchange g(1:t ) =t ably if the context is clear . Optimization problem . Given a time step T ≥ 1 , a sequence of training examples with features x(t ) ∈ Rd and labels y(t ) , t ∈ [ 1 , T ] , the optimization problem that FTRLproximal algorithm solved takes the form of i
+L(w , x(t ) , y(t ) ) + R(w )
+,
+( 1 )
+T t=1 w(T ) = arg min w in particular ,
+• w(T ) ∈ Rd is the target model parameters to be com puted ;
+• L( , , ) is a convex loss function of the prediction function , eg , least square loss in linear regression , or logistic loss in logistic regression ; and
+• R(w ) is a convex regularization term , eg , L1 norm ,
+L2 norm or a linear combination of both .
+Model update function . To solve the optimization problem in Equation 1 , at each iteration t ∈ [ 1 , T ] , the FTRL proximal algorithm updates the model parameters iteratively , ie , w(t+1 ) takes the form of arg min w g(1:t)·w+λ1w1+λ2w2 2+
+1 2 t
+σ(s)w−w(s)2
+2 s=1
+( 2 )
+, where
+• g(t ) ∈ Rd is a vector of gradients of loss function
+2 ) is the regularization term corre
+L(w , x(t ) , y(t ) ) in Equation 1 ;
+• ( λ1w1 + λ2w2 t s=1 σ(s)w − w(s)2
+• 1 sponding to R(w ) in Equation 1 ; and
+2 is a smoothing term , impor2 tantly , such smoothing term does not change the optimum of the original problem in Equation 1 , it aims to speed up convergence and improve accuracy . Moreover , the vector σ(t ) is defined in terms of the learning rate schedule , ie , σ(t ) = 1 η(t−1 ) , such that σ(1:t ) = 1 is a per coordinate learning rate proposed in [ 25 ] as ,
+η(t ) . And η(t )
+η(t ) − 1 i
+αt
+η(t ) i =
+,
+)2
+( 3 ) s=1(g(s ) i where α is set as twice the maximum allowed magnitude for wi to give the best possible regret bound [ 25 ] .
+As reported in [ 25 ] , the update function in Equation 2 can be transformed into a recursive closed form , ie , the value w(t ) can be recursively computed from w(t−1 ) . An efficient implementation with pseudocode is then provided based on the recursive form . And better still , FTRL proximal algorithm outperforms the other classical online learning algorithms ( eg , FOBOS and RDA ) in terms of accuracy and sparsity , Therefore , in this paper , we derive our techniques from the FTRL proximal algorithm . We consider a possible intuitive modification to FTRL proximal , that lets it adapt faster to changes in data distribution . 2.3 Problem Definition
+As motivated in Sec 1 , we want to tackle the data with fast changing nature for online learning scenario , which indicates that the target model approaches to the most recent model while older history of the model can be deemphasized . Thus , we state the time decaying online convex optimization TOCO problem as below . Definition 1 : Given a time step T ≥ 1 , a sequence of training examples with features x(t ) and labels y(t ) , t ∈ [ 1 , T ] , the time decaying online convex optimization , denoted as TOCO , is stated as
+T
+T
+.
+F ( T )(t)S(w , w(t ) )
+( 4 ) 2 w(T ) = arg min w
+L(w , x(t ) , y(t))+R(w)+ t=1 t=1 as T
+The objective function in Equation 4 is similar to that of Equation 1 , except that we introduce an additional term t=1 F ( T )(t)S(w , w(t ) ) to model the time decay of our target model . More specifically , ( a ) F ( T )(t ) is a monotonic increasing time decay function ( to be defined shortly ) with independent variable t , and ( b ) S(w , w(t ) ) is a smoothing term , ie , 1
+2w − w(t)2 2 .
+619 The intuition here is that with the help of time decaying function , the target model w(T ) cannot differ too much compared to those recent model , while the effects from older history of the model can be decreased . Such corresponds to the objective of our problem .
+3 . TIME DECAYING ADAPTIVE PREDIC
+TION ALGORITHM
+In order to solve TOCO problem , in this section , we present the details of the proposed time decaying adaptive prediction ( TDAP ) algorithm . We first introduce the timedecaying function . We then give a formal definition of the model update function with recursive closed form . Details of the algorithm are finally presented .
+Time Decaying function . We note that there are numbers of time decaying function in the literature , such as polynomial decay and exponential decay [ 7 ] . In this paper , we use exponential decay function as F ( T )(t ) in Definition 1 . The reasons are two folds : ( a ) it is widely used in both industry [ 20 , 31 ] and academia [ 5 , 29 ] ; and ( b ) the recursive closed form of the model update function ( to be seen shortly ) can be derived under the exponential term 1 .
+In particular , the exponential time decaying function takes the form of
+F ( T )(t ) = exp(−|T + 1 − t|
+( 5 ) where T ≥ 1 is current time step , and t is time step of the history model , t ∈ [ 1 , T ] . Note that F ( T )(t ) is a monotonic increasing function with independent variable t , ie , the larger the t , the larger the returned value .
+( 2τ )2
+) ,
+Model update function . Based on the exponential decay function in Equation 5 , we define the iterative model update function in each iteration t to solve TOCO , where w(t+1 ) takes the form of t s=1
+. arg min w g(1:t)·w+λ1w1+λ2w2 2+
+1 2
+δ(s,t)w−w(s)2
+2
+δ(s,t ) i
+( 6 ) Note that δ(s,t ) = σ(s ) · F ( t)(s ) , which can be extended on per coordinate base as s exp(− |t+1−s| ( 2τ )2 ) j=1(g(j )
+)2 −s−1 i
+= σ(s ) i = 1 α i
+)2 exp(− |t+1−s| ( 2τ )2 ) ( 7 ) ( 2τ )2 , then δ(s,t ) = σ(s ) exp(−γ(t + 1 − s) ) . j=1(g(j )
+We let γ = 1 Here , γ > 0 is a decay rate , and the bigger the γ , the faster decaying of the history model . It is easy to see that in case of limτ→+∞ γ = 0 , Equation 6 is equivalent to that of FTRLproximal algorithm in Equation 2 .
+It is worth highlighting that the update function for TDAP algorithm differs from that of the FTRL proximal algorithm as we introduce the time decaying factor to the smoothing term , ie , the quadratic term 1 2 t s=1 δ(s,t)w − w(s)2 2 .
+Closed form . Similar to FTRL proximal algorithm , we next derive a recursive closed form of the update function in Equation 6 following the flow in [ 25 ] .
+1In this work , we take the first step to study the TOCO problem with exponential decay , other time decaying functions ( eg , polynomial decay ) are refered to the future work .
+Algorithm Per Coordinate TDAP algorithm with L1 and L2 Regularization for Logistic Regression Input : Parameters α , λ1 , λ2 and γ 1 . ( ∀i ∈ {1 , · · · , d} ) , initialize u(0 ) 2 . for each t = 1 to T , do i = h(0 ) i = v(0 ) i = δ(0 ) i = 0
+/* features receiving */ receive feature vector x(t ) and let I = {i|x(t ) i
+= 0}
+/* model parameters update */ for each i ∈ I , do update w(t ) i with closed form /* Equation 9 */
+/* prediction */ predict p(t ) =
+1
+1+exp(−x(t)·w(t ) )
+/* logistic regression */
+/* labels observation */ observe label y(t ) ∈ {0 , 1}
+( t))2 −
+/* gradient of loss wrt w */ − 1 u(t−1 )
+/* recursive form update for future model update */ for each i ∈ I , do i = ( p(t ) − y(t))x(t ) g(t ) i u(t−1 ) σ(t ) i = 1 + ( gi α ( i i = u(t−1 ) u(t ) + ( g(t ) )2 i = exp(−γ)(δ(t−1 ) δ(t ) i = v(t−1 ) v(t ) i = exp(−γ)(h(t−1 ) h(t ) z(t ) i = v(t )
+/* sum of gradient */ ) /* Equation 10 */ /* sum of gradient square */
+/* Equation 12 */
+/* Equation 11 */ i − h(t ) i w(t )
++ σ(t )
++ σ(t )
++ g(t )
+1 ( t ) η i
+/*
+)
+)
+η i i i i i i i i i i
+( t−1 ) i
+*/
+3 .
+4 . 5 .
+6 .
+7 .
+8 . 9 .
+10 .
+11 . 12 . 13 . 14 . 15 .
+δ(s,t))·w2+(const )
+Figure 2 : TDAP Algorithm i i i i i
+0 s=1 s=1
+1 2
+( λ2+ and z(t ) t s=1 δ(s,t ) s=1 δ(s,t )
+)−1(z(t ) if |z(t ) if |z(t ) i − λ1sign(z(t ) i ) )
+δ(s,t)w(s))·w+λ1w1+
+We rewrite the Equation 6 wrt the arg min over w as
+( 8 ) s=1 δ(s,t)w(s ) , one can solve w(t+1 ) in a recursive closed form on a per coordinate base as follows ,
+| ≤ λ1 | > λ1 ( 9 ) From Equation 9 , in iteration t , we are required to store in memory only . However , how can we update both values in t th iteration with only the values of ( t − 1) th iteration ? Next , we focus on the recursive form
+( g(1:t)− t By storing z(t ) = g(1:t ) −t
+−(λ2 +t t for updating botht . t Recursive form oft · exp , − γ(t + 1 − s)=t t = exp(−γ ) · ( t−1 i =t =t =t = exp(−γ),t−1
+Recursive form of z(t ) we let h(t ) a recursive form
+. Since z(t ) i w(s ) , h(t ) s=1 δ(s,t−1 ) i = g(1:t )
+−t i exp , − γ(t + 1 − s) w(s ) i w(s ) can then be computed in s=1 δ(s,t ) s=1 δ(s,t ) s=1 δ(s,t ) s=1 σ(s ) in a recursive form : can be computed s=1 δ(s,t ) s=1 δ(s,t ) s=1 δ(s,t ) s=1 δ(s,t ) i w(s )
++ σ(t ) i ) and z(t )
+σ(s ) i h(t ) i
+) + σ(t ) i w(t )
+( 10 )
+( 11 ) s=1
+.
+, i i i i i i i i i i i i i
+= exp(−γ)(h(t−1 ) i s=1(δ(s,t−1 ) w(s ) i i w(t ) + σ(t ) i ) i i
+620 −t
+Thus , the recursive form of z(t ) i becomes z(t ) i
+= g(1:t ) = g(1:t−1 ) i i i w(s ) s=1 δ(s,t ) i − exp(−γ)(h(t−1 ) i i
++ g(t )
++ σ(t ) i w(t ) i )
+( 12 ) i
+, δ(t )
+, v(t )
+Detailed algorithm . Putting all together , in iteration t , from Equation 10 and 12 , we note that our algorithm is required to keep track of u(t ) on percoordinate base only . We show the pseudocode of TDAP algorithm using the example of logistic regression in Figure 2 . The algorithm first initializes the parameters in Line 1 . Then , upon receiving the features ( Lines 2 3 ) for each iteration , TDAP updates the model parameters and does the prediction ( Lines 4 6 ) . It then updates the parameters for further usage by observing the labels ( Lines 7 15 ) . and h(t ) i i i
+Advantages . It is worth remarking that ( a ) the effects of older history models on target model are scaled down with the help of time decaying function , which leads to adapt fast changes ( gradual or abrupt ) of data ; ( b ) all examples are used for model training while there is no need to record them , which significantly saves the memory ; and ( c ) it is efficient to update the models due to the recursive closed form , as shown in Section 5 .
+4 . PARALLELISM OF TDAP
+ALGORITHM
+In this section , we show the parallelism of TDAP algorithm . We first introduce the data model and the system model . We then present the parallel TDAP under data parallel scheme with bulk synchronized parallel ( BSP ) consistency model , as TDAPBSP . We end this section by showing how we can extend the TDAPBSP to stale synchronized parallel ( SSP ) model , as TDAPSSP . 4.1 Data Model and System Model
+Data model . We follow the data parallel [ 14 ] model in online learning scenario . In particular , the data ( examples with features and labels ) take the form of stream , which is divided into a sequence of mini batch D(t ) in each iteration t ∈ [ 1 , T ] , |D(t)| ≥ 1 . The mini batch D(t ) is then partitioned and assigned to computational workers indexed by p for further computations ( to be seen shortly ) .
+System model . The system model follows the state ofthe art parameter server paradigm eg , [ 8,13,22 ] , which are widely used to tackle the large scale iterative machine learning problem [ 15 , 18 , 37 ] . It comprises of the following three major components :
+Driver . The driver is to initiate the algorithm and control the parameters updates via parameter consistency controller for each iteration t ∈ [ 1 , T ] under the bulk synchronized parallel ( BSP ) or stale synchronized parallel ( SSP ) .
+Parameter servers . The parameter servers ( PS ) provide a global access to model parameters via a parameter synchronization interface like that of table based or key value stores . Note that in practice , the PS can also be the driver .
+Workers . Let P be all workers . For each iteration t , each worker p ∈ P receives the model parameters from PS via the parameter synchronization interface ( ie , pull() ) , and updates the model locally in parallel using the received examp ⊂ D(t ) . ples D(t ) p partitioned by mini batch D(t ) , ie , D(t )
+Figure 3 : Data model , system model and working flow of TDAPBSP algorithm .
+Note that each example in D(t ) is allocated to one worker only . After the update is done , the worker p then synchronizes the newly updated model parameters to the PS via the synchronization interface push( ) . The driver ( or PS ) then generates future decisions .
+Example 2 : Figure 3 depicts an example of the data model and system model . Three parties of the system , ie , driver , PS and workers are shown . For simplicity , here , the PS also represents the driver . The examples coming to the system take the form of a stream of mini batch D(t ) in each iteration p ∈ D(t ) are then sent to the t . Collections of examples D(t ) worker p for later computations .
+2
+4.2 Parallel TDAP Algorithm Under BSP
+Data structure . We first introduce three types of data structures that facilitate TDAPBSP . Global parameters on PS . The global parameters are stored in PS , which keep track of the global model states . In particular , in iteration t , the global parameters to be saved are ( u(t )
+) on per coordinate base , where i i i i i
+, v(t ) • u(t ) • v(t ) • h(t )
+• δ(t )
+, h(t ) , δ(t ) i = u(t−1 ) i = v(t−1 ) = h(t−1 )
+= δ(t−1 ) i i i i i
++ + + + p∈P p∈P p∈P p∈P d∈D
+( t ) p d∈D
+( t ) p
+( g(t ) p,d,i)2 ; g(t ) p,d,i ; d∈D
+( t ) p
+σ(t ) p,d,iw(t ) p,i ; and d∈D
+( t ) p
+σ(t ) p,d,i . p,d,i and w(t ) p,d,i ( resp . σ(t )
+Note that g(t ) p,i ) are gradient ( resp . learning rate schedule and model parameter ) with i th coordinate in t th iteration computed under example d ∈ D(t ) at worker p . And h(t ) do not introduce the timedecaying factor , which are different to h(t ) Local parameters at workers . Each worker p stores its local parameters , which can be derived from global parameters on PS . Specifically , the local in iteration t , and δ(t ) and δ(t ) p
+. i i i i
+D(t)D(t+1)D(t+2)ParameterSynchronizationInterfaceWorker1EvalpBSPLocalParametersLocalDeltaParametersD(t)1···ParameterSynchronizationInterfaceWorkerpLocalParametersLocalDeltaParametersD(t)pGlobalParametersParameterServers(Driver)ParameterControllerEvalpBSPpull()push()localpush()localEvalPSBSPUpdatelocalparameters&Updateglobalparameters&byEvalpBSPbyEvalPSBSPDataStream···1 1 2 pull()2 4 4 3 5 ConsistencyParameterSynchronizationInterfacecontroltheflowpredictdeltaparametersglobalparametersdeltaparameters621 Algorithm Evalp Input : A collection of examples D(t ) p
+BSP
+/* receiving global parameters from PS */
+1 . pull(u(t ) i
+, v(t ) i
+, h(t ) i
+, δ(t ) i
+) on per coordinate base
+/* local parameters update */
+2 . for each coordinate i , do 3 . i i p,i = exp(−γ),h(t−1 ) p,i = exp(−γ),δ(t−1 ) u(t ) p,i = u(t ) v(t ) p,i = v(t ) h(t ) δ(t ) store h(t ) and δ(t ) i i
+4 .
+5 .
+6 .
+7 . p,i + ( h(t ) p,i + ( δ(t ) i i
+))− h(t−1 )
+− δ(t−1 ) i i locally for next iteration
+/* computing model parameters */
+8 . for each coordinate i , do 9 . compute w(t ) p,i with closed form /* Equation 9 */
+10 . for each d ∈ D(t ) p , where d = ( x , y ) , do /* prediction using model parameters */
+11 . predict p(t ) p,d =
+1
+1+exp(−x·w(t ) p )
+/* local delta parameters computation */
+12 . 13 .
+14 .
+15 .
+16 .
+17 . for each coordinate i , do p,d,i and σ(t ) p,d,i 2 p,i + ( g(t ) p,d,i ) p,i + g(t ) compute g(t ) p,i = ∆u(t ) ∆u(t ) ∆v(t ) p,i = ∆v(t )
+= ∆h(t ) ∆h(t ) p,i p,i
+∆δ(t ) = ∆δ(t ) p,i p,i p,d,i + σ(t ) + σ(t ) p,d,i p,d,iw(t ) p,i
+/* sending local delta parameters to PS */
+18 . push(∆u(t ) p,i , ∆v(t ) p,i , ∆h(t ) p,i
+, ∆δ(t ) p,i
+) to PS
+Figure 4 : Evalp
+BSP at Worker p in iteration t parameters to be saved at worker p take the form of ( u(t ) ) on per coordinate base , where p,i , δ(t−1 ) , δ(t ) p,i , h(t−1 ) p,i , h(t ) p,i , v(t ) i i p∈P d∈D
+( t ) p
+σ(t ) p,d,iw(t ) p,i ) ; i i
+;
+;
+• u(t ) p,i = u(t ) • v(t ) p,i = v(t ) p,i = exp(−γ)(h(t−1 ) • h(t ) and p,i = exp(−γ)(δ(t−1 ) • δ(t ) p,i + p,i + d∈D
+( t ) p
+σ(t ) p,d,i ) . p∈P compute d∈D
+( t ) p
+It is worth highlighting that h(t−1 ) i is recorded in order to p,i ( to be seen shortly ) . Similar
+σ(t ) p,d,iw(t ) i
+. for δ(t−1 ) Local delta parameters . it computes the local delta parameters which is to incrementally update the global parameters on PS . More specifically , the local delta parameters for work p in iteration t are ( ∆u(t ) ) on per coordinate base , where
+Intuitively , for each worker p , p,i , ∆h(t ) p,i
+, ∆δ(t ) p,i p,i , ∆v(t ) • ∆u(t ) • ∆v(t ) • ∆h(t ) p,i = p,i = = p,i
+( g(t ) p,d,i )
+2
+; g(t ) p,d,i ; d∈D
+( t ) p d∈D
+( t ) p d∈D
+( t ) p
+σ(t ) p,d,iw(t ) p,i ; and
+Algorithm EvalPS BSP Input : Local delta parameters from all workers
+/* global parameters update */
+1 . for each worker p , do 2 . 3 . for each coordinate i , do i + ∆u(t ) i + ∆v(t ) p,i p,i u(t ) i = u(t ) v(t ) i = v(t )
+= h(t ) h(t ) i i
+δ(t ) = δ(t ) i i
++ ∆h(t ) p,i
++ ∆δ(t ) p,i
+4 .
+5 .
+6 .
+=
+Figure 5 : EvalPS BSP at PS in iteration t σ(t ) p,d,i . p,i
+• ∆δ(t ) d∈D
+( t ) p
+TDAPBSP algorithm . We show the details of TDAPBSP using the logistic regression , which is controlled by a driver function DriverBSP . DriverBSP initiates the TDAPBSP , and triggers Evalp BSP ( Figure 5 ) functions in each iteration between workers and PS . All parameters are updated iteratively under BSP model , no need to compute from scratch .
+BSP ( Figure 4 ) and EvalPS
+BSP . Given a collection of examples D(t )
+In particular , all global parameters and local ( delta ) parameters are initiated as zero . Then given a collection of examples in iteration t , each worker p computes the local ( delta ) parameters by Evalp BSP , in parallel , based on the global parameters computed in previous iteration . The global parameters are then updated by EvalPS BSP at PS using the newly computed local delta parameters . DriverBSP terminates the whole procedure manually , or until there is no data coming . p ⊂ D(t ) in t th Evalp iteration at worker p , Evalp BSP first receives all global parameters from PS by pull( ) function ( Line 1 ) . It then updates the local parameters and computes local delta parameters iteratively , based on the parameters in ( t − 1) th iteration ( Lines 2 7 ) . The model parameters w(t ) are then constructed using the newly updated local parameters , and the prediction are conducted ( Lines 8 11 ) . Evalp BSP finally computes the local delta parameters ( Lines 12 17 ) and sends them to PS by push( ) function for incrementally updating the global parameters ( Line 18 ) . EvalPS BSP . Upon receiving all local delta parameters from each worker p in iteration t , EvalPS BSP increments global parameters by summing up all those received local delta parameters . The updated global parameters are used for next iteration ( Lines 1 6 ) .
+Upon receiving a collection of examples D(t )
+Example 3 : Figure 3 illustrates the working flow of TDAPBSP algorithm in t th iteration given a mini batch D(t ) . All local and global parameters are recored in PS and workers , respectively , which are initialized as zero . p ⊂ D(t ) , the worker p invokes Evalp BSP . It pulls the global parameters from PS , and updates the local ( delta ) parameters accordingly . The prediction are conducted based on the newly computed model parameters . After the computations , Evalp BSP pushes the local delta parameters to the PS .
+Based on the local delta parameters received from all workers ( required by BSP consistency model ) , the PS then invokes EvalPS BSP to augment the global parameters accordingly . Afterwards , the PS ( aka the Driver ) then invokes 2 next iteration of the computation , or abort .
+622 4.3 Parallel TDAP Algorithm Under SSP
+The performance of TDAPBSP may be significantly hampered by the stragglers in each iteration that may hold up the process , such costs are inherent to the synchronization policy of BSP . To reduce the costs , one possible solution is to use asynchronous parallel strategy , however , no performance guarantee is provided [ 33 ] in terms of correctness .
+In this subsection , we introduce TDAP under SSP consistency model [ 33 ] , denoted as TDAPSSP , whose accuracy can be theoretically preserved by [ 13 ] . Since TDAPSSP is an extension from TDAPBSP , for presentation simplicity , we avoid repeating the same details , but highlight the major differences between two .
+Data structure . We first present the difference on data structure . The local delta parameters for TDAPSSP are the same to those of TDAPBSP , while local and global parameters involve more components , as described below .
+Global parameters on PS . Besides the global parameters used in TDAPBSP , TDAPSSP introduces two more types of global parameters on PS : ( a ) The time step tp for each worker p , which encodes the latest time step that worker p synchronizes ( via push interface ) its local delta parameters to the PS ; and ( b ) The minimum time step tP S for all workers p , ie , tP S = min{tp|∀p ∈ P} . Local parameters at workers . At worker p , except for those parameters in TDAPBSP , TDAPSSP requires to record ( a ) the latest time step tp that the local parameters been updated ; and ( b ) the latest time step t(p,P S ) that worker p synchronizes global parameters ( via pull interface ) from PS .
+TDAPSSP algorithm . Based on the newly introduced parameters , we are ready to show the algorithm . Similar to TDAPBSP , TDAPSSP is also controlled by a driver DriverSSP , which is for initialization and triggering Evalp SSP and EvalPS SSP functions under the SSP consistency model . In particular , compared to BSP , workers may compute advance ahead of each other up to s iterations apart , where s is called staleness threshold ( in short stale ) , under SSP . Workers that go too far away ( s iterations faster than the slowest one ) are forced to wait , until slower workers catch up . Note that SSP is equivalent to BSP when s = 0 . Evalp SSP first checks whether the local parameters are delayed or stale , by evaluating the value of ( tp − tp,P S ) . ( a ) If ( tp − tp,P S ) > s ( ie , local parameters at worker p are delayed at least s iterations ) , Evalp SSP yields to synchronize global parameters from PS via pull interface ( like Line 1 in Figure 4 ) and conducts the procedures that are the same to Lines 2 17 . The time step tp,P S is then updated as tP S , ie , tp,P S = tP S , where tP S is within those returned global parameters ; ( b ) Otherwise , no need to update the local parameters , Evalp SSP just computes the local delta parameters , the same to Lines 1217 in Figure 4 .
+SSP . Given a collection of examples D(t ) p , Evalp
+Note that the time step tp for worker p is incremented by 1 after the above procedure , and all local delta parameters are then sent to PS via push interface , as Line 18 in Figure 4 . EvalPS SSP is invoked once receiving ( a ) the local delta parameters , or ( b ) a pull request for global parameters , from a worker p .
+SSP . Compared to EvalPS
+BSP , EvalPS
+• ( a ) Upon receiving the local delta parameters from SSP conducts the update functions the worker p , EvalPS as Lines 2 6 in Figure 5 . The time step tp for worker p is added by 1 , and tP S is updated accordingly ;
+• ( b ) Otherwise , ie , receiving a pull request for global parameters from the worker p , EvalPS SSP is required to evaluate the value of ( tp − tP S ) . ( a ) If ( tp − tP S ) ≤ s , EvalPS SSP returns the global parameters directly ; ( b ) Otherwise , which implies that worker p runs too far away , Evalp SSP has to wait until the slower workers catch up . Once ( tp − tP S ) = s , EvalPS SSP proceeds the request again and returns the global parameters .
+5 . EXPERIMENTAL STUDY
+In this section , we experimentally study the performance between FTRL Proximal and TDAP using real world datasets . In short , we evaluate ( a ) the accuracy of TDAP ; ( b ) the scalability of TDAP ; and ( c ) the efficiency between TDAPSpark and TDAPPetuum . The results exhibit the algorithm with good accuracy , scalability and efficiency . 5.1 Experimental Setup
+Datasets . We benchmarked 8 real world datasets in total , which can be classified into the following categories . Some detailed statistics of the datasets are illustrated in Table 1 .
+Public non time series datasets . We used 6 datasets without time series , namely Books , DVD , Electronics , Kitchen , RCV1 and News . Among them , Books , Dvd , Electronics and Kitchen are first used in [ 4 ] , representing Amazon product reviews of four different product types . RCV1 and News are scaled versions of rcv1.binary [ 21 ] and news20.binary [ 15 ] datasets for binomial classification , respectively .
+Public time series dataset . We used a public dataset with time series on suspicious URLs detection , called URLs which is available from [ 23 ] . It is an anonymized 120 day subsets with around 2.4 million URLs detection records . Each day contains about 6 , 580 positives and 13 , 223 negatives examples on average .
+IPTV VoD time series dataset . We collected a dataset with 7 day IPTV VoD ( Video On Demand ) program ( eg , movies and TV plays ) views , named as IPTV , from a giant Telecom company in Mainland China . It involves 72 , 350 , 479 view records from 4 , 446 , 247 users .
+To generate the examples , we construct a feature label pair ( x(t ) , y(t ) ) for each VoD program view record at time t . In particular , x(t ) is a sparse feature vector , with size of 1 , 321 , 393 ( as shown in Table 1 ) , encoding the characteristics of both program and user , eg , program information , user properties , user behaviors and time stamp of user ’s view . The label y(t ) is 1 if the program was viewed by the user at least 20 minutes or half of the total length of the program ; and 0 otherwise .
+Algorithm settings . We implemented the following algorithms : ( a ) Algorithms on Spark 151 under BSP model : ( i ) FTRLProxSpark , the FTRL Proximal algorithm [ 25 ] , where α , λ1 and λ2 are all set as 0.1 2 ; and ( ii ) TDAPSpark of Sec 3 , where the settings for α , λ1 , λ2 are taken from FTRLProxSpark . The parameter γ is carefully chosen for different datasets ( to been seen shortly ) ; and ( b ) Algorithms on
+2We have varied α , λ1 and λ2 from 0.0001 to 1 on all the above datasets , and 0.1 brings the best accuracy on average .
+623 Table 1 : Statistics of the datasets
+Dataset
+Books DVD Electronics Kitchen RCV1 News URLs IPTV fea
+# of tures 332,439 282,899 235,796 205,664 47,236 1,355,192 3,231,961 1,321,393
+# of positive examples 2,264 1,807 2,857 2,954 355,460 9,999 786,182 32,869,901
+# of negative examples 2,201 1,779 2,824 2,991 321,939 9,997 1,593,948 39,480,578
+Petuum 1.1 under SSP model 3 ( i ) FTRLProxPetuum ; and ( ii ) TDAPPetuum , the stale is set to 2 ( as recommended in [ 33] ) , other parameter settings are the same to those on Spark ( BSP ) .
+Evaluation framework . We conducted the evaluation of the algorithms using three different frameworks in terms of different datasets , where the accuracy metrics used include AUC ( Area Under the ROC Curve ) and AER [ 23 ] ( Accumulative Error Rate ) . Details are as below .
+Framework for public non time series datasets . The framework is designed for public non time series datasets , where the size of mini batch is set as one , ie , once coming one example , the framework conducts prediction and trains the model . The metric , AUC , is calculated after all examples have been traversed .
+Framework for URLs dataset . We follow the evaluation framework for URLs as [ 23 ] , where each mini batch consists of one example , similar to the above framework . However , the AUC for both FTRL Proximal algorithm and TDAP are very close , which approach to 0.999 ( 0.999214 for TDAP and 0.999057 for FTRL Proximal ) , we thereby use AER instead . The AER is then aggregated and reported in terms of days .
+Framework for IPTV dataset . This framework , on the other hand , performs prediction and updates the model on IPTV over each mini batch formed by time slot with 15 minutes , which follows our business requirements . And still , the AUC is then aggregated and compared in terms of days .
+Distributed settings . To evaluate the accuracy of the algorithms , we deployed all algorithms on a mini cluster with p = 3 machines , each of which has 24 cores , 96GB memory and 18TB disk . To further study the scalability , we deployed a cluster with p = 10 machines , where each is with 8 cores , 64GB memory and 500GB disk . Each experiment is repeated 10 times and the average is reported . 5.2 Experimental Results
+Parameter Choosing for TDAP . We first study the accuracy of TDAP by varying the parameter γ , in order to choose good γ for each dataset . We fix the parameters α , λ1 and λ2 as mentioned above , for fair comparison .
+Figure 6 shows the AUC on Kitchen dataset using TDAPSpark . The x axis is γ and y axis represents the AUC . In particular , by varying γ from 0.1 to 0.000001 , the AUC of TDAP becomes stable ( approaching 94 % ) once γ > 0.0005 , and similar for TDAPPetuum . Hence , we determine γ = 0.0005
+3We use Petuum for the implementation of SSP as it is not known how to realize it under Spark . for Kitchen . Note that we conducted the same sets of experiments to determine the value of γ for other datasets ( not shown ) , which are used in later evaluations .
+Figure 6 : The AUC of TDAP by varying parameter γ on Kitchen dataset using TDAPSpark ; Similar for TDAPPetuum .
+Accuracy Comparison Between FTRL Proximal and TDAP . After determining γ of TDAP for each dataset , we are ready to compare its accuracy to FTRL Proximal . As the comparison between FTRLProxPetuum and TDAPPetuum shows similar results , for space constraints , we only report the results on FTRLProxSpark and TDAPSpark . Accuracy on public non time series datasets . Table 2 reports the AUC comparison between FTRLProxSpark and TDAPSpark on public non time series datasets . We note that TDAPSpark performs nearly the same as FTRLProxSpark on Books , Dvd , Electronics , Kitchen and RCV1 . However , for News , TDAPSpark improves the accuracy by at most 12 % . The hypothesis held by FTRL Proximal is that the effects of all historical models are equivalent . Although this might be suitable for most non time series datasets , we still believe that , according to “ no free lunch ” theorem , treating historical models differently can lead to better performance in some datasets , eg , News in our experiments .
+Table 2 : The AUC of TDAPSpark and FTRLProxSpark on all public non time series datasets . The best value for each dataset is in bold .
+Dataset Books Dvd Electronics Kitchen RCV1 News
+FTRLProxSpark TDAPSpark 0.8944 0.8838 0.9278 0.9448 0.9904 0.8885
+0.8914 ( γ = 0.0005 ) 0.8792 ( γ = 0.0005 ) 0.9249 ( γ = 0.0005 ) 0.9440 ( γ = 0.0005 ) 0.9936 ( γ = 0.05 ) 0.9952 ( γ = 0.1 )
+Accuracy on URLs dataset . Figure 7 shows the AER , ie , the percentage of misclassified examples for all URLs enfor TDAPSpark and FTRLProxSpark countered up to date , on URLs . The x axis is the number of days and yaxis is the AER . From the figure , we find out that the AER of TDAPSpark approaches 1.4 % , which outperforms FTRLProxSpark ( AER with 1.6 % ) by 12.5 % on average . It is worth remarking that the AUC for both algorithms are very close , both approach 0.999 , and the value of TDAPSpark increases 0.016 % compared to that of FTRLProxSpark . Hence , we only report the AER in this part .
+Accuracy on IPTV dataset . Figure 8 shows the AUC on
+624 the costs of network communication [ 33 ] , whereas Spark ’s RDD system performs caching at a coarser granularity [ 27 ] and thus requires more communication .
+Figure 7 : The AER of TDAPSpark ( with γ = 0.00001 ) and FTRLProxSpark on URLs dataset .
+IPTV time series dataset . Not surprisingly , the results show that TDAPSpark outperforms FTRLProxSpark by around 5.6 % on average . Such indicates that our strategy to deemphasize the effects of historical models in model training can definitely improve the accuracy , when the data are changing fast as motivated in Figure 1 .
+In our running production service , when we switched from FTRL Proximal to TDAP , TDAP significantly increased the degree of user activity , ie , there were approximately 5 % more users engaged and each user took 10 % more time than ever , due to the accuracy improvement compared to the former one . Such accordingly brought more revenue than the existing one ( using FTRL Proximal ) for our customers .
+Figure 9 : Speed Up of TDAPSpark and TDAPPetuum . The higher the slope of curve , the better the scalability . Both of them show good scalability , but TDAPPetuum is better . Efficiency Comparison between TDAPSpark and TDAPPetuum . We next focus on the efficiency comparison between TDAPSpark and TDAPPetuum . Figure 10 shows the training time of both algorithms under the same setting ( using p = 3 machines ) . We highlight that the training time of TDAPPetuum is at least 1/20 of that of TDAPSpark , which is also exhibited in [ 33 ] due to the same reasons explained above .
+Still in our production service , we observed that Petuum can process approximately one order of magnitude more users than Spark , with the same cluster setup , ie , the throughput of Petuum was at least 10 times larger than that of Spark . Hence , TDAP on Spark was possible , but the deployment was easier and more efficient using Petuum .
+Figure 8 : The AUC of TDAPSpark ( γ = 0.0005 ) and FTRLProxSpark on IPTV dataset .
+Scalability of TDAP . As TDAP shows good accuracy , we next verify its scalability . We conducted the experiments on IPTV dataset by varying p ∈ [ 2 , 10 ] using TDAPSpark and TDAPPetuum , the results are shown in Figure 9 .
+As expected , TDAPPetuum shows an excellent scalability , which achieves 4x speedup when p increases from 2 to 10 . However , TDAPSpark can only achieve 3x speedup , no matter how we increase the machines , ie,TDAPPetuum enjoys better scalability with more machines than TDAPSpark . The major reasons are two folds : ( a ) SSP avoids the “ blocking ” of stragglers in each BSP round , by setting the staleness ( as revealed in [ 13] ) ; ( b ) Petuum uses fine grained caching strategies and distributed shared memory to further reduce
+Figure 10 : Training time ( s ) of TDAPSpark and TDAPPetuum .
+Summary . We find the followings : ( a ) TDAP gives better accuracy than FTRL Proximal : TDAP improves 5.6 % prediction accuracy on average over our datasets ; ( b ) TDAP has good scalability : TDAPPetuum ( resp . TDAPSpark ) is 4 ( resp . 3 ) times faster when p increases from 2 to 10 ; and ( c ) TDAPPetuum outperforms TDAPSpark in terms of efficiency : TDAPPetuum runs at least 20 times faster than TDAPSpark .
+625 6 . CONCLUSIONS AND DISCUSSION
+Conclusions . In this paper , we have defined time decaying online convex optimization TOCO problem , where the target model approaches to the most recent models while older history of the models are deemphasized , to tackle the fastchanging data . We have proposed a time decaying adaptive prediction TDAP algorithm to solve TOCO problem , where recursive closed forms of the model update functions have been designed . To scale big data , we have parallelized the TDAP algorithm under both BSP and SSP consistency model . Using real world datasets , we have experimentally verified that TDAP achieves good accuracy , scalability and efficiency , on both models . We further observe that TDAP on Spark is possible , but it is easier and more efficient for deployment on Petuum in practice .
+Discussion . We note that the proof of regret bounds for TDAP , as well as TDAPBSP and TDAPSSP , are not the focus of this paper . We refer these to the future work .
+7 . REFERENCES [ 1 ] A . Agarwal , O . Chapelle , M . Dud´ık , and J . Langford . A reliable effective terascale linear learning system . JMLR , 15(1):1111–1133 , 2014 .
+[ 2 ] D . Agarwal , B C Chen , and P . Elango . Fast online learning through offline initialization for time sensitive recommendation . In SIGKDD , pages 703–712 , 2010 .
+[ 3 ] B . Babcock , S . Babu , M . Datar , R . Motwani , and
+J . Widom . Models and issues in data stream systems . In PODS , 2002 .
+[ 4 ] D . M . Blitzer J and P . F . Biographies , bollywood , boom boxes and blenders : Domain adaptation for sentiment classification . ACL , 7:440–447 , 2007 .
+[ 5 ] H I Choi and W . J . Williams . Improved time frequency representation of multicomponent signals using exponential kernels . TSP , 37(6):862–871 , 1989 .
+[ 6 ] T . H . Cormen and M . T . Goodrich . A bridging model for parallel computation , communication , and i/o . CSUR , 28:208 , 1996 .
+[ 7 ] S . V . S . D . Cormode , G . and B . Xu . Forward decay : A practical time decay model for streaming systems . In ICDE , pages 138–149 , 2009 .
+[ 8 ] W . Dai , A . Kumar , J . Wei , Q . Ho , G . Gibson , and E . P . Xing . High performance distributed ml at scale through parameter server consistency models . In AAAI , 2015 .
+[ 9 ] C . B . Do , Q . V . Le , and C S Foo . Proximal regularization for online and batch learning . In ICML , pages 257–264 , 2009 .
+[ 10 ] J . C . Duchi , A . Agarwal , and M . J . Wainwright . Dual averaging for distributed optimization : convergence analysis and network scaling . Automatic control , IEEE Transactions on , 57(3):592–606 , 2012 .
+[ 11 ] J . Gama , I . ˇZliobait˙e , A . Bifet , M . Pechenizkiy , and
+A . Bouchachia . A survey on concept drift adaptation . ACM Computing Surveys , 46 , 2014 .
+[ 12 ] R . Gemulla , E . Nijkamp , P . J . Haas , and Y . Sismanis .
+Large scale matrix factorization with distributed stochastic gradient descent . In SIGKDD , pages 69–77 , 2011 .
+[ 13 ] Q . Ho , J . Cipar , H . Cui , S . Lee , J . K . Kim , P . B . Gibbons ,
+G . A . Gibson , G . Ganger , and E . P . Xing . More effective distributed ml via a stale synchronous parallel parameter server . In NIPS , pages 1223–1231 , 2013 .
+[ 14 ] M . Isard , M . Budiu , Y . Yu , A . Birrell , and D . Fetterly .
+Dryad : distributed data parallel programs from sequential building blocks . In SIGOPS Review , volume 41 , pages 59–72 , 2007 . for fast solution of large scale linear svms . In JMLR , volume 6 , pages 341–361 , 2005 .
+[ 16 ] R . Klinkenberg . Learning drifting concepts : Example selection vs . example weighting . Intelligent Data Analysis , 8:281–300 , 2004 .
+[ 17 ] I . Koychev . Gradual forgetting for adaptation to concept drift . ECAI Workshop , 2000 .
+[ 18 ] A . Kyrola , D . Bickson , C . Guestrin , and J . K . Bradley .
+Parallel coordinate descent for l1 regularized loss minimization . In ICML , pages 321–328 , 2011 .
+[ 19 ] J . Langford , L . Li , and T . Zhang . Sparse online learning via truncated gradient . In NIPS , pages 905–912 , 2009 .
+[ 20 ] K . B . Lee , J . Siegel , S . Webb , S . Leveque Fort , M . Cole ,
+R . Jones , K . Dowling , M . Lever , and P . French . Application of the stretched exponential function to fluorescence lifetime imaging . Biophysical Journal , 81(3):1265–1274 , 2001 .
+[ 21 ] R . T . G . e . a . Lewis D D , Yang Y . Rcv1 : A new benchmark collection for text categorization research . In JMLR , volume 5 , pages 361–397 , 2004 .
+[ 22 ] M . Li , D . G . Andersen , J . W . Park , A . J . Smola ,
+A . Ahmed , V . Josifovski , J . Long , E . J . Shekita , and B Y Su . Scaling distributed machine learning with the parameter server . In OSDI , pages 583–598 , 2014 . [ 23 ] J . Ma , L . K . Saul , S . Savage , and G . M . Voelker .
+Identifying suspicious urls : an application of large scale online learning . In ICML , pages 681–688 , 2009 .
+[ 24 ] H . B . McMahan . Follow the regularized leader and mirror descent : Equivalence theorems and l1 regularization . In AISTATS , pages 525–533 , 2011 .
+[ 25 ] H . B . McMahan , G . Holt , D . Sculley , M . Young , D . Ebner , J . Grady , L . Nie , T . Phillips , E . Davydov , D . Golovin , et al . Ad click prediction : a view from the trenches . In SIGKDD , pages 1222–1230 , 2013 .
+[ 26 ] H . B . McMahan and M . Streeter . Adaptive bound optimization for online convex optimization . COLT , 2010 .
+[ 27 ] X . Meng , J . Bradley , B . Yavuz , E . Sparks ,
+S . Venkataraman , D . Liu , J . Freeman , D . Tsai , M . Amde , S . Owen , et al . Mllib : Machine learning in apache spark . arXiv preprint arXiv:1505.06807 , 2015 .
+[ 28 ] T . Moon , L . Li , W . Chu , C . Liao , Z . Zheng , and Y . Chang .
+Online learning for recency search ranking using real time user feedback . In CIKM , pages 1501–1504 , 2010 .
+[ 29 ] S . Provencher . A fourier method for the analysis of exponential decay curves . Biophysical journal , 16(1):27 , 1976 .
+[ 30 ] Y . Singer and J . C . Duchi . Efficient learning using forward backward splitting . In NIPS , pages 495–503 , 2009 .
+[ 31 ] W . Windig and B . Antalek . Direct exponential curve resolution algorithm ( decra ) : a novel application of the generalized rank annihilation method for a single spectral mixture data set with exponentially decaying contribution profiles . Chemometrics and Intelligent Laboratory Systems , 37(2):241–254 , 1997 .
+[ 32 ] L . Xiao . Dual averaging method for regularized stochastic learning and online optimization . In NIPS , pages 2116–2124 , 2009 .
+[ 33 ] E . P . Xing , Q . Ho , W . Dai , J . K . Kim , J . Wei , S . Lee ,
+X . Zheng , P . Xie , A . Kumar , and Y . Yu . Petuum : A new platform for distributed machine learning on big data . SIGKDD , 2015 .
+[ 34 ] Y . Zhang and M . I . Jordan . Splash : User friendly programming interface for parallelizing stochastic algorithms . arXiv preprint arXiv:1506.07552 , 2015 .
+[ 35 ] B . Zhao , L . Fei Fei , and E . P . Xing . Online detection of unusual events in videos via dynamic sparse coding . In CVPR , pages 3313–3320 , 2011 .
+[ 36 ] M . Zinkevich , J . Langford , and A . J . Smola . Slow learners are fast . In NIPS , pages 2331–2339 , 2009 .
+[ 37 ] M . Zinkevich , M . Weimer , L . Li , and A . J . Smola .
+[ 15 ] S . S . Keerthi and D . D . A modified finite newton method
+Parallelized stochastic gradient descent . In NIPS , 2010 .
+626

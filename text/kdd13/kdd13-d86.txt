@@ -1,0 +1,584 @@
+Indexed Block Coordinate Descent for Large Scale Linear
+Classification with Limited Memory
+Ian EH Yen
+National Taiwan University r00922017@csientuedutw
+Chun Fu Chang
+National Taiwan University r99725033@ntuedutw
+Ting Wei Lin
+National Taiwan University b97083@csientuedutw
+Shan Wei Lin
+National Taiwan University b99023@csientuedutw
+ABSTRACT Linear Classification has achieved complexity linear to the data size . However , in many applications , data contain large amount of samples that does not help improve the quality of model , but still cost much I/O and memory to process . In this paper , we show how a Block Coordinate Descent method based on Nearest Neighbor Index can significantly reduce such cost when learning a dual sparse model . In particular , we employ truncated loss function to induce a series of convex programs with superior dual sparsity , and solve each dual using Indexed Block Coordinate Descent , which makes use of Approximate Nearest Neighbor ( ANN ) search to select active dual variables without I/O cost on irrelevant samples . We prove that , despite the bias and weak guarantee from ANN query , the proposed algorithm has global convergence to the solution defined on entire dataset , with sublinear complexity each iteration . Experiments in both sufficient and limited memory conditions show that the proposed approach learns many times faster than other stateof the art solvers without sacrificing accuracy .
+Categories and Subject Descriptors I52 [ Pattern Recognition ] : Design Methodology — Classifier design and evaluation
+General Terms Algorithms , Performance , Experimentation
+1 .
+INTRODUCTION
+Linear classification has become one of the standard approaches dealing with large scale analysis in pattern recognition and data mining . Recent advances in training linear model has achieved complexity linear to the data size [ 10 , 17 , 8 ] , where problem with several gigabytes of data can be solved in reasonable time . With the development
+Shou De Lin
+National Taiwan University sdlin@csientuedutw of more and more efficient algorithms , the learning bottleneck has shifted from computation to the I/O between disk and memory [ 24 ] . The situation becomes especially critical when data cannot fit into memory , where repeated data access through comparatively expensive I/O could encumber the performance of any efficient algorithm . How to reduce such I/O cost becomes a focus in recent research on largescale linear classification .
+One popular approach that addresses the memory limitation is solving optimization in an online fashion , where samples are removed from memory after each parameter update . However , recent studies [ 24 , 2 ] have shown that online methods ( eg [ 16 , 17 ] ) need large number of iterations to obtain reasonable accuracy , and since the sample are reloaded for each single update , the training time of online solver is dominated by disk I/O . To balance the time spent on I/O and computation , Yu et al . proposed a Block Minimization framework that better utilizes data in memory by splitting data into several blocks and solving one block at a time . The algorithm yields better trade off between I/O and computation , but still needs tens of rounds of data loading before converges to a reasonable model . In [ 2 ] , Kai et al . point out that , when taking Block Minimization as Block Coordinate Descent on the dual problem , some dual variables are more important than others . Therefore , caching informative samples in memory based on gradient information can result in faster convergence . However , the caching technique only applies to samples already read into memory , so a Block Coordinate Descent with cache still needs to traverse the whole dataset several times before convergence . For a dual sparse model , this appears to be not cost effective since only a few informative samples are relevant to improve model , while most I/O time are spent on useless ones . This motivates us to think that if one can organize data beforehand so learning only needs to read relevant samples into memory .
+This paper aims to demonstrate how a Nearest Neighbor index can improve the I/O efficiency in large scale learning , especially when memory is limited . In practice , this is beneficial since many state of the art indexing methods for Approximate Nearest Neighbor ( ANN ) search ( eg LocalitySensitive Hashing , Metric Tree etc . ) do not require repeated data access , and thus only need small memory and one pass of data loading to be built . Furthermore , an index can often be reused for models trained on the same data . Scenarios such as parameter tuning , cross validation , multi class classification , feature selection , and data incremental learning all require executing the training algorithm multiple times .
+248 In [ 6 ] , Dhillon et al . are the first to apply Nearest Neighbor search on sparse optimization problem . They show using ANN search to replace brute force selection can significantly improve the efficiency of Greedy Coordinate Descent . However , their experiments also indicate that , when minimization over single coordinate can be solved cheaply , ANN search becomes the bottleneck of learning , and a simple cyclic coordinate descent can be more efficient than greedy approach due to the saved search cost . In this paper , we address this issue by proposing Indexed Block Coordinate Descent , a Nearest Neighbor based Block Coordinate Descent algorithm that balances the cost of search and minimization . In our experiment that considers both I/O and CPU time , even for problem with cheap coordinate minimization step , the proposed algorithm can be orders of magnitude faster than cyclic method . In addition , Indexed Block Coordinate Descent has global convergence that does not require guarantees from ANN search . This milder condition of convergence is crucial , since most ANN search algorithms are not designed for learning , and only answer maximum normalizedinner product query [ 15 ] or nearest to hyperplane query [ 9 ] , that does not aim to find samples with largest gradient as required by greedy approaches in [ 6 ] .
+The sparsity of underlying problem is also crucial to the efficiency of Nearest Neighbor based approaches . Although the solution of SVM is known to be dual sparse , when data are non separable , the number of support vectors under standard L1 ( hinge ) or L2 loss is actually linear to the size of data [ 19 ] . In [ 5 ] , Collobert et al . propose using ramp loss to achieve better dual sparsity , which is also known to be more robust than L1/L2 loss in noisy setting [ 22][21 ] . Although learning ramp loss SVM is a non convex problem , Collobert et al . point out the computational advantage of trading convexity for sparsity . They decompose the non convex problem into a series of convex ones using Concave Convex Procedure ( CCCP ) [ 25 ] , where one can learn a non linear SVM much more efficiently due to the superior dual sparsity .
+While CCCP can also solve linear SVM with ramp loss by integrating with state of the art linear solvers such as LIBLINEAR [ 7 ] , P egasos [ 17 ] or SV M perf [ 10 ] , there is little efficiency gain like that in nonlinear case , since the complexity of linear solver has little dependency on sparsity . However , in this paper , combining the sparsity induced by ramp loss with Nearest Neighbor based coordinate descent , we obtain a practical algorithm that can solve large scale problem in sublinear time .
+The paper is organized as follows . In Section 2 , we propose a new relaxation method that solves not only ramp loss , but general truncated loss problem by a series of convex programs with superior sparsity . In Section 3 , we introduce Indexed Block Coordinate Descent to solve each dual sparse convex program , and present how this framework can be combined with state of the art primal or dual solvers . Section 4 gives some implementation details including the Indexing method used in our implementation . Section 5 conduct experiments on four large scale data sets under sufficient and limited memory conditions . In both conditions , our algorithm learns times faster than other state of the art solvers without sacrificing accuracy . 2 . TRUNCATED LOSS AND RELAXATION
+The general truncated loss function is defined as :
+Rs(z ) = min(L(z ) , 1 + s)L
+( 1 ) where L(z ) can be L1 loss max(1 − z , 0 ) , L2 loss max(1 − z , 0)2 , or other convex loss function . When L(z)=max(1 − z , 0 ) , ( 1 ) is also called ramp loss . Unlike standard convex loss functions that give outlier loss that can potentially grow to infinity , ( 1 ) take sample with error more than s as outliers , and assign at most 1 + s loss to them . The truncated loss function ( 1 ) is more like 0/1 loss as in accuracy , and thus is more robust to noise [ 3 ] . More importantly , none of the outliers under ( 1 ) will become support vectors . Thus the number of support vectors does not grow linearly with data size [ 5 ] . However , the learning problem
+. min w
+w2
+1 2
++ C l∈D
+Rs(ylwT xl )
+( 2 ) is non convex . When L(z)=max(1−z , 0 ) , ( 2 ) can be divided into a convex part Jvex(w ) and a concave part Jcav(w )
+J(w ) = Jvex(w ) + Jcav(w )
+.
++ C l∈D fi fi
+=
++
+w2 .
+1 2 −C l∈D max(1 − ylwT xl , 0 )
+' max(−s − ylwT xl , 0 )
+'
+( 3 ) and solved with Concave Convex Procedure ( CCCP ) [ 25 ] by a series of convex programs ff Jvex(w ) + ∇Jcav(wt
+T w
+)
+( 4 ) wt+1
+= argmin w
+[ 25 ] shows that this algorithm strictly decrease the original objective J(w ) , and more recently , [ 18 ] shows this algorithm globally converges to a stationary point of J(w ) . However , the formulation ( 3 ) is specific to hinge loss . For other loss functions , it is not obvious how to derive the convex part and concave part . Another concern is , outliers are not excluded from the formulation ( 4 ) , and thus cannot be filtered during training .
+Here we propose a new convex relaxation method for general truncated loss ( 1 ) that excludes outliers from each subproblems . First , we define the sets of outliers and nonl|L(ylwT xl ) > 1 + s outliers as OU T ( w ) = and IN ( w ) = l|L(ylwT xl ) ≤ 1 + s . In each iteration , this method solves
+(
+( wt+1
+= argmin w
+w2
+1 2
++ C
++ C
+. .
+IN(wt )
+1 + s
+OU T ( wt )
+L(ylwT xl )
+( 5 ) which is very intuitive : solve convex problem of the original loss L(z ) for only non outliers , and fix loss of outliers to 1+s . The formulation is motivated by the observation that truncated loss Rs(z ) is upper bounded both by L(z ) and
+249 l∈D
+. . . .
+IN(w(t ) )
+1 + s , so
+w(t)2
++ C
+1 2
+R(ylw(t)T xl )
+.
+1 + s l∈D
+w(t)2
+=
++ C
++ C
++ C
+1 + s
+IN(w(t ) )
+OU T ( w(t ) )
+OU T ( w(t ) )
+.
+w(t+1)2
+w(t+1)2
+R(ylw(t+1)T xl )
+L(ylw(t)T xl ) + C
+L(ylw(t+1)T xl ) + C
+1 2 ≥ 1 2 ≥ 1 2 where D = IN w + OU T w . In other words , ( 5 ) minimizes an upper bound of ( 2 ) , which strictly decrease ( 2 ) when IN ( wt+1 ) = IN ( wt ) ( or , equivalently , OU T ( wt+1 ) = OU T ( wt ) ) 1 . When IN ( wt+1 ) = IN ( wt ) , ( 2 ) equals to ( 5 ) , and thus we get a minimum of ( 2 ) . Since IN ( wt ) would not be the same as IN ( w0)IN ( wt−1 ) , ( 5 ) converges in finite iterations as CCCP . For L(z ) being hinge loss , we can further show that the sequence {wt}∞ t=0 produced by ( 5 ) has linear convergence rate by following theorem . The reasoning is similar to the CCCP convergence rate proof in [ 23 ] . Theorem 21 The sequence {wt}∞ t=0 produced by ( 5 ) converges to a stationary point of ( 2 ) with at least linear convergence rate .
+Proof Sketch . Since the objective in ( 5 ) is an upper bound for ( 2 ) , a sample changing from IN ( wt ) to OU T ( wt+1 ) or OU T ( wt ) to IN ( wt+1 ) can be seen as a process of descent . Therefore , we interpret ( 5 ) as an alternating minimization ( block coordinate descent ) between d ∈ R m and ( w , ξ ) ∈ ( R n , R dlξl + ( 1 − dl)(1 + s ) min w,ξ,d st
+.
++ C m ) on the problem w2
+1 2 l∈D ylwT xl ≤ 1 − ξl ξl ≥ 0 0 ≤ dl ≤ 1 , l = 1m which satisfies the form of non smooth , separable problem studied in [ 20 ] . Thus we can find an equivalent Coordinate Gradient Descent procedure introduced in [ 20 ] , which produces the same sequence as that produced by block coordinate descent on ( 6 ) . By theorem 1,2 and 4 of [ 20 ] , the sequence converges to a stationary point of ( 6 ) with at least linear convergence rate . A detailed version of this proof is in appendix . 2
+One advantage of ( 5 ) is it ignores outliers and solves the original problem of L(z ) on non outliers . Therefore , any solver for the original loss can be utilized to solve ( 5 ) . Furthermore , the relaxation has no assumption on L(z ) . Thus it is a general approach for solving the truncated version of any convex loss function . Even in problems such as regression or clustering , one can use a truncated version of loss function to obtain a sparser , outlier free model for indexed learning . 1The decrease is strict since R(ylwT xl ) < 1 + s for l /∈ OU T ( w ) , and R(ylwT xl ) < L(ylwT xl ) for l /∈ IN ( w ) . 2 http://wwwcsientuedutw/ r00922017/kdd2013appendix
+The problem ( 2 ) is non convex , so initialization w0 of ( 5 ) will affect convergence result . A good choice is solving the L and set w0 = w∗ original convex loss problem to get w∗ L . Then since ( 5 ) guarantees to decrease the objective function ( 2 ) with loss function more similar to 0/1 loss , we are likely to get a solution w∗ with higher accuracy . However , this kind of initialization cannot gain learning efficiency since it needs to solve the original problem . A practical choice for indexed learning is to solve the convex loss problem on random samples to give an initial w0 with reasonable accuracy .
+3 .
+INDEXED LEARNING
+Without outliers , we obtain convex problem ( 5 ) with superior dual sparsity . In this section , we first introduce the framework of Indexed Block Coordinate Descent . Then in Sec 3.2 , we introduce the ANN search technique to find informative samples for the learning algorithm . In Sec 3.3 and 3.4 , we demonstrate how to integrate our framework with state of the art primal and dual solvers . 3.1 Indexed Block Coordinate Descent
+The Indexed Block Coordinate Descent algorithm 1 solves dual form of the convex program ( 5 ) min α∈RN st
+1 2 f ( α ) = 0 ≤ αl ≤ U , αl = 0 ,
+αT ¯Qα − eT α l ∈ IN ( wt ) l ∈ OU T ( wt
+)
+( 7 ) where ¯Q = Q+D , Q is N by N matrix with Qij = yiyj xT i xj , D is diagonal matrix . For L1 loss SVM , Dii = 0 and U = C . For L2 loss SVM , Dii = 1/(2C ) and U = ∞ . e is N by 1 vector [ 1 , 1 , 1]T .
+In the linear case , we can maintain a relation between primal and dual variables w = n .
+( 6 ) l=1 ylαlxl
+( 8 ) so the gradient of each dual variable can be computed efficiently as
+∇lf ( α ) = ( Qα)l − 1 + Diiαl = ylwT xl − 1 + Diiαl
+( 9 )
+The active dual variables are defined by coordinates with non zero projected gradient : ∇lf ( α ) min(0 , ∇lf ( α ) ) max(0 , ∇lf ( α ) ) if if αl = 0 if αl = U
+∇P l f ( α ) =
+0 < αl < U
+⎧⎪⎨ ⎪⎩
+In Algorithm 1 , we maintain a set S that aims to include all active dual variables , and any sample l with αl > 0 are Instead of loading all samples in IN ( wt ) into put in S . memory , we request active variables by queryIndex ( w(t,k ) ; wt , s , n ) , which searches for n samples /∈ S(k ) satisfying ylwtxl ≥ L
+−1
+( 1 + s ) AND ylw(t,k)xl < 1
+( 10 ) 3It guarantees sample to be non outlier with non zero projected gradient , since αl=0 for all αl /∈ S and ∇lf ( α ) = ylwT xl−1+Diiαl < 0 for ylwT xl < 1 . All samples returned by queryIndex( . ) are put into S . Note queryIndex( . ) does not specify which search method to use . Any search method that can find n samples satisfying ( 10 ) , when there exist ,
+250 Algorithm 1 Indexed Block Coordinate Descent
+Input : w(t,0 ) = wt , S(0 ) = St \OU T ( wt ) Output : wt+1 = w(t,k ) , St+1 = S(k ) repeat
+( N , ne ) ← queryIndex( w(k ) ; wt , s , n ) B ← [ N , S(k)[ r : r + ne − |N| ] ] Solve block minimization problem ( 11 ) over B . S(k+1 ) ← [ S(k ) , N ] k ← k + 1 ; r ← ( r + ne + 1 ) mod |S(k)| until problem ( 13 ) defined on S(k ) reach S and |N| < n yields convergence . However , search method with more efficiency and less bias can result in faster convergence . We will introduce an ANN search method in Sec 3.2 that tries to find wT xl close 0 , in which case , the query result tends to have large gradient no matter labels yl are 1 or 1 .
+In algorithm 1 , we denote fresh samples returned by queryIndex( . ) as N , where ne is the number of traversed instances for finding |N| ≤ n samples satisfying ( 10 ) . Though samples from N have larger gradient , they come from cost of search . To balance cost between search and optimization , we compose a block B with N and the other min(ne−|N| , |S(k)| , M ) samples from reader r that cyclically traverses S(k ) , where M is the sample size limited by memory . Then we solve the block minimization problem defined by B with ¯B = D\B min αB st f ( αB ; α(t,k ) ¯B ) 0 ≤ αl ≤ U , ( t,k ) αl = α , l l ∈ B l ∈ ¯B
+( 11 )
+Then the cost for each iteration is Tsearch(ne ) + Topt(|B| ) , ne = n prec[n ]
+≥ |B|
+( 12 ) where Tsearch(ne ) is the time for search method to traverse ne examples . Topt(|B| ) is the time for solving ( 11 ) . For a ANN search method with precision prec[n ] = n/ne , ne and |B| are sublinear to the data size . The hope is that neither Tsearch(ne ) nor Topt(|B| ) becomes the bottleneck . Practically , both Tsearch and Topt may involve disk I/O when samples used are not cached in memory . We will discuss details of memory management in Sec 42
+The Indexed Block Coordinate Descent algorithm 1 can be viewed as a reverse process of the well known Shrinking strategy . In Shrinking strategy , the problem size is shrunk in each iteration by removing inactive variables that tends to be unchanged . However , since the strategy often needs to traverse data many times before shrinking problem to a smaller size , it is not suitable to be applied when data cannot fit into memory . On the other hand , the Indexed Block Coordinate Descent algorithm tries to maintain a set of most active dual variables S , and increases S until it contains all variables with non zero projected gradient . When combined with Nearest Neighbor index , this strategy can avoid much I/O , especially when memory is limited .
+Although the block minimization ( 11 ) decreases objective in ( 7 ) each iteration , it does not imply global convergence . In
+3Here we assume L(z ) is monotonically decreasing for L(z ) > 0 soL
+−1(1 + s ) exists . the following , we give the convergence theorem for algorithm 1 , beginning with a lemma .
+∗ Lemma 31 Let α be the optimal solution of ( 7 ) . Let V = {l|α l > 0} ⊆ S ⊆ IN ( wt ) and ¯S = D\S . Then the ∗ optimal solution of following problem argmin
+α st f ( α ) 0 ≤ αl ≤ U , αl = 0 , l ∈ ¯S l ∈ S
+( 13 ) is also the optimal solution of ( 7 ) .
+The proof for above lemma is simple and thus omitted due to space limitation.4The next theorem gives the convergence of algorithm 1 .
+Theorem 32 The sequence {α(t,j)}∞ j=k produced by algorithm 1 linearly converges to the problem ( 13 ) with S = ∗ S(k ) , and the sequence S(1 ) , S(2 ) , S(k ) converges to S in n , T ≤ no more than Tn + T iterations , where Tn ≤ |S∗| , and there are at mostn − 1 active dual variables |S∗|−nTn ∗ not in S . n
+Proof . As shown in [ 8 ] , the formulation ( 13 ) satisfies the form of convex , smooth problem studied in [ 13 ] . Since each iteration after k , all variables in S(k ) are cyclically traversed , so the sequence {α(t,j)}∞ j=k satisfies Gauss Seidal update rule of Block Coordinate Descent . By the extended version of theorem 2.1 in [ 13 ] , the sequence {α(t,j)}∞ j=k has linear convergence rate to the optimal solution of ( 13 ) defined by S = S(k ) . And since |S(k)| monotonically increases by |N| each iteration , we have
+T . i=1
+∗| = nTn + |S ni ≥ nTn + n T
+. n
+( 14 ) where ni = |N| for iterations that have |N| < n , and ni ≥ n for i = 1T since the algorithm stops when |N| < n . By ( 14 ) , we have Tn ≤ |S∗| n , T ≤ |S∗|−nTn
+The size of final set of active variables |S
+∗| is at most |D| . However , we observed |S ∗| ff |D| for a dual sparse problem . Setting n = 1 , Theorem 3.2 proves our algorithm converges to the optimal solution of ( 7 ) . However , in practice , including n more active dual variables only decrease the objective ( 2 ) by at most n C(1 + s ) , which approximately increase training accuracy only by n |D| . To get within tolerance of the best training accuracy Acc , we can set n = ( 1 − Acc)|D| . For example , to reach = 1 % tolerance for a model with 99 % training accuracy on a data with 1 , 000 , 000 samples , n can be set as 100 . A more practical stopping condition uses sampling to replace the stopping condition in algorithm 1 , in which the algorithm stops when |N|/ne < n /|D| . The sampling based stopping condition is practical since it avoids algorithm 1 from traversing the whole index through expensive I/O . In the next section , we will introduce the ANN search method for the queryIndex( . ) ( 10 ) , and in Sec 3.3 and Sec 3.4 , we describe the dual and primal optimization methods we use for the block minimization ( 11 ) .
+4http://wwwcsientuedutw/ r00922017/kdd2013appendix
+251 l|L
+( −1(1 + s ) ≤ ylwT xl ≤ 1
+3.2 Informative Sample as Nearest Neighbor Here we consider how informative samples can be obtained via ANN search . The queryIndex( . ) function searches for samples satisfying , that is , samples near to the decision boundary . In [ 9 ] , a Locality Sensitive Hashing ( LSH ) method EH Hash was proposed to handle the nearest to hyperplane query occurs in Active Learning , where their goal is to minimize the search time for obtaining a new informative sample in active learning . Here , we apply a similar technique that transforms the nearest tohyperplane problem into standard ANN query . The technique costs cheaper than EH Hash when combined with the Tree based index in our implementation .
+Given a query vector q , the nearest neighbor is defined as the vector xl most similar to q , that is , argmax l
+ˆqT
+ˆxl where ˆv means normalized v . However , sample closest to a hyperplane of normal vector w is defined as
+| ˆwT xl| argmin l
+√
+√
+√
+2x2x3 , , x2
+We connect these two problems using kernel of degree 2 polynomial feature expansion V ( x)=[x2 1 , x2 d ] such that the nearest to hyperplane prob2 , lem in original space can be reduced to ANN problem in embedded space . We first considers the case when data are normalized :
+2x1x2 , ,
+2x1xd ,
+| ˆwT
+ˆxl| = argmin argmin l
+( ˆwT
+ˆxl )
+2
+T V ( ˆxl )
+V ( ˆw ) ( −V ( ˆw ) )
+T V ( ˆxl )
+= argmin l
+= argmax l l
+Where −V ( ˆw ) is the transformed nearest neighbor query , and ( V ( ˆw))T V ( ˆxl ) can be computed efficiently by −( ˆwT ˆxl)2 , which is not like the case in EH Hash , where quadratic cost was required to generate Gaussian distributed hashing function in the embedded space . The above transformation guarantees −( ˆwT ˆxl)2 to be a normalized inner product in some Hilbert space , and thus , can use indexing structure designed for nearest neighbor problem . For unnormalized sample xl with length xl2 Let R = minlxl2 , since query ( 10 ) defined by queryIndex( . ) is a range query , we can search for a larger range ˆxl ≤ 1/R
+( 1 + s)/R ≤ yl ˆw l|L ff
+−1
+T ordinate minimization problem via the closed form solution fl fl
+∗ α l = min max ffi ffi
+, 0
+, C
+αl − ∇lf ( α )
+¯Qll where ∇lf ( α ) is computed via ( 9 ) , and maintains primal vector w by w ← w + ( α l − αl)ylxl ∗
+As shown in [ 8 ] , the algorithm converges linearly to the optimal solution of ( 11 ) . However , for some ill conditioned problems , linear convergence can be very slow [ 7 ] . For loss with second order information , a primal solver like [ 11 ] with super linear convergence is more suitable . The next section introduce the primal problem derived from block ( 11 ) .
+3.4 Solving Primal for each Block Lagrangian dual of ( 11 ) with αl ∈ ¯B fixed at α results in the primal formulation of ( 11 ) 5
+To apply primal solver on problem ( 11 ) , we derive the , which
+( t,k ) l min w
+w2
+1 2
++ C where
+. l∈B
+L(ylwT xl ) − wT .
+( t,k ) α l ylxl v ¯B = l∈ ¯B v ¯B
+( 16 )
+. For L2 loss L(z ) = max(1 − z , 0)2 , we have generalized Hessian and gradient of ( 16 ) as ffl
+( 17 ) g(w ) = w + 2CX
+T
+T I,:XI, : , I,:(XI,:w − yI ) − v ¯B
+H(w ) = I + 2CX T ffl
+( l|1 − ylwT xl > 0
+T
+, y = x1 , x|D| y1 , , y|D|
+, I is identity where X = matrix and I = . With ( 17 ) , one can apply any primal solver that uses second order information to get faster convergence . In our implementation , we use the Trust Region Quasi Newton Method proposed in [ 11 ] , which is also included in the LIBLINEAR package [ 7 ] . ( t,k ) When setting B = S(k ) , we have v ¯B = 0 since α = 0 for l ∈ ¯S(k ) . In this case , ( 16 ) becomes a L2 loss problem l defined on S(k ) . It means , each time we solve a L2 loss problem on a subset of data S(k ) , we get descent in terms of dual objective , and by Theorem 3.2 , after Tn + T iterations , we obtain all samples of non zero loss and get a global optimum of ( 7 ) . that includes the target samples required by ( 10 ) , while the search algorithm for unnormalized data will be the same as normalized ones . 3.3 Solving Dual for each Block
+In this paper , for both L1 loss and L2 loss cases , we use coordinate descent solver proposed by [ 8 ] to solve the dual of block minimization problem ( 11 ) min αB st
+αT ¯Qα − eT α 1 2 0 ≤ αl ≤ U , ( t,k ) , αl = α l l ∈ B l ∈ ¯B
+( 15 )
+In each inner iterations , the algorithm traverses all variables in block B in a random permuted order , and solve each co
+4 .
+IMPLEMENTATION ISSUES
+In this section , we address some details of implementing an indexed optimization algorithm . First , we discuss challenges of building index for learning problem , as opposed to other problem like retrieval . Then we discuss the Caching , Shrinking strategy for learning with less memory and time . 4.1 Indexing for Learning
+There are two practical challenges of building index for selecting informative training samples . First , the index for ANN search is biased towards the reference points ( or hash functions ) selected . While such bias is acceptable for applications like multimedia retrieval , training on biased samples 5http://wwwcsientuedutw/ r00922017/kdd2013appendix
+252 Figure 1 : Metric Tree with k = 3 . will seriously slow down the convergence of algorithm ( 1 ) . Second , to be reused for different models , the index should be built on disk . However , not all indexing methods are cost effective to be built on disk . For example , Localitysensitive hashing ( LSH ) , one of the most popular methods recent years , requires a sample to be stored in different hash tables , which can significantly increase the storage cost [ 14 ] . Here we propose Metric Forest that addresses these issues . Unlike LSH , a tree structured index has size comparable to the original data . In [ 12 ] , a tree based indexing , called Metric Tree , is modified to solve ANN problem , and is shown to be more efficient than LSH . A Metric Tree organizes points as a binary tree , in which each subtree N ( v ) rooted on a node v partitioned into points closer to v.lpv and those closer to v.rpv , where v.lpv and v.rpv are pivot points selected from data , and the metric is defined by angle distance in the embedded space : d( ˆx1 , ˆx2 ) = T ˆx2)2 ) . Here we procos pose Metric Forest , which shares the basic idea of Metric tree , but is different in three ways :
+T V ( ˆx2 ) ) = cos
+−1(V ( ˆx1 )
+−1(( ˆx1
+Bias Reduction .
+Since reference points closer to the root of a Metric Tree are used more frequently , query results are often biased toward those points . [ 12 ] propose a variant called Spill Tree to allow overlap between different partitions , thus alleviate the bias problem . However , the overlap between partitions significantly increases storage , and under limited memory , even building a tree is time consuming . In our design , data are split into R random blocks which can be put into memory , and a Metric Tree is built for each block . When performing search , all trees are traversed in an order determined randomly . Such design warrants the query results not biased to a small number of reference points .
+Partitioning .
+While binary tree works well in memory , it is inefficient on disk because the seeking time on disk is more expensive . Here we use , instead , K way partitioning such that the tree depth is smaller and each tree node contains more points . For each subtree N ( v ) rooted on node v , points are partitioned into N ( vpv1)N(vpvK ) st v.pvk is nearest to the points in N ( v.pvk ) among vpv1vpvK .
+Searching .
+In [ 12 ] , Defeatist Search is used to obtain efficient approximate search , in which only the nearest partition N ( v.pvk ) to a query point is visited . However , in our algorithm , we need to increase , or decrease , search range according to the current margin 1/w2 Therefore , we exploit Best Bin First search strategy , as proposed in [ 1 ] , in which each partition
+N ( v.pvk ) is put in a priority queue , and ranked by their distance to the query , where the distance is measured by their nearest boundary to the query point , as shown in Figure 1 . Let v.pvq be the closest pivot point to the query , the nearest boundary of partition N ( v.pvk ) is defined by the hyperplane passing ( v.pvk + v.pvq)/2 with normal vector v.pvk − vpvq 4.2 Memory Management
+In our implementation , we use Least Recently Used ( LRU ) cache for frequently used tree nodes to minimize I/O between memory and index . This is effective since , in queryIndex(. ) , we only traverse branches of Metric Tree near decision boundary . As model changes over time , samples away from the boundary will not be traversed again , and thus , are removed when cache is full . Since we keep samples with larger projected gradient in memory , I/O of unnecessary data is minimized . When sample are added into active set S , we moved the memory quota from cache to S , until LRU cache has memory quota less than a threshold mLRU , when we will write some samples in S into disk in a sliding window fashion , and read those samples back when they are traversed . 4.3 Shrinking on Index
+In search of queryIndex(. ) , samples not satisfying ( 9 ) for w(t,k ) are likely not satisfying ( 9 ) for w(t,k+1 ) , w(t,k+2),either This is like the case in most SVM solver , where many bounded variables , that is , αl = 0 or αl = C , tends to be unchanged if their gradients are large to the bounded direction . Here we apply a similar technique to shrink variables that are not likely to satisfy ( 10 ) in later iterations , which includes variables with ( i ) ylw(t,k)T xl > 1 + T , ( ii ) −1(1 + s ) , ( iii ) l ∈ S(k ) , where T is a threshylw(t)T xl < L old . The shrunk variables would not be traversed in a Metric Tree , and a tree node is not traversed if all of its descendants are shrunk . When the shrunken problem converges , we recover all of shrunken variables and solve the non shrunk problem to check convergence . This is repeated until the original non shrunk problem is solved .
+5 . EXPERIMENT
+In this section , we conduct experiments that compare our algorithm ( Index L1 Dual , Index L2 Dual , and IndexL2 Primal ) with state of the art linear SVM solvers LIBLINEAR ( L1 Dual , L2 Dual , and L2 Primal ) , online P egasos ( Online L1 and Online L2 ) , and truncated loss batch solver ( Trunc L1 Dual , Trunc L2 Dual , and Trunc L2 Primal ) that uses the same truncated loss function ( 1 ) as our method , but employs LIBLINEAR as inner procedure for each convex relaxation ( 5 ) . There are , of course , other state of the art solvers . However , as our contribution is an indexed learning framework , a comparison between methods with/without our technique is more essential than that between different solvers . In limited memory condition , we compare Indexed Block Coordinate Descent with online P egasos and LIBLINEAR CDBLOCK ( Block L1 Dual , Block L2 Dual ) , a limited memory version of LIBLINEAR proposed in [ 24 ] , and refined in [ 2 ] . The initialization for both truncatedloss solvers uses 10,000 random samples solved by the corresponding convex loss solver in LIBLINEAR . In our experiments , both I/O and Initialization are included into training time .
+253 Table 1 : Statistics of Data .
+Dataset
+#samples #features
+Covtype Kddcup1999 PAMAP Mnist8m
+581,012 4,898,431 3,850,505 8,100,000
+54 126 104 784
+Storage ( KB ) 69,516 725,180 2,198,880 19,042,640
+Table 2 : Statistics of Index .
+Dataset
+Covtype Kddcup1999 PAMAP Mnist8m
+Storage ( KB ) 446,444 1,476,580 4,554,208 20,704,784
+Tree Size 2,000 100,000 100,000 10,000
+Build
+Tree Width Time ( s ) 10 100 10 10
+11 163 301 1,539 r o r r e
+0.3
+0.25
+0.2 10−1
+100
+Our experiments conducted on 4 large scale public datasets6of increasing size : Covtype , Kddcup1999 , PAMAP and Mnist8m . Their statistics are summarized in Table 1 .
+Table 2 shows the statistics of index built . The construction time and storage size are generally linear to the data size . In our experiment , we found that the parameter tree size ( eg #samples / tree ) and tree width ( eg #pivotpoints ) do not affect result significantly . However , tree size should be large enough st each tree contains useful samples , and small enough st each tree can be built in memory . Tree width should be large enough st the average depth=logwidth(Size ) is reasonably small ( 3 to 5 in our experiment ) . Since KDDCUP1999 and PAMAP have more irrelevant samples than other datasets , their tree size are set to be larger than that of others .
+We scale features in all dataset to between 0 and 1 . For Covtype and KDDCUP1999 , we randomly selected 1/3 of samples for testing and the remaining 2/3 samples for training . For PAMAP and Mnist8m , to test on limited memory , we only used 1/10 for testing and left 9/10 for training . All of these data have multi classes , and thus the index built can be reused for different models . Due to space limitation , we only show figures for one of those 1 against all models for each dataset . For Covtype , the given result is on the model of class 2 against the other 6 classes , which follows the choice in [ 4 ] . For KDDCUP1999 , we show result of the class normal against all the other 22 abnormal classes . For PAMAP , we classify action ” sitting ” from the other 23 actions . For mnist8m , we show result of class digit 1 against all the other 9 digits . Throughout the experiments , we set parameters n = 1000 for Indexed Block Coordinate Descent , s = 1 for truncated loss , and c = 1 for SVM model .
+Figure 2 , 3 , 4 show the testing error of L1 Dual , L2 Dual , and L2 P rimal solvers under sufficient memory , where Indexed Block Coordinate Descent saves much I/O time by selecting only relevant samples into memory . Unlike online solver , it converges to much more accurate solution as that produced by truncated loss batch solver . Though truncated loss learning problem is non convex , where different solvers may converges to different solutions , the indexed solver achieves similar accuracy as the truncated loss
+6Covtype , Kddcup1999 , PAMAP can be found at UCI Machine Learning Repository , while Mnist8m can be found in LIBSVM Datasets . r o r r e r o r r e r o r r e
+0.1
+0.09
+0.08
+0.07
+0.06
+0.05
+0.04
+0.03
+0.02
+0.01
+0.3
+0.25
+0.2
+0.1
+0.09
+0.08
+0.07
+0.06
+0.05
+0.04
+0.03
+0.02
+0.01
+Figure 2 : L1 loss Dual Solvers covtype
+Index−L1−Dual L1−Dual Online−L1 Trunc−L1−Dual
+101
+102 time pamap
+Index−L1−Dual L1−Dual Online−L1 Trunc−L1−Dual r o r r e r o r r e x 10−3 kdd1999
+Index−L1−Dual L1−Dual Online−L1 Trunc−L1−Dual
+6
+5
+4
+3
+2
+1 10−1
+0.028
+0.026
+0.024
+0.022
+0.02
+0.018
+0.016
+0.014
+0.012
+100
+101 time mnist8m
+102
+Index−L1−Dual L1−Dual Online−L1 Trunc−L1−Dual
+100
+102 time
+104
+100
+102 time
+104
+Figure 3 : L2 loss Dual Solvers covtype
+Index−L2−Dual L2−Dual Online−L2 Trunc−L2−Dual
+100
+102 time pamap
+Index−L2−Dual L2−Dual Online−L2 Trunc−L2−Dual
+100
+102 time
+104 r o r r e r o r r e x 10−3 kdd1999
+Index−L2−Dual L2−Dual Online−L2 Trunc−L2−Dual
+6
+5
+4
+3
+2
+1 10−1
+0.028
+0.026
+0.024
+0.022
+0.02
+0.018
+0.016
+0.014
+0.012
+100
+101 time mnist8m
+102
+Index−L2−Dual L2−Dual Online−L2 Trunc−L2−Dual
+100
+102 time
+104
+254 Figure 4 : L2 loss Primal Solvers covtype
+Index−L2−Primal L2−Primal Online−L2 Trunc−L2−Primal
+101
+102 time pamap
+Index−L2−Primal L2−Primal Online−L2 Trunc−L2−Primal r o r r e r o r r e x 10−3 kdd1999
+Index−L2−Primal L2−Primal Online−L2 Trunc−L2−Primal
+6
+5
+4
+3
+2
+1 10−1
+0.028
+0.026
+0.024
+0.022
+0.02
+0.018
+0.016
+0.014
+0.012
+100
+101 time mnist8m
+102
+Index−L2−Primal L2−Primal Online−L2 Trunc−L2−Primal r o r r e
+100
+102 time r o r r e
+0.3
+0.25
+0.2 10−1
+100 r o r r e
+0.1
+0.09
+0.08
+0.07
+0.06
+0.05
+0.04
+0.03
+0.02
+0.01
+100
+102 time batch solver in most of cases , but indexed solver was orders of magnitude faster than the batch one . In Figure 6 , we shows result of our algorithm for a spectrum of parameter c = 0.01 , 0.1 , 10 , 100 on KDDCUP1999 dataset . r o r r e
+Figure ( 5 ) shows the limited memory experiments conducted on PAMAP and Mnist8m . We compare Indexed Block Coordinate Descent with Online Pegasos and LIBLINEARCDBLOCK , where data size is 10 times larger than memory space , under which the batch version of LIBLINEAR and truncated loss solvers suffer from severe swaps and can hardly progress . For Mnist8m , we limit memory size to 2GB , and uses 20 blocks with 1GB cache for LIBLINEARCDBLOCK . For PAMAP , we limit memory size to 400MB , and uses 10 blocks with 200MB cache for LIBLINEARCDBLOCK . In Figure ( 5 ) , the Indexed Block Coordinate Descent has almost the same performance as in sufficientmemory condition , where it achieves higher accuracy by selecting informative samples under truncated loss into memory . Though datasize was 10 times larger than the memory size , the indexed solver is not affected much since the memory is still large enough for maintaining only relevant samples . r o r r e
+1.6
+1.4 t s e t
+1.2
+Finally , in Figure 7 , we show the number of support vectors , and corresponding testing error of our algorithm and LIBLINEAR for a spectrum of s , which shows the significant effect of truncated loss on increasing the dual sparsity of SVM . When s = 1 , it means outlier should have error more than the current margin . This choice yields great performance for most data . However , in Mnist8m dataset , s = 2 is a better choice , and for PAMAP dataset , s = 0.5 was better .
+6 . DISCUSSION AND CONCLUSION
+In many applications , large scale data contain only some relevant samples that can effectively improve the accuracy of model . While random sampling , or online learning can overlook those rare but crucial samples , batch learners generally cost too much memory and I/O time . In this paper , we
+1
+0.8
+0 x 10−3
+1.8 r o r r e t s e t
+1.6
+1.4
+1.2
+1
+0.8
+0
+Figure 5 : Limited Memory Solvers . For Mnist8m , we limit memory size to 2GB , and uses 20 blocks with 1GB cache for LIBLINEAR CDBLOCK . For PAMAP , we limit memory size to 400MB , and uses 10 blocks with 200MB cache for LIBLINEARCDBLOCK .
+0.1
+0.09
+0.08
+0.07
+0.06
+0.05
+0.04
+0.03
+0.02
+0.01
+0.1
+0.09
+0.08
+0.07
+0.06
+0.05
+0.04
+0.03
+0.02
+0.01 limit−pamap limit−mnist8m
+Block−L1−Dual Index−L1−Dual Online−L1
+100
+102 time limit−pamap
+104
+Block−L2−Dual Index−L2−Dual Online−L2 Index−L2−Primal
+100
+102 time
+104 r o r r e r o r r e
+0.028
+0.026
+0.024
+0.022
+0.02
+0.018
+0.016
+0.014
+0.012
+0.028
+0.026
+0.024
+0.022
+0.02
+0.018
+0.016
+0.014
+0.012
+Block−L1−Dual Index−L1−Dual Online−L1
+100
+102 time limit−mnist8m
+104
+Block−L2−Dual Index−L2−Dual Online−L2 Index−L2−Primal
+100
+102 time
+Figure 6 : L1 Dual Solvers on KDDCUP1999 for c = 0.01 , 0.1 , 10 , 100 .
+1.8 x 10−3 kddcup1999 , c=0.01
+L1−Dual Trunc−L1−Dual Index−L1−Dual x 10−3
+1.8 r o r r e t s e t
+1.6
+1.4
+1.2
+1
+0.8
+0 kddcup1999 , c=0.1
+L1−Dual Trunc−L1−Dual Index−L1−Dual
+20
+40 time
+60
+80
+100 kddcup1999 , c=100
+L1−Dual Trunc−L1−Dual Index−L1−Dual
+500
+1000
+1500 time
+2000
+2500
+20
+40
+60 time
+80
+100
+120 kddcup1999 , c=10
+L1−Dual Trunc−L1−Dual Index−L1−Dual
+20
+40
+60 time
+80
+100 x 10−3
+1.8 r o r r e t s e t
+1.6
+1.4
+1.2
+1
+0.8
+255 Figure 7 : Testing Error vs . #SV for a spectrum of s . ( L1 Dual Solver )
+|SV| vs Testing Error ( covtype )
+INDEX LIBLINEAR
+LIBLINEAR s=0 s=0.5 s=0.25 s=2
+105 |SV| s=1
+|SV| vs Testing Error ( mnist8m )
+106
+INDEX LIBLINEAR
+LIBLINEAR
+0.0155 s = 0 s = 0.25 s = 0.5 s = 1 s = 3 s = 2
+0.244
+0.242
+0.24
+0.238
+0.236
+0.234
+0.232
+0.23 r o r r e
+1
+/
+0
+0.228
+104
+0.016 r o r r e
+1
+/
+0
+0.015
+0.0145
+0.014
+0.0135
+0.013
+103
+1.8
+1.6
+1.4
+1.2
+1 r o r r e
+1
+/
+0 x 10−3
+|SV| vs Testing Error ( kddcup1999 )
+INDEX LIBLINEAR s = 0
+LIBLINEAR s = 2 s = 0.25 s = 0.5 s = 1
+0.8
+102
+103
+|SV|
+104
+105
+|SV| vs Testing Error ( pamap )
+0.04
+0.035
+0.03
+0.025
+0.02
+0.015
+0.01
+0.005 r o r r e
+1
+/
+0
+INDEX LIBLINEAR
+LIBLINEAR s=0 s=0.25 s=2 s=1 s=0.5
+104 |SV|
+106
+104
+|SV|
+105
+106
+0 102 propose Indexed Block Coordinate Descent algorithm that makes use of Approximate Nearest Neighbor ( ANN ) search to select active dual variables without I/O cost on irrelevant samples . Though building index takes time linear to the data size , in practice , this is beneficial since people often learn several models from the same data . Scenarios such as parameter tuning , model selection , cross validation , multiclass classification , feature selection , and data incremental learning all require multiple passes of training . In the case of limited memory , our approach can save much I/O cost since building index do not require much memory and only requires a pass of data reading . This indexed learning approach can be potentially apply to a general class of largescale learning problem , through defining new truncated loss function for convex loss problems in classification , regression or clustering .
+7 . ACKNOWLEDGEMENT
+This work is supported by National Science Council , National Taiwan University and Intel Corporation under Grants NSC 101 2911 I 002 001 , NSC 101 2628 E 002 028 MY2 and NTU 102R7501 .
+8 . REFERENCES [ 1 ] J . S . Beis and D . G . Lowe . Shape indexing using approximate nearest neighbour search in high dimensional spaces . In CVPR , 1997 .
+[ 2 ] K W Chang and D . Roth . Selective block minimization for faster convergence of limited memory large scale linear models . In SIGKDD . ACM , 2011 . [ 3 ] O . Chapelle , C . B . Do , Q . V . Le , A . J . Smola , and
+C . H . Teo . Tighter bounds for structured estimation . In NIPS , 2008 .
+[ 4 ] R . Collobert , S . Bengio , and Y . Bengio . A parallel mixture of SVMs for very large scale problems . Neural Computation , 14 , 2002 .
+[ 5 ] R . Collobert , F . Sinz , J . Weston , and L . Bottou . Trading convexity for scalability . In ICML , 2006 .
+[ 6 ] I . S . Dhillon , P . D . Ravikumar , and A . Tewari .
+Nearest neighbor based greedy coordinate descent . In NIPS , 2011 .
+[ 7 ] R E Fan , K W Chang , C J Hsieh , X R Wang , and C J Lin . LIBLINEAR : A library for large linear classification . JMLR , 9 , 2008 .
+[ 8 ] C J Hsieh , K W Chang , C J Lin , S . S . Keerthi , and S . Sundararajan . A dual coordinate descent method for large scale linear SVM . In ICML , 2008 .
+[ 9 ] P . Jain , S . Vijayanarasimhan , and K . Grauman . Hashing hyperplane queries to near points with applications to large scale active learning . In NIPS , 2010 .
+[ 10 ] T . Joachims . Training linear SVMs in linear time . In
+SIGKDD , 2006 .
+[ 11 ] C J Lin , R . C . Weng , and S . S . Keerthi . Trust region newton method for logistic regression , 2008 .
+[ 12 ] T . Liu , A . W . Moore , A . G . Gray , and K . Yang . An investigation of practical approximate nearest neighbor algorithms . In NIPS , 2004 .
+[ 13 ] Z Q Luo and P . Tseng . On the convergence of coordinate descent method for convex differentiable minimization . Optim . Theory , 72 , 1992 .
+[ 14 ] Q . Lv , W . Josephson , Z . Wang , M . Charikar , and
+K . Li . Multi probe LSH : Efficient indexing for high dimensional similarity search . In ICVLDB , 2007 .
+[ 15 ] P . Ram and A . G . Gray . Maximum inner product search using cone trees . In KDD , 2012 .
+[ 16 ] S . Shalev Shwartz , K . Crammer , O . Dekel , and
+Y . Singer . Online passive aggressive algorithms . In NIPS , 2003 .
+[ 17 ] S . Shalev Shwartz , Y . Singer , and N . Srebro . Pegasos :
+Primal estimated sub gradient SOlver for SVM . In ICML , 2007 .
+[ 18 ] B . K . Sriperumbudur and G . R . G . Lanckriet . On the convergence of the concave convex procedure . In NIPS , 2009 .
+[ 19 ] I . Steinwart . Sparseness of support vector machines .
+JMLR , 4 , 2003 .
+[ 20 ] P . Tseng and S . Yun . A coordinate gradient descent method for nonsmooth separable minimization . Math . Program , 117 , 2009 .
+[ 21 ] L . Wang , H . Jia , and J . Li . Letters : Training robust support vector machine with smooth ramp loss in the primal space . Neurocomput . , 71 , 2008 .
+[ 22 ] Z . Wang and S . Vucetic . Fast online training of ramp loss support vector machines . In ICDM , 2009 . [ 23 ] I . E . Yen , N . Peng . , P . Wang , and S . Lin . On convergence rate of concave convex procedure . In NIPS , 2012 .
+[ 24 ] H F Yu , C J Hsieh , K W Chang , and C J Lin .
+Large linear classification when data cannot fit in memory . SIGKDD , 2010 .
+[ 25 ] A . L . Yuille and A . Rangarajan . The concave convex procedure . Neural Computation , 15 , 2002 .
+256

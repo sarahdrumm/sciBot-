@@ -1,0 +1,443 @@
+Monitoring Least Squares Models of Distributed Streams
+Moshe Gabel
+Technion – Israel Institute of
+Technology
+Haifa 32000 Israel mgabel@cstechnionacil
+Daniel Keren Haifa University Haifa 31905 Israel dkeren@cshaifaacil
+Assaf Schuster
+Technion – Israel Institute of
+Technology
+Haifa 32000 Israel assaf@cstechnionacil
+ABSTRACT Least squares regression is widely used to understand and predict data behavior in many fields . As data evolves , regression models must be recomputed , and indeed much work has focused on quick , efficient and accurate computation of linear regression models . In distributed streaming settings , however , periodically recomputing the global model is wasteful : communicating new observations or model updates is required even when the model is , in practice , unchanged . This is prohibitive in many settings , such as in wireless sensor networks , or when the number of nodes is very large . The alternative , monitoring prediction accuracy , is not always sufficient : in some settings , for example , we are interested in the model ’s coefficients , rather than its predictions .
+We propose the first monitoring algorithm for multivariate regression models of distributed data streams that guarantees a bounded model error . It maintains an accurate estimate using a fraction of the communication by recomputing only when the precomputed model is sufficiently far from the ( hypothetical ) current global model . When the global model is stable , no communication is needed .
+Experiments on real and synthetic datasets show that our approach reduces communication by up to two orders of magnitude while providing an accurate estimate of the current global model in all nodes .
+Categories and Subject Descriptors G16 [ Numerical Analysis ] : Optimization—least squares methods ; G.3 [ Probability and Statistics ] : correlation and regression analysis ; C24 [ Computer Communication Networks ] : Distributed Systems—distributed applications
+General Terms Algorithms
+Keywords Regression ; distributed streams ; least squares ; data mining Permission to make digital or hard copies of all or part of this work for personal or classroom use is granted without fee provided that copies are not made or distributed for profit or commercial advantage and that copies bear this notice and the full citation on the first page . Copyrights for components of this work owned by others than the author(s ) must be honored . Abstracting with credit is permitted . To copy otherwise , or republish , to post on servers or to redistribute to lists , requires prior specific permission and/or a fee . Request permissions from Permissions@acmorg KDD '15 , August 10 13 , 2015 , Sydney , NSW , Australia . Copyright is held by the owner/author(s ) . Publication rights licensed to ACM . ACM 978 1 4503 3664 2/15/08 $1500 DOI : http://dxdoiorg/101145/27832582783349 .
+1 .
+INTRODUCTION
+Least squares regression is commonly used for prediction of new values from past values ( ie , forecasting ) , for analysis of existing phenomena through discovered coefficients ( eg , in econometrics [ 9 ] and social studies [ 30] ) , and as building blocks in other algorithms ( eg , in sparse coding [ 37 , 1] ) .
+Data behavior evolves , however , and changes can render a previously computed model invalid . In such settings regression models must be updated to incorporate new observations , or to be periodically recomputed . This problem is exacerbated in distributed settings : when observations are distributed over many nodes , we are also faced with the additional cost of communicating updates .
+The question then becomes not just how to efficiently compute the model , but when . Recomputing the model after each new observation seems is wasteful , as models tend to change slowly . Recomputing periodically still involves needless work if the model changes infrequently , yet may introduce unacceptable errors between scheduled updates .
+Hence , there are two complementary approaches to distributed linear regression . The first is efficient distributed computation of the model . Indeed , much work has been devoted to this approach [ 23 , 21 , 33 ] .
+We focus on the second approach – monitoring the quality of a given model , and recomputing it only as needed ( using any of the computational approaches ) . The monitoring approach looks at incoming data and triggers an alert if the previously learned model is too dissimilar to the hypothetical global model that would have been built given the current data . This problem is difficult in distributed settings , since the existing model and the ( hypothetical ) current model are both global models – composed from the union of data at all nodes . Thus a distributed monitoring algorithm must deal with communication efficiency , in addition to the problem of monitoring a model without actually relearning it .
+The monitoring approach has received little attention , possibly because the least squares solutions involve matrix inversion , which is difficult to analyze ( Section 21 ) The few existing techniques monitor the model ’s prediction error or R2 fit [ 4 , 3 ] , or a univariate model where the problem reduces to monitoring a ratio [ 8 ] . This is not always sufficient : in some settings we are interested in the model ’s coefficients ( eg , analysis ) , and in others ( eg , interpolation ) we lack the ground truth to measure prediction error . Moreover , monitoring model error is a more general approach : prediction error and fit can be inferred from model error but not vice versa .
+319 Our Contribution We describe DILSQ : a novel communication efficient monitoring algorithm for multivariate least squares models of distributed , dynamic data streams . To our knowledge , this is the first algorithm that monitors the multivariate regression model itself , rather than its prediction or fit . Given a previously computed global model , we derive local constraints on the local data at each node . A node only communicates if its constraint is broken . These constraints guarantee that if no node communicates , the global hypothetical model is sufficiently close to the precomputed model .
+DILSQ easily generalizes to more complex least squares variants such as GLS and RLS [ 9 ] , and is independent of how the model was computed . Evaluation on two real datasets shows it reduces communication by up to two orders of magnitude . Complete elimination of all communication is also possible when the model is fixed .
+2 . RELATED WORK
+Due to the ubiquity of linear regression , a great deal of research was dedicated to solving for the regression model not only in a centralized setting , but over distributed systems as well ; for a comprehensive survey , see [ 33 ] . Typically , the distributed nodes compose a graph , each holding a portion of the data , and the goal is to solve for the regression model of the aggregated data . It is well known that the accurate solution involves calculating a matrix vector pair from the data ( denote it A , c ) , and then calculating A−1c . Since the global matrix vector pair can be expressed as the sum of local pairs at the nodes , a path is defined over the graph , and the global pair is obtained by traversing this path ; a Hamiltonian path is desirable , in order to reduce the time required to traverse the graph [ 20 ] . Spanning trees have also been applied to this end [ 28 ] . Eventually , the local estimates at the nodes converge , via message passing with neighbors , to a global consensus [ 24 ] . In [ 38 ] it was suggested that diffusion strategies outperform consensus seeking methods . Variants include taking advantage of the global matrix ’s sparseness in order to reduce traffic [ 7 ] , and gradient based methods run either sequentially or with some degree of parallelism [ 23 , 21 , 33 , 40 ] . Such techniques were also applied in online distributed learning , where the sought classifier can sometimes be expressed as the solution of a linear regression problem [ 41 ] .
+While efficient solutions were developed for computing the linear regression model over distributed nodes , there are , to the best of our knowledge , only very few papers dealing with monitoring it – that is , imposing local conditions which imply that the global solution did not change by more than a pre defined amount since the last time it was computed ( Section 4 ) . In [ 36 ] , a heuristic is applied , and the nodes do not broadcast if the newly arriving data conforms with the current model up to some tolerance . In [ 4 ] distributed monitoring was applied to monitor the prediction error ( Section 3.1 ) and quadratic fit error R2 [ 3 ] , but not the error in the model itself . In [ 8 ] , a one dimensional regression problem is addressed – monitoring the ratio of two aggregated variables . We address the general , high dimensional problem . 2.1 Distributed Monitoring
+The last decade witnessed a sharp increase in work on imposing local conditions for monitoring the value of a function defined over distributed nodes . While the general problem is NP complete [ 15 ] , considerable progress has been made for real life problems . Most work dealt with the simpler cases of linear functions [ 14 , 13 ] , as well as monotonic functions [ 25 ] . Some papers addressed non linear problems , eg , monitoring the value of a single variable polynomial [ 34 ] , and analysis of eigenvalue perturbation [ 10 ] . [ 11 ] describes a gossip based protocol for monitoring several aggregates ( some non linear ) , which eventually converges to the monitored value , but cannot guarantee user specified error bounds . In [ 35 ] a geometric approach for monitoring arbitrary functions over distributed streams was proposed , and later extended and generalized [ 16 , 18 ] . However , nearly all work on geometric monitoring addressed functions which are either polynomials ( typically quadratic ) , or defined by compositions of polynomial with simple functions such as medians and quotients . To the best of our knowledge , the problem addressed in this paper – monitoring the linear regression model ( as opposed to its fit error ) – was never addressed over a distributed setting . Note that the monitored function contains the highly complicated operation of matrix inversion , which is not linear or convex , and which , when written explicitly , becomes intractable even for relatively low dimensions ( eg , the analytic expression for the inverse of a 20 × 20 matrix involves polynomials with 20! monomials ) . Therefore , a straightforward application of previous work on geometric monitoring is impossible .
+3 . PROBLEM DEFINITION
+Let {(x1 , y1 ) , . . . , ( xn , yn)} be a set of n observation pairs of m < n independent variables and one dependent variable , where xi are column vectors in Rm , and yi are the corresponding response scalars . We seek a linear transformation β ∈ Rm , β = ( β1 , . . . , βm)T , that minimizes the sum of squared errors between yi to the mapping of xi . In other words , we seek a model β that minimizes Xβ − y2 , where X is the n × m matrix of row vectors X ( xT n )T , and y is the column vector composed of response scalars y ( y1 , . . . , yn)T .
+1 , . . . , xT
+The optimal solution to this convex problem , known as ordinary least squares ( OLS ) , is given by [ 9 ]
+−1
+β =
+X T X
+X T y
+.
+( 1 )
+3.1 Monitoring OLS of Distributed Streams
+Assume that the observations {(xi , yi)} are distributed across k nodes , and that these observations are dynamic – they change over time , as nodes receive new observations that replace older ones . As data evolves , it is possible that the previously computed model no longer matches the current true model . We wish to maintain an accurate estimation β0 of the current global OLS model , β . The question is then when to update the model .
+The simplest way is to update β every time a new observation arrives at the nodes , using a straightforward or incremental procedure . Though this gives the most accurate model , it is also wasteful . It requires communicating the update every time , and potentially disseminating the updated model to all nodes . It is especially wasteful when the current global model is similar to the old one .
+Another simple solution the periodic algorithm : sending updates once every T times [ 39 , 4 ] guarantees a reduction in communication . The problem is that a fixed update schedule
+320 30
+20
+10
+10
+20
+30 x1 , y1 x1 0 , y1 0 x2 , y2 0 , y2 x2 0 0 = β1 = 1 β1 β1 0 = β1 = 0.1 β = 0.55 β0 ≈ 0.116
+( a ) Model β fit
+( b ) β0 fit and error
+Figure 1 : ( a ) Model fit for the traffic dataset from Section 5.2 , and ( b ) comparison with model error .
+Figure 2 : Monitoring distributed OLS models is difficult . Current local models β1 , β2 are identical to the precomputed models β1 0 but the combined global model is very different , β − β0 = 044
+0 , β2 must balance communication and error a priori . For large T the estimate error may be unbounded for a long interval , yet if model changes are infrequent we waste communication . Recent approaches monitor the prediction error |y − Xβ0| , where X , y are the current observations [ 36 , 4 ] , the model ’s R2 fit [ 3 ] , or prediction error between divergent local models and the hypothetical global model [ 12 ] .
+Monitoring prediction error is not always sufficient , however . First , prediction is not the only application of regression . In some settings [ 9 , 30 ] we are interested in model coefficients , rather than prediction performance . Yet prediction error may be small even when the difference between models is large . Consider the following example in m = 3 dimensions , with the precomputed model β0 = ( 1 , 2 , 3)T , the current model β = ( 1 , 1 , 1)T , and with the observation x = ( −0.95 , 205,−095)T , y = βT x = 015 In this case the prediction error is small , |xT β0 − y| = 0.15 , yet the models are very different : β0 − β = 2236
+Monitoring model fit is also tricky . Figure 1a shows the R2 fit of the true model β in an interpolation problem ( described in Section 52 ) The fit of the true model varies widely , and it is not clear where to set the R2 monitoring threshold . Figure 1b shows an example where both the model error β− β0 and the fit of the monitored model β0 are increasing . Thus , we aim to monitor the model estimation error itself . Let β0 be the existing model , previously computed at some point in the past ( the synchronization time ) , and let β be the hypothetical OLS model from current observations1 . Given an error threshold , our goal is to raise an alert if
+β0 − β >
+, while minimizing communication . Note that monitoring model error is a more general approach : limiting model error allows us to bound prediction error |xT β0 − xT β| through Cauchy Schwarz but not vice versa . Indeed , Sayed and Lopez [ 21 ] estimate the expected model error and use it to get expected prediction error .
+4 . MONITORING DISTRIBUTED LEAST SQUARES WITH CONVEX SUBSETS
+Monitoring distributed OLS models is difficult because the global model cannot be inferred from the local model at each node . Even when all current local models βj are similar to the precomputed local models βj 0 , the current global model β may
+1β is hypothetical since we don’t actually compute it . be very different from the precomputed model β0 . Consider the example in Figure 2 with k = 2 nodes and m = 1 . The global model deviation is very large , β − β0 = 0.44 , even though local models are identical : β1 = β1
+0 and β2 = β2 0 .
+To overcome this difficulty , we turn to geometric monitoring . Geometric monitoring [ 15 , 16 ] is a communicationefficient approach that monitors whether a function of distributed data streams crosses a threshold . The key idea is to impose constraints on local data at the nodes , rather than on the function of the global aggregate . Given a function of the average of all local data and the threshold , we compute a convex safe zone for each node . As we show below , convexity plays a key role in the correctness of this scheme . As long as local data stay inside the safe zones , we guarantee that the function of the global average does not cross a threshold . Nodes communicate only when local data drifts outside the safe zone , which we call a safe zone violation . Once that happens , violations can be resolved , for example by gathering data from all nodes and recomputing β0 and the safe zones . To summarize , we want to impose conditions on the local data at each node so that as long as they hold , β − β0 ≤ . The conditions should be “ lenient ” as possible – we wish to minimize the number of violations . 4.1 Notation
+Define A n i = X T X and c n be written as the sum of local matrices A =k Similarly , c =k i=1 xiyi = X T y , and rewrite Eq ( 1 ) as β = A−1c . The global matrix A can j=1 Aj , where Aj is constructed from the local observations at node j . j=1 cj where cj is constructed from the local observations at node j . Therefore , we can rewrite Eq ( 1 ) as a function of the sums of Aj , cj : i=1 xixT
+−1c
+−1 observations {xi , yi}n . Let A0 =k sync time ( when β0 was computed ) , and A =k k
+In our notation we use {Aj , cj}k instead of the original j=1 cj 0 be the global sums of local values at nodes during the last j=1 Aj , c = j=1 cj be the current values . We define the local drifts as the deviation of local data from its initial values during sync : ∆j = Aj − Aj
+0 and c0 =k j=1 Aj cj
+= A
+( 2 )
+β =
+Aj j j
+0 and δj = cj − cj 0 . 0 , cj
+We can now express global β and β0 as a function of the averages of Aj , cj and Aj 0 . This will allow us to bound model changes inside a convex subset . Recall β = A−1c . −1 0 c0 . Values averaged over nodes ( rather Similarly , β0 = A
+02:0006:0010:0014:0018:0022:00Time0203040506070809R2052055058061R208:1008:3008:50Time050150250350Model error321 than summed ) shall be denoted with ˆ· . Hence initial values
+Time sync now now
+ˆA0 =
+1 k
+Aj
+0 , ˆc0 = and current values
+0 , ˆβ0 = ˆA cj
+−1 0 ˆc0 , sliding window
+W Aj 0
+Aj 0
+W
+Aj
+Aj k k j=1 j=1
+1 k k k j=1 j=1 old common new infinite window
+Aj 0
+Aj cj
+= ˆA
+−1ˆc
+( 3 )
+Figure 3 : Sliding and infinite window models . When Aj overlaps Aj old xixT i .
+0 , ∆j = Aj − Aj new xixT
+0 = i −
+ˆA =
+1 k
+Aj , ˆc =
+1 k cj , ˆβ = ˆA
+−1ˆc
+. k A)−1 = kA−1 thus ˆβ = ˆA−1ˆc = A−1c = β and Note ( 1 likewise ˆβ0 = β0 . In other words , we can compute the OLS model from the averages of local Aj , cj rather than the sums : j
+1 k
+β =
+Aj
+−1 j
+1 k
+4.2 Convex Safe Zones
+0 , cj
+−1(ˆc0 + δ ) − ˆA
+0 ) , β0 is guaranteed to be close to β .
+We propose to solve the monitoring problem by means of “ good ” convex subsets , called safe zones , of the data space . Each node monitors its own drift : as long as current values at local nodes ( Aj , cj ) are sufficiently similar to their values at sync time ( Aj Formally , we define a convex subset C in the space of matrix vector pairs , such that ( 0m×m , 0m ) ∈ C and ( ∆ , δ ) ∈ C =⇒ ( ˆA0 + ∆ ) 0 ˆc0 ≤ −1 , ( 4 ) for any drift ( ∆ , δ ) , where 0m×m and 0m are the m × m zero matrix and length m zero vector . Ideally , C should be “ big ” : as local data slowly drifts over time , it is desirable that drifts remain in C ( otherwise communication is needed ) . Convexity plays a key role in our paradigm : if all drifts are in C , then their average is also in C . Given such a subset C , the basic monitoring paradigm is simple . As long as ( Aj − Aj 0 ) ∈ C , node j can remain silent . If all nodes are silent , then ˆβ0 − ˆβ = β0 − β ≤ . If a violation of the local condition does occur at any node j , some form of violation recovery must take place , for example recomputing the global model and restarting monitoring .
+0 , cj − cj
+We now prove the correctness of the paradigm . Lemma 1 . Let C be a convex subset that satisfies Eq ( 4 ) .
+If ( ∆j , δj ) ∈ C for all j , then β − β0 ≤ .
+Proof . Express ˆA , ˆc using the average of local deviations : j
+( ˆA , ˆc ) =
+1 k
+( Aj , cj )
+= ( ˆA0 , ˆc0 ) +
+= ( ˆA0 , ˆc0 ) +
+1 k
+1 k
+And from C ’s convexity , j j j
+∀j ( ∆j , δj ) ∈ C =⇒ 1 k
+( ∆j , δj ) ∈ C
+Denote ( ˆ∆ , ˆδ ) = 1 k j(∆j , δj ) and rewrite Eq ( 5 ) and ( 6 ) :
+( ˆA , ˆc )
+=
+( ˆA0 , ˆc0 ) + ( ˆ∆ , ˆδ )
+∀j ( ∆j , δj ) ∈ C =⇒ ( ˆ∆ , ˆδ ) ∈ C
+( Aj − Aj
+0 , cj − cj 0 )
+( ∆j , δj )
+( 5 )
+( 6 )
+Substitute in Eq ( 4 ) to finally obtain : ∀j ( ∆j , δj ) ∈ C =⇒ ( ˆA0 + ˆ∆ )
+−1(ˆc0 + ˆδ ) − ˆA ˆβ − ˆβ0 = β − β0 ≤
+0 ˆc0 = −1 which completes the proof . 4.3 Infinite and Sliding Window
+We differentiate between two different variations for computing the global model : sliding window and infinite window . In the sliding window model , β is computed from the last W samples seen at each node , and similarly β0 is computed from the last W samples before sync . Conversely , in the infinite window model β is computed over all observations seen thus far , while β0 is computed from all observations seen until last sync . Figure 3 illustrates these two models . Though the sliding window is clearly more practical , the infinite window model may be useful in some settings and so we discuss both .
+Sliding Window . In the sliding window model each node computes Aj from the W samples seen at node j , while 0 ( and hence ˆA0 ) is built from the last W samples before Aj sync . Computing ∆j and δj , however , requires substracting observations that left the sliding window . If Aj 0 and Aj , cj do not overlap ( Figure 3 , top ) , then clearly ∆j = Aj−Aj 0 and δj = cj − cj 0 . It is also possible , however , that the current window overlaps the window used to build β0 . Figure 3 ( middle ) illustrates this case : ∆j , δj become the sum of new samples from Aj , cj minus the sum of old ( non overlapping ) samples from Aj
+The convex constraint C on ( ∆ , δ ) for this model is :
+0 , cj 0 .
+0 , cj
+ˆA
+0 ∆ + ˆA −1
+0 δ + ˆA −1
+0 ∆β0 ≤ −1
+( 7 ) where A is the L2 operator norm of the matrix A . The derivation of the convex constraint C is quite technical , and the details are available in Appendix A .
+,
+Alg . 1 shows the resulting monitoring algorithm each node runs . Note monitoring does not require any matrix inversions . Each node applies the local constraint from Eq ( 7 ) to its own data . When a violation occurs at any node , it is reported to a coordinator node . The coordinator ( Alg . 2 ) polls all nodes for their local data , computes a updated global model −1 β0 and distributes it to all nodes , along with updated ˆA 0 used in the constraint . Monitoring then resumes . This is the simplest violation resolution protocol . We briefly discuss
+322 Algorithm 1 Node j update with new observation x , y . 1 : ( Aj , cj ) ← ( Aj + xT x , cj + xT y ) 2 : Insert new x , y to head of sliding window . 3 : Retrieve old xw , yw exiting end of sliding window . 4 : ( Aj , cj ) ← ( Aj − xT 5 : ( ∆j , δj ) ← ( Aj − Aj 6 : if ˆA Report violation to coordinator . 7 : −1 Receive new β0 , ˆA 8 : 0 ( Aj 9 : 10 : end if wxw , cj − xT 0 , cj − cj 0 ) 0 ∆jβ0 ≤ then −1
+0 ) ← ( Aj , cj )
+0 ∆j + ˆA −1
+0 δj + ˆA −1 from coordinator .
+0 , cj wyw )
+Algorithm 2 Coordinator violation resolution algorithm . 1 : Poll all nodes for Aj , cj . −1 2 : Compute updated ˆA 0 , β0 from Aj , cj and distribute . more sophisticated schemes [ 14 , 15 , 5 ] in Section 6 . Similarly , −1 the coordinator can use any algorithm to compute ˆA 0 , β0 .
+Infinite Window . In this model the local drifts of each node i are ∆j = Aj − Aj 0 and δj = cj − c0 as before , but Aj and cj are computed from all observations ever seen at the node . We can use the same convex constraint from Section 4.3 , but in this case ∆j grows indefinitely , and so the condition 0 ∆ < 1 is not easy to satisfy , and may cause frequent ˆA −1 synchronizations . Instead , we start from Eq ( 9 ) and develop a more lenient constraint for this model . The resulting algorithm will be similar to Alg . 1 , but without lines 2–4 and with the updated constraint in line 6 . The coordinator algorithm is the same .
+The convex constraint for the infinite window case is
+ˆA
+0 δ + ˆA −1
+0 ˆc0 ≤ −1
+.
+( 8 )
+Appendix B details its derivation .
+Note that δ accumulates more samples as time passes , while ˆA0 remains fixed . As δ ’s “ weight ” ( number of samples ) grows beyond ˆA0 ’s , the constraint no longer holds and syncrhonization is needed . One way to avoid this is to replace 0 δ in Eq 8 with ∆−1δ , which is correct ( using the ˆA −1 same line of arguments in the Appendix ) . Alternatively , note that after each sync the samples from all δj ’s are added to the new ˆA0 , so its “ weight ” is roughly doubled . Thus ˆA0 ’s weight grows exponentially , and synchronizations become increasingly rare . 4.4 Norm Constraint and the Sliding Window The sliding window model constraint Eq ( 7 ) requires 0 ∆j + ··· ≤ ) . This ˆA 0 ∆j < 1 ( embodied as ˆA −1 −1 requirement depends only the independent variables X j , and does not depend in any way on the dependent variable yj . It is quite possible that β is close to β0 , yet the norm constraint is violated , incurring extra communication . Fortunately , for many reasonable data distributions , if window size W is linear in the number of independent variables m then the norm constraint is satisfied almost surely . The details are in Appendix C .
+The analysis assumes that consecutive observations in the data stream are independent . Consider , however , the case where some variables come from an over sampled sensor , or In such cases ∆ measure slowly changing phenomena .
+−1 0 grows faster , linear in the number of identical observations , and will overwhelm A faster . This can result in more frequent violations of the constraint , hence more communication . Such cases can be mitigated by increasing the window size W , subsampling ( since data changes slowly anyway ) , or by the use of generalized least squares [ 9 ] with an appropriate scaling matrix for the time series process ( Section 45 ) 4.5 Regularization and Variants
+Our scheme generalizes very well to more sophisticated least squares variants [ 9 ] . We show two examples .
+In regularized least squares the minimized function includes a regularization term to mitigate the effects of outliers and avoid overfitting . A commonly used form is Tikhonov regularization , also known as ridge regression , which finds β that minimizes Xβ − y2 +RT Rβ2 , where R is a suitable regularization matrix R . For R = 0 the problem reduces to ordinary least squares , and for R = λI it reduces to L2 regularization . The optimal solution to this problem is
+−1
+β =
+X T X + RT R
+X T y
+.
+This solution is quite similar to Eq ( 1 ) and indeed we can monitor it using the same technique : compute Bj 0 + k RT R and the resulting B0 , ˆB0 , and use them in Lemma 1 1 instead of Aj
+0 = Aj
+0 , A0 , ˆA0 .
+Similarly , generalized least squares handles correlated measurements and errors by minimizing the Mahalanobis distance ( Y − Xβ)T S−1(Y − Xβ ) , where S is the covariance matrix of the residuals ( errors ) . Again , GLS reduces to OLS if S = I . As before , we can monitor the optimal solution X T ˜y , where ˜y S
+−1X
+−1y
+β = by monitoring B =
+X T S
+−1 i S−1xixT i and d = i xi ˜yi . GLS is particularly useful in time series analysis , where S is the process’ structured covariance ( or autocorrelation ) matrix [ 32 ] .
+5 . EVALUATION
+We evaluated performance of our monitoring algorithm , DILSQ , for Distributed Least SQuare monitor , using simulations with two synthetic and two real world distributed datasets . For each dataset , we run through the data , simulate the nodes ( Alg 1 ) and the coordinator ( Alg 2 ) , count messages , and keep track of the resulting true models β and the current monitored models β0 . Our simulations use discrete time ( rounds ) , and we use the OLS variant of our algorithm with sliding window ( Section 4.3 ) , except for the gas sensor dataset which uses the GLS variant ( Section 45 )
+Our baseline is the naive algorithm , where each node sends every new measurement to a centralized location each round . We compare DILSQ to the T periodic algorithm , denoted PER(T ) , a simple sampling algorithm that sends updates every T rounds . Though PER cannot guarantee maximum error , it can achieve arbitrarily low communication .
+Our main performance metric is communication , measured in normalized messages – the average messages sent per round by each node [ 3 ] . Note that communication of the naive algorithm is always 1 . When calculating and reporting results , we skip the first ( incomplete ) window ( or the first epoch for the drift dataset described below ) .
+DILSQ is designed to communicate as little as possible while always maintaining maximum model error below . It
+323 Figure 4 : DILSQ model error ( black ) and syncs ( bottom vertical lines ) per round , compared to PER(100 ) error ( green ) , for k = 10 simulated nodes with m = 10 dimensions , and threshold = 135 Both algorithms reduce communication to 1 % , but DILSQ only syncs when β changes ( bottom purple line shows β ) . PER(100 ) syncs every 100 rounds , but is unable to maintain error below the threshold ( dashed horizontal line ) . guarantees maximum model error below the user selected threshold , but PER does not . Hence , when comparing the two , we find a posteriori the maximum period T ( hence minimum communication ) for which the maximum error of PER(T ) is equal or below that of DILSQ . Note this gives PER an unrealistic advantage . First , in a realistic setting we cannot know a priori the optimal period T . Second , model changes in realistic settings are not necessarily stationary : the rate of model change may evolve , which DILSQ will handle gracefully while PER cannot . 5.1 Synthetic Datasets We use two types of synthetic dataset . In the fixed dataset , the true model βtrue ∈ Rm is fixed , with elements drawn iid from N [ 0 , 1]2 . We generate R rounds with k nodes , each receiving at each round a new data vector x of size m and scalar y . x is drawn iid from N ( 0 , 1 ) , and y = xT βtrue + n where n ∼ N ( 0 , σ2 ) is Gaussian white noise of strength σ . In the drift dataset the coefficients of βtrue change rapidly during 25 % of one epoch , and are fixed during the rest of the epoch . We generate observations for E epochs using the same procedure . For each experiment we generate new data . Default parameter values are k = 10 nodes , m = 10 dimensions , noise magnitude σ = 10 ( to generate interesting results given the large window ) , window size W = 1300 and maximum error threshold = 0.5 , which is quite strict3 . We generate R = 16900 rounds for the fixed dataset , or E = 5 epochs of 3900 rounds each for drift dataset .
+Figure 4 shows the behavior of the monitoring algorithm over such a simulation on the drift dataset with = 1.35 and 3 epochs . For this configuration , DILSQ achieves communication of 0.01 messages per node per round , and the model error is always below the threshold . Conversely , the equivalent PER(100 ) algorithm is unable to maintain the error below the threshold , which would require a higher update frequency . When model changes in β are large and frequent DILSQ performs more syncrhonizations , resulting in updated β0 = β that decreases the error . When β is stable ( it is never truly constant due to noise ) , syncrhonizations are much rarer . The periodic algorithm , on the other hand , 2therefore β2 ∼ χ2 3Given that elements of both β0 and β are iid N ( 0 , σ ) , then ∼ χm . The probability that a random e = β − β0 β−β0√ will overwhelm is P = 1 − CDFχm ( √
+) > 1 − 10−8 .
+2σ m
+2σ
+( a ) Fixed dataset
+( b ) Drift dataset
+Figure 5 : Communication for DILSQ ( black ) and periodic algorithm tuned to achieve same max error ( green ) at different threshold values . DILSQ communication on fixed model drops to zero for more permissive ( not shown on logarithmic scale ) . syncrhonizes every 100 iterations even during the periods where β changes very little .
+511 Effect of Threshold Figure 5 shows the communication required for different threshold levels for the DILSQ algorithm , and the minimal communication required to match DILSQ using the PER algorithm with optimal period , as discussed above . For the fixed model dataset ( Figure 5a ) neither algorithm needs to sync very often to provide an accurate estimate . Had there been no noise , a single initial synchronization would have been sufficient , regardless of threshold . Note that for more permissive threshold values ( or smaller noise magnitude σ ) DILSQ achieved zero communication ( beyond initial sync ) for the fixed dataset ( not shown in this log scale figure ) .
+Performance on the drift dataset ( Figure 5b ) is more interesting . When is very strict , both algorithms perform roughly the same , with normalized messages of 025–075 As grows DILSQ develops an increasing advantage over PER with optimal period . The optimal period must be low enough to match the quickly changing model , and is wasteful on the intervals where β is quiescent . For our dataset , βtrue is constant during roughly 75 % of each epoch . For datasets with larger quiescent periods ( or smaller window ) , the advantage of DILSQ will be even larger .
+200040006000800010000RoundModel norm0005101520Model errorε=1.35PER hasexcess error!PER hasexcess error!DILSQ errorPER(100 ) errorDILSQ syncModel norm00051015202530Threshold ε10 310 210 1100Norm . Msgs [ log]DILSQPER00051015202530Threshold ε10 210 1100Norm . Msgs [ log]DILSQPER324 ( a ) Nodes k
+( b ) Noise σ [ log ]
+( c ) Dimension m
+( d ) Window size W
+Figure 6 : Communication vs . different parameters for the fixed ( green ) and drift ( black ) datasets . ( a ) shows DILSQ is scalable : communication increases slowly with number of nodes . ( b ) shows communication is fairly constant when noise is small ( σ < 10 ) . Comm . is zero for fixed model at low noise ( not shown ) . ( c ) shows the required window size W is linear in m : communication does not increase when W is suitably sized ( purple ) . ( d ) shows performance with fixed dataset . If W < 144m data periodically saturates the norms in Eq ( 7 ) .
+512 Scalability Figure 6 explores how performance of DILSQ scales with different parameters .
+Figure 6a shows communication for different values of the number of nodes k . We observe communication increases slowly , remaining below 10 % even with 500 nodes .
+Figure 6b shows normalized messages obtained at different noise magnitudes . Below a certain level of noise , communication is fairly constant , reflecting the choice of threshold . At lower values of noise ( not shown ) , DILSQ requires no communication for the fixed model dataset , beyond the first window of W observations .
+Figure 6c compares communication with the number of independent variables m on the drift dataset , confirming our analysis in Section 44 When window size W is fixed , communication grows linearly with dimension m . However , if W grows linearly with m , we see that communication remains very low ( and in fact decreases a little ) . In both cases we keep epoch length to be 3W to maintain the same rate of change of β across the window .
+Similarly , Figure 6d shows what happens when the window size is too small compared to the value predicted in Section 44 It depicts communication obtained on the fixed dataset , as a function of window size W . As window size decreases below 144m ( see Appendix C ) , constraint violations are more frequent as data periodically overwhelms the norms in Eq ( 7 ) . As we will see below , in practical settings a much lower W can be used , since data values have finite ranges , change slowly , and model changes are more frequent . 5.2 Traffic Monitoring
+Consider the following interpolation problem : given periodical traffic measurements ( average velocity every minute ) from a small number of sensors embedded along a long road , we wish to infer the current average velocity at every point along the road . We aim to solve this problem using polynomial regression . Note that in this case we have no good way to measure the true error of our model , since we do not have sensors in other locations . Moreover , as Figure 1 ( derived from the same data below ) shows , monitoring model fit ( R2 ) is also problematic ( Section 31 ) Instead , we rely on the fact that we can limit the model error β − β0 .
+We used two weeks’ worth of velocity data collected during November 2014 from k = 6 sensors located along the Grenoble south ring in France [ 27 ] . Reported measurements of each sensor are aggregated once per minute , and when
+Figure 7 : Velocity measurements from 8am–9am ( pink dots ) , and interpolated velocity at 9am : true model ( dashed ) and DILSQ approximation ( black ) . measurements are unavailable average velocity was assumed to be unchanged . The road is composed of several sections , and we model it as the interval [ 1 , 18 ] , where the sensors are located at l ∈ {1 , 3 , 7 , 11 , 14 , 18} . The data from every sensor at location l is always x = [ 1 , l , l2 , l3 , l4 ] , and y is the velocity measured by the sensor . Given model β built from measurements from the last hour ( W = 60 ) , the interpolated velocity at location i ∈ [ 1 , 18 ] is [ 1 , i , i2 , i3 , i4]β .
+Figure 7 shows the result of one such a prediction for 9am on Nov 1 2014 , produced using = 25 . The pink dots represent average velocity measurements of each sensor between 8am to 9am . The dashed purple line is velocity interpolated using the exact least squares model β , while the black line is interpolated using DILSQ approximation β0 . Observe the resulting interpolation is fairly accurate , with errors below 10km/h across of range of interpolated positions .
+Figure 8 explores the communication of DILSQ and matching PER with various levels of , for window sizes 60 and 30 . DILSQ is superior to PER across all ranges except the unrealistically strict = 5 ( average β is roughly 100 ) . For one hour window , DILSQ obtains 0.12 normalized messages for = 25 used in Figure 7 , and can reduce communication to 0.03 for = 85 . For a much smaller window size of half an hour , DILSQ requires more communication but still achieves considerable communication reduction : it requires 20 % communication for = 25 and can use as little as 5 % for = 85 . Finally , we observe that the communication gap between DILSQ and PER increases considerably with smaller window size , as β changes more quickly and is more sensitive to noise .
+0100200300400500003004005006007008009010Normalized MsgsFixedDrift10 110010110210 210 1100Norm . Msgs [ log]FixedDrift020406080100000025050075100125Normalized MsgsLinear wFixed w05001000150020000005101520Normalized MsgsFixed24681012141618Location60708090100110120130Velocity [ km/h]Sensorβ interpolationβ0 interpolation325 it is satisfied , communication is avoided . If not , violation is resolved by collecting data from all nodes and computing a new global model . Evaluation on real world datasets shows a communication reduction of up to two orders of magnitude . Simulations on synthetic datasets show our algorithm scales well with the number of nodes .
+We emphasize that correctness of the local constraint is independent of network topology and the algorithm used to compute the model β0 . Hence it is straightforward to adapt our method to other settings . First , the role of the coordinator can easily be replaced with convergecasting [ 4 , 39 ] , yielding a peer to peer monitor . Alternatively , our distributed monitoring approach can easily be combined with an efficient distributed computation technique , enjoying the best of both worlds : the current model can be computed during sync using any of several existing algorithms , be they exact , iterative , or distributed [ 7 , 21 ] . Similarly , our method is compatible with recent communication reduction techniques from the field of distributed streams , such as reference point prediction [ 6 ] , individualized constraints or slack [ 14 , 5 ] , and local violation resolution [ 15 ] . We leave such extensions for future work .
+7 . ACKNOWLEDGMENTS
+The research leading to these results has received funding from the European Union ’s Seventh Framework Programme FP7 ICT 2013 11 under grant agreement No 619491 and No 619435 .
+8 . REFERENCES [ 1 ] M . Aharon , M . Elad , and A . Bruckstein . K SVD : An algorithm for designing overcomplete dictionaries for sparse representation . IEEE Trans . Sig . Proc . , 2006 .
+[ 2 ] Z . D . Bai and Y . Q . Yin . Limit of the smallest eigenvalue of a large dimensional sample covariance matrix . Ann . Prob . , 1993 .
+[ 3 ] K . Bhaduri , K . Das , and C . Giannella . Distributed monitoring of the R2 statistic for linear regression . In Proc . SDM , 2011 .
+[ 4 ] K . Bhaduri and H . Kargupta . An efficient local algorithm for distributed multivariate regression in peer to peer networks . In Proc . SDM , 2008 .
+[ 5 ] M . Gabel , D . Keren , and A . Schuster .
+Communication efficient distributed variance monitoring and outlier detection for multivariate time series . In Proc . IPDPS , 2014 .
+[ 6 ] N . Giatrakos , A . Deligiannakis , M . Garofalakis , I . Sharfman , and A . Schuster . Prediction based geometric monitoring over distributed data streams . In Proc . SIGMOD . ACM , 2012 .
+[ 7 ] C . Guestrin , P . Bod´ık , R . Thibaux , M . A . Paskin , and
+S . Madden . Distributed regression : an efficient framework for modeling sensor network data . In Proc . IPSN , 2004 . [ 8 ] R . Gupta , K . Ramamritham , and M . K . Mohania . Ratio threshold queries over distributed data sources . PVLDB , 2013 .
+[ 9 ] F . Hayashi . Econometrics . Princeton University Press , 2000 . [ 10 ] L . Huang , X . Nguyen , M . N . Garofalakis , J . M . Hellerstein ,
+M . I . Jordan , A . D . Joseph , and N . Taft . Communication efficient online detection of network wide anomalies . In INFOCOM , 2007 .
+[ 11 ] M . Jelasity , A . Montresor , and O . Babaoglu . Gossip based aggregation in large dynamic networks . ACM TOCS , 2005 . [ 12 ] M . Kamp , M . Boley , D . Keren , A . Schuster , and I . Sharfman .
+Communication efficient distributed online prediction by dynamic model synchronization . In Proc . ECML PKDD , 2014 .
+( a ) Window size W = 60
+( b ) Window size W = 30
+Figure 8 : Communication for DILSQ ( black ) and periodic algorithm ( green ) on the traffic dataset at different values .
+5.3 GLS on Gas Sensor Time Series
+Data in this experiment consists of measurements collected by an array of 16 chemical sensors recorded at a sampling rate of 25Hz for 5 minutes , resulting in 7500 data points for each sensor . This dataset is described in [ 42 ] , and is publicly available [ 19 ] . The original goal in [ 42 ] is to identify certain gas classes given high level frequency features . Since the original target variable is nominal and fixed throughout the run in each experiment , we defined a different regression problem . We divided the 16 sensors to k = 4 “ nodes ” , where in each node three sensors serve as the data x while the remaining sensor serves as the response y . We also added a constant variable 1 to x , to allow intercept in the model , hence m = 4 . The regression task is therefore to predict the value of the 4th sensor in each node using the first three .
+Note that in this setting measurement errors cannot be assumed to be independent , so an OLS models is ill suited here . Instead , we assume errors are an AR(1 ) process and monitor the generalized least squares model [ 9 ] . We used an AR(1 ) parameter value φ = 0.95 for the autocorrelation matrix [ 32 ] . Average β is 0.3 , so we use = 0.1 , resulting in 0.17 normalized messages for DILSQ . We note that using an OLS model with the same resulted in 1.15 normalized messages – the OLS model had to be updated very frequently as it was unstable .
+We repeated the experiment for various values in the range [ 0.01,1 ] ( figure omitted for lack of space ) . For < 0.1 DILSQ is clearly superior : PER must communicate every round ( T = 1 ) in order to match DILSQ , which achieves communication between 0.2 and 1 ( for = 001 ) When is more permissive , however , PER is superior and can obtain the same maximum error with less communication : with an extremely permissive = 1 , DILSQ requires 0.04 normalized messages while PER requires 0.015 for the same maximum error ( though , of course , optimal T must be known a priori to achieve this performance ) .
+6 . CONCLUSIONS
+DILSQ is the first communication efficient monitoring algorithm for least squares regression models that limits the error in model coefficients . By monitoring the deviation of the existing model from the true model , our approach is able to avoid costly communication and model recomputations , while guaranteeing bounded model error . Each round , each node checks a simple local constraint on its own local data ; if
+0102030405060708090Threshold ε10 1100Norm . Msgs [ log]DILSQPER0102030405060708090Threshold ε10 1100Norm . Msgs [ log]DILSQPER326 [ 13 ] S . R . Kashyap , J . Ramamirtham , R . Rastogi , and P . Shukla . Efficient constraint monitoring using adaptive thresholds . In ICDE , 2008 .
+[ 14 ] R . Keralapura , G . Cormode , and J . Ramamirtham .
+Communication efficient distributed monitoring of thresholded counts . In Proc . SIGMOD , 2006 .
+[ 15 ] D . Keren , G . Sagy , A . Abboud , D . Ben David , A . Schuster , I . Sharfman , and A . Deligiannakis . Geometric monitoring of heterogeneous streams . IEEE Trans . Knowl . Data Eng . , 2014 .
+[ 16 ] D . Keren , I . Sharfman , A . Schuster , and A . Livne . Shape sensitive geometric monitoring . IEEE Trans . Knowl . Data Eng . , 2012 .
+[ 17 ] A . Knutson and T . Tao . Honeycombs and sums of Hermitian matrices . Notices Amer . Math . Soc . , 2001 .
+[ 18 ] A . Lazerson , I . Sharfman , D . Keren , A . Schuster , M . N . Garofalakis , and V . Samoladas . Monitoring distributed streams using convex decompositions . PVLDB , 2015 . [ 19 ] M . Lichman . UCI machine learning repository , 2013 . [ 20 ] W . Lin , J . Cao , and X . Liu . E3 : Towards energy efficient distributed least squares estimation in sensor networks . In IWQoS 2014 , 2014 .
+[ 21 ] C . G . Lopes and A . H . Sayed . Distributed adaptive incremental strategies : Formulation and performance analysis . In Proc . ICASSP , 2006 .
+[ 22 ] V . A . Marˇcenko and L . A . Pastur . Distribution of eigenvalues for some sets of random matrices . Math . USSR Sb . , 1967 .
+[ 23 ] G . Mateos , J . A . Bazerque , and G . B . Giannakis . Distributed sparse linear regression . IEEE Trans . Sig . Proc . , 2010 . [ 24 ] G . Mateos and G . B . Giannakis . Distributed recursive least squares : Stability and performance analysis . IEEE Trans . Sig . Proc . , 2012 .
+[ 25 ] S . Michel , P . Triantafillou , and G . Weikum . KLEE : a framework for distributed top k query algorithms . In Proc . VLDB , 2005 .
+[ 26 ] K . S . Miller . On the inverse of the sum of matrices .
+Mathematics Magazine , 1981 .
+[ 27 ] F . Morbidi , L . Leon Ojeda , C . Canudas De Wit , and I . Bellicot . A new robust approach for highway traffic density estimation . In ECC14 , 2014 .
+[ 28 ] M . A . Paskin , C . Guestrin , and J . McFadden . A robust architecture for distributed inference in sensor networks . In Proc . IPSN , 2005 .
+[ 29 ] S . Roman . Advanced Linear Algebra , volume 135 of
+Graduate Texts in Mathematics . Springer , 1995 .
+[ 30 ] S . Ronen , B . Gon¸calves , K . Z . Hu , A . Vespignani , S . Pinker , and C . A . Hidalgo . Links that speak : The global language network and its association with global fame . PNAS , 2014 . [ 31 ] M . Rudelson and R . Vershynin . Non asymptotic theory of random matrices : extreme singular values . In Proc . ICM , 2010 .
+[ 32 ] A . Saudargien˙e . Structurization of the covariance matrix by process type and block diagonal models in the classifier design . Informatica , 1999 .
+[ 33 ] A . H . Sayed . Adaptive networks . Proc . IEEE , 2014 . [ 34 ] S . Shah and K . Ramamritham . Handling non linear polynomial queries over dynamic data . In ICDE , 2008 .
+[ 35 ] I . Sharfman , A . Schuster , and D . Keren . A geometric approach to monitoring threshold functions over distributed data streams . ACM Trans . Database Syst . , 2007 .
+[ 36 ] X . Song , C . Wang , J . Gao , and X . Hu . DLRDG : distributed linear regression based hierarchical data gathering framework in wireless sensor network . Neural Comput . Appl . , 2013 .
+[ 37 ] J . A . Tropp and A . C . Gilbert . Signal recovery from random measurements via orthogonal matching pursuit . IEEE Trans . Inf . Theory , 2007 .
+[ 38 ] S . Y . Tu and A . H . Sayed . Diffusion strategies outperform consensus strategies for distributed estimation over adaptive networks . IEEE Trans . Sig . Proc . , 2012 .
+[ 39 ] R . Wolff , K . Bhaduri , and H . Kargupta . A generic local algorithm for mining data streams in large distributed systems . IEEE Trans . Knowl . Data Eng . , 2009 .
+[ 40 ] L . T . Yang and R . P . Brent . Parallel MCGLS and ICGLS methods for least squares problems on distributed memory architectures . J . Supercomput . , 2004 .
+[ 41 ] Y . Zhang , D . M . Sow , D . S . Turaga , and M . van der Schaar .
+A fast online learning algorithm for distributed mining of BigData . SIGMETRICS PER , 2014 .
+[ 42 ] A . Ziyatdinov , J . Fonollosa , L . Fern´andez ,
+A . Gutierrez G´alvez , S . Marco , and A . Perera . Bioinspired early detection through gas flow modulation in chemo sensory systems . Sens . Actuators B Chem . , 2015 .
+APPENDIX A . SLIDING WINDOW CONSTRAINT
+To find a convex subset C satisfying the condition of Eq ( 4 ) , we first review some notions and well known results on norms of real matrices [ 29 ] . We use the L2 norm throughout .
+Definition 1 . Let A be a matrix . Its operator norm , or spectral norm , hereafter just norm , is defined as
+A = sup x=0
+Ax x
+It follows that for a matrix A and vector x , Ax ≤ Ax . Moreover , for any two matrices A , B : A+B ≤ A+B and AB ≤ AB . If A is a symmetric matrix , A = maxi |λi| where λi are the eigenvalues of A . Additionally , if A , B are symmetric then AB = BA .
+Lemma 2 . For square A with A < 1 , ( I A ) is invertible , the inverse being the Neumann series [ 26 ] : ( I − A)−1 = I + A + A2 + A3 + . . . .
+−1 = I − A + A2 − A3 + . . . ≤
+Lemma 3 . If A is square and A < 1 , then ( I + A ) 1 − A Proof . Apply Lemma 2 and the triangle inequality : ( I + A )
+−1 = I − A + A2 − A3 + A4 − . . . 1
+≤ I + A + A2 + ··· ≤
+1
+.
+,
+1 − A since it is the sum of a geometric series .
+We begin by subtracting and adding ( ˆA0 + ∆)−1ˆc0 to the
+( ˆA0 + ∆ ) bounded expression in Eq ( 4 ) : 0 ˆc0 = −1 ( ˆA0 + ∆ )
+−1(ˆc0 + δ ) − ˆA
+( ˆA0 + ∆ )
+−1δ +
+−1 − ˆA
+−1 0
+ˆc0
+.
+Applying the triangle inequality , we obtain : −1 − ˆA
+( ˆA0 + ∆ )
+−1δ
++
+E1
+.
+( 9 )
+ˆc0
+−1 0
+( ˆA0 + ∆ )
+−1
+−1 −1 ˆA 0 0 ∆ < 1 , we apply Lemma 2 to obtain : −1
+−1 0 ∆
+−1 0 ∆
+I + ˆA
+I + ˆA
+=
+E2
+ˆA0
+Next , note that
+−1 =
+( ˆA0 + ∆ ) and , assuming ˆA
+( ˆA0 + ∆ )
+=
+= ˆA
+−1 I − ˆA −1 −1 0 ∆ ˆA 0 ∆ + ˆA 0 − ˆA −1 −1 −1 0 ∆ ˆA 0 + ˆA
+ˆA
+0 ∆ − . . . −1 −1 −1 0 ∆ ˆA 0 ∆ ˆA
+−1 0 0 − . . . −1
+( 10 )
+( 11 ) flflfl flflfl
+327 Note the assumption ˆA discuss it in Section 4.4 and Appendix C .
+0 ∆ < 1 is not trivial , and we −1
+We now apply Eq ( 10 ) and Lemma 3 to E1 in Eq ( 9 ) : flflfl
+−1δ
+E1 = ( ˆA0 + ∆ ) 0 ∆ − . . . I − ˆA −1 −1 −1 0 ∆ ˆA 0 ∆ + ˆA = 0 ∆ − . . . ˆA ≤ I − ˆA −1 −1 −1 0 ∆ + ˆA 0 ∆ ˆA ≤ ˆA 0 δ −1 1 − ˆA 0 ∆ −1 flflfl
+ˆA
+−1 0 δ 0 δ −1
+Similarly , we apply Eq ( 11 ) to E2 : flflfl
+ˆc0
+−1 − ˆA −1 0 −1 −1 0 ∆ ˆA 0 + ( ˆA 0 ∆)2 − . . . −1 −1 0 ∆)2 + . . .
+−1 0 ∆ + ( ˆA 0 ∆ − ( ˆA −1
+ˆA ˆA
+0 − ··· − ˆA −1 −1 0 ∆)2 ˆA −1 0 ˆc0 −1 0 ∆β0 flflfl
+−1 0
+E2 =
+=
+=
+=
+( ˆA0 + ∆ ) 0 − ˆA −1 flflfl flflfl ˆA flflfl− ˆA flflfl E2 ≤flflflI + ˆA
+I + ˆA flflfl flflfl ˆA
+( 12 ) flflfl
+ˆc0
+( 13 )
+( 14 )
+Applying Lemma 3 to Eq ( 13 ) we obtain :
+0 ∆ − ( ˆA −1
+−1 0 ∆)2 + . . .
+0 ∆β0 −1
+≤ ˆA
+0 ∆β0 −1 0 ∆ 1 − ˆA −1
+Substituting Eq ( 12 ) and ( 14 ) in Eq ( 9 ) and rearranging , we arrive at the convex constraint C on ( ∆ , δ ) : 0 ∆β0 ≤ −1
+0 ∆ + ˆA −1
+0 δ + ˆA −1
+ˆA
+.
+( 15 )
+This convex constraint allows us to apply Lemma 1 . Satisfying Eq ( 15 ) guarantees Eq ( 4 ) is also satisfied , since the bounded expression is larger . Moreover , this bound is a subset of ˆA 0 ∆ < 1 , a necessary condition for correctness , −1 meaning we don’t have to check it explicitly .
+B .
+INFINITE WINDOW CONSTRAINT
+A matrix A is positive definite , denoted A 0 , if xT Ax > 0 for all non zero vectors x . This implies a partial ordering of square matrices : we denote A B if A − B 0 . Note A B 0 =⇒ A > B . Moreover , A B 0 =⇒ B−1 A−1 0 . Finally , observe that ( A + B)−1u ≤ A−1u , since A + B A and there fore A−1 ( A + B)−1 . Similarly , ,(A + B)−1 − A−1 u = ,A−1 − ( A + B)−1 u ≤ A−1u . tion , ∆j =
+We apply the above to Eq ( 9 ) . Note that by construci , where Sj is the set samples seen by node j since the last sync time , is symmetric and positive definite . Similarly , ˆA0 is symmetric positive definite by 0 δ , and construction . Thus , E1 = ( ˆA0 + ∆)−1δ ≤ ˆA −1 E2 =
+( ˆA0 + ∆)−1 − ˆA flflfl ≤ ˆA flflfl
+0 ˆc0 . −1 xixT i∈Sj
+−1 0
+ˆc0
+The final convex constraint for the infinite window case is therefore
+ˆA
+0 δ + ˆA −1
+0 ˆc0 ≤ −1
+.
+( 16 )
+C . WINDOW SIZE AND DIMENSIONS overwhelming ˆA
+We will show that sliding window W linear in m will avoid
+0 ∆j in Eq ( 7 ) . −1
+For any matrix A , denote its largest and smallest eigen0 and values by λmax(A ) and λmin(A ) . Recall that ˆA0 = 1 k Aj flflflfl 1 k flflflfl = if A is symmetric then A = λmax(AT A ) = |λmax(A)| . that in the sliding window model4 , ∆j = Aj − Aj 0 , and that all these matrices are symmetric by construction . Moreover , Finally , λmax(A−1 ) =
+λmin(A ) , and therefore
+1
+ˆA
+0 = −1
+−1 A 0 k
+|λmin(A0)| = k
+λmin(A0 )
+.
+Applying the above to the norm constraint : ˆA
+0 ∆j ≤ ˆA −1 k
+|λmax(Aj − Aj 0)|
+λmin(A0 )
+0 ∆j = −1 k
+≤
+λmin(A0 )
+|λmax(Aj ) − λmin(Aj 0)|
+.
+( 17 )
+The last step is obtained from [ 17 ] : A , B symmetric =⇒ λmax(A + B ) ≤ λmax(A ) + λmax(B ) and since λmax(−B ) = −λmin(B ) .
+The bound in Eq ( 17 ) depends on the distribution of the data . Assume the elements of X are drawn iid from N ( 0 , 1 ) , then the Marchenku Pastur law [ 22 ] limits the spectrum of the Wishart matrix X T X .
+Lemma 4 . Let X ∈ Rw×m drawn as above such that m converges to 0 < b ≤ 1 as W and m grow to infinity5 . Let W X T X , and denote its largest and smallest eignevalues M = 1 by λmax(M ) , λmin(M ) . Then almost surely
+W
+2
+√
+, λmin(M ) →
+1 + b
+√ b
+1 −
+2
+.
+Bai and Yin [ 2 ] extended this result to any zero mean distribution with unit variance and finite fourth moment [ 31 ] . These can be achieved using [ 5 ] , for example .
+T ˜X0 , where ˜X0 ∈ RkW×m is the concatenation of all local data matrices . Applying Lemma 4 to Eq ( 17 ) , we obtain k|λmax(Aj ) − λmin(Aj 0)| kWfifiλmax( 1
+W Aj ) − λmin( 1
+0)fifi
+0 = ˜X0
+W Aj
+1 Aj
+λmin(A0 )
+=
+=
+|λmax( 1 kW λmin( 1 kW A0 ) W Aj ) − λmin( 1 0)| W Aj λmin( 1
+,
+λmax(M ) → Note A0 =k which converges almost surely to fk(b ) |(1 +
+√ b)2 − ( 1 − √ 2 1 − b k b)2
+= kW A0 ) √ b
+1 − b
+4 k
+2
+.
+( 18 )
+7
+3 m
+5 2 .
+2 − k
+√ 2 − 4
+3 . Solving 0 < fk(b ) < 1
+In practice , Eq ( 7 ) is the sum of 3 norms , so we require 0 ∆j < 1 −1 3 for b with k > 1 yields
+ˆA W ≤ gk 72k2 + k − 24k 3 For given k > 1 , selecting W ≥ m almost surely . The constant 1 gk window size W must be at least 1 g2 W ≥ 1 In fact , gk converges : limk→∞gk = 1 W ≥ 144m is sufficient for any k . 4We discuss the worst case , when Aj , Aj When they do , ∆j ’s effective window size is less than W . 5Trivially , if W = m b .
+108k4 + 15k3 − 72k guarantees ˆA 0 ∆j < 1 −1 gk 3 grows slowly : for k = 2 , the ≈ 111.06m ; for k = 10 , ≈ 13922m 144 , so a window size of
+≈ 129.02m ; and for k = 100 , W ≥ 1
+0 do not overlap . g100 g10
+328

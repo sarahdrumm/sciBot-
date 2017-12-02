@@ -1,0 +1,585 @@
+PrefixSolve : Efficiently Solving Multi Source
+Multi Destination Path Queries on RDF Graphs by Sharing
+Suffix Computations
+Sidan Gao
+Department of Computer Science North Carolina State University
+Raleigh , NC 27606 , USA sgao@ncsu.edu
+Kemafor Anyanwu
+Department of Computer Science North Carolina State University
+Raleigh , NC 27606 , USA kogan@ncsu.edu
+ABSTRACT Uncovering the “ nature ” of the connections between a set of entities eg passengers on a flight and organizations on a watchlist can be viewed as a Multi Source Multi Destination ( MSMD ) Path Query problem on labeled graph data models such as RDF . Using existing graph navigational path finding techniques to solve MSMD problems will require queries to be decomposed into multiple single source or destination path subqueries , each of which is solved independently . Navigational techniques on disk resident graphs typically generate very poor I/O access patterns for large , disk resident graphs and for MSMD path queries , such poor access patterns may be repeated if common graph exploration steps exist across subqueries .
+In this paper , we propose an optimization technique for general MSMD path queries that generalizes an efficient algebraic approach for solving a variety of single source path problems . The generalization enables holistic evaluation of MSMD path queries without the need for query decomposition . We present a conceptual framework for sharing computation in the algebraic framework that is based on “ suffix equivalence ” . Suffix equivalence amongst subqueries captures the fact that multiple subqueries with different prefixes can share a suffix and as such share the computation of shared suffixes , which allows prefix path computations to share common suffix path computations . This approach offers orders of magnitude better performance than current existing techniques as demonstrated by a comprehensive experimental evaluation over real and synthetic datasets .
+Categories and Subject Descriptors H24 [ Systems ] : Query processing
+Keywords RDF , MSMD Path Query , Suffix Equivalence , Work Sharing
+1 .
+INTRODUCTION
+The growing availability of Semantic Web data is strengthening its position as an indispensable knowledge base . Many investigative and exploratory applications that rely on the
+Copyright is held by the International World Wide Web Conference Committee ( IW3C2 ) . IW3C2 reserves the right to provide a hyperlink to the author ’s site if the Material is used in electronic media . WWW 2013 , May 13–17 , 2013 , Rio de Janeiro , Brazil . ACM 978 1 4503 2035 1/13/05 .
+Semantic Web have requirements beyond matching querydescribed subgraph patterns in data . Sometimes the goal is to “ connect the dots ” by uncovering the structure of relationships between a set of entities in complex social , biological , and other types of networks represented on the Semantic Web . The need to support such tasks has led to an increased interest in navigational query models eg reachability and path queries [ 9 , 6 , 22 , 23 , 20 , 21 , 13 ] and motivated recent extensions to the SPARQL query language to include a path expression query construct . Similarly motivated proposals were made earlier [ 6 , 10 , 4 , 19 , 5 , 16 ] . The theoretical implications of evaluating SPARQL path expression queries are discussed in [ 8 , 7 , 14 ] . In particular , [ 7 ] demonstrates the limitation of the current semantics for such constructs that results in inefficient and impractical implementations in current systems , and warns about the negative impact on its adoption for real world applications . Their results speak eloquently to the strong need for developing efficient query evaluation techniques for navigational queries .
+Structure discovery queries require the ability to extract undescribed substructures eg paths or subgraphs based on a given set of entities . As examples , ( i ) the process of drug discovery may need to explore all the ways a chemical interacts with potential drug target in order to select a mechanism of action ( pathway ) with the least amount of side effects and also to avoid not detecting potentially dangerous drug mechanisms , ( ii ) in security intelligence applications , investigators may be interested in understanding the entire scope of a criminal enterprise which includes all types of direct and indirect relationships . For many structure discovery applications , it is not always the case that interesting structures can be characterized simply in terms of their structures eg shortest paths . Rather , importance is often determined by the nature of the structure ie the types of properties/edges on paths . This perspective is particularly crucial for heterogeneous networks like Semantic Web networks but maybe less so for homogeneous networks where all relationships/edges have a uniform semantics . In addition , some applications such as drug target require a view into the entire scope of possible relationships , not just the most immediate ones . Unfortunately , most existing techniques primarily support shortest [ 18 , 15 ] or bounded length paths/subgraphs [ 21 ] or pattern based subgraphs [ 12 ] rather than generalized path querying .
+For most applications interested in finding paths or connections , the focus is often on sets of sources and destina
+423 k c
+3 i a b
+1
+2 h
+7
+5 f d
+4
+( a ) g
+8
+7 . ‹4,7,f›
+3 . ‹2,3,b› 5 . ‹3,4,c›
+9 . ‹5,7,h›
+6
+1 . ‹1,3,a› 2 . ‹1,4,k›
+3 . ‹2,3,b› 4 . ‹2,4,i›
+5 . ‹3,4,c› 6 . ‹4,5,d›
+7 . ‹4,7,f› 8 . ‹5,6,e›
+9 . ‹5,7,h› 10 . ‹7,8,g› e
+( b )
+Figure 1 : ( a ) A graph G ( b ) G ’s path sequence indexed using B+ tree tions rather than a single source or destination ie , MultiSource Multi Destination ( MSMD ) Path Queries . Most existing techniques [ 18 , 15 , 21 ] require either the source or destination to be a single node . Therefore , MSMD path queries will need to be decomposed into multiple singlesource path subqueries , one for each source or destination node . Unfortunately , this approach is very inefficient particularly if the database is disk resident . For example , we ran a single source node path query on a real world RDF dataset , BioCyc [ 1 ] , containing 100K nodes using the best performing system based on the evaluation discussed in [ 7 ] , and it took 820 seconds! In contrast , a more holistic , yet naive , MSMD path query evaluation technique with 120 query source nodes on the same ( BioCyc ) dataset took 700 secs! This is despite the fact that for the latter case the database was on disk ( indexed ) while the former had the graph in memory . Enabling more efficient generalized path and subgraph querying is the motivation of this paper . Related earlier efforts include [ 21 , 13 , 4 , 18 , 12 ] .
+In this paper , we propose an optimization technique for efficiently evaluating MSMD path queries . The optimization generalizes an algebraic approach [ 24 , 25 ] for efficiently solving single source path problems to efficiently solve multisource path problems . The algebraic approach serves as a good foundation for efficient path query evaluation because ( i ) you can interpret different kinds of path problems in the same framework as discussed in [ 24 , 25 ] allowing support for different kinds of path queries to be possible , ( ii ) it has two distinct phases that can be split into a preprocessing phase and a query processing phase with the cost of the former dominating , but can be amortized over all future queries , ( iii ) it is more amenable to holistic query evaluation and disk based graphs so that we can avoid the inefficiency of decomposing into single source subqueries and very poor I/O access patterns of graph navigational strategies . Specifically , we make the following contributions : • An efficient holistic evaluation strategy for MSMD path queries for disk resident RDF databases , which avoids query decomposition into single source path queries . • A conceptual framework for work sharing across subqueries based on a notion , “ suffix equivalence ” , and algorithms for integrating work sharing into algebraic path problem solving techniques . • A comprehensive evaluation of the approach over synthetic and real datasets . The results show a significant improvement in performance of our approach .
+2 . PRELIMINARIES An RDF graph is a directed labeled graph G = ( VG , EG , λ ) , where VG is a finite set of nodes , EG ⊆ VG×VG is a set of directed edges , λ : EG → Γ is a labeling function which assigns each edge e ∈ EG to a label λ(e ) ∈ Γ from a set Γ of labels . We denote a labeled edge e = ( v1 , v2 ) with label λ(e ) = le as
+( v1 , le , v2 ) . A path in an RDF graph is defined as an alternating sequence of nodes and labeled edges . A set of paths connecting two nodes can be represented concisely as a path expression ( PE ) . A path expression of type ( s , d ) , P E(s , d ) , is a triple ffs , d , R , where R is a regular expression over the set of labeled edges ( Γ,EG ) defined using the standard operators union(∪ ) , concatenation(• ) and closure(∗ ) such that the language L(R ) of R represents paths from s to d where s , d ∈ VG . ε and ∅ are two atomic regular expressions denoting empty string and empty set resp . For example , given the graph in Figure 1(a ) , the path expression of type ( 1 , 4 ) , P E(1 , 4 ) = ff1 , 4 , ( 1 , a , 3 ) • ( 3 , c , 4 ) ∪ ( 1 , k,4 ) . For brevity , we omit nodes in a regular expression ( unless required ) , and simply describe path expressions in terms of regular expressions over edge labels . For example , our earlier path expression can be rewritten as P E(1 , 4 ) = ff1 , 4 , a • c ∪ k .
+If a graph is ordered using any numbering scheme , information about paths in the graph can be represented using a particular sequence of path expressions called a path sequence ( PS ) [ 24 ] . For simplicity , assume that we use a node and its assigned number interchangeably , then a path sequence is the sequence of path expressions P S = .s1 , d1 , R1fi , . . . ,.s l , dl , Rlfi : • beginning with si ≤ di in ascending order on si followed by
+• ffsi , di , Ri with si > di in descending order on sj . An important property of P S is that for any non empty path p in G , there is a unique sequence of indices of PS 1 ≤ i1 < i2 < ··· < ik ≤ l and p = p1 , p2 , . . . , pk such that pj ∈ L(Rij ) . Formally , for any path p , we can find a unique partition of p into non empty subpaths , and a unique sequences of indices I of P S , such that the ith subpath of p is represented by the path expression at the ith index in I . Given a path sequence , many path problems are solved using a simple propagation SOLVE algorithm [ 24 ] that assembles path information as it scans the path sequence from left to right . The time complexity of SOLVE is a function of the length of a P S which is at most O(|VG|2 ) . However , by selecting good numbering schemes as mentioned in [ 24 ] or using heuristic techniques presented in [ 6 ] , we can keep the length of path sequence much closer to O(|EG| ) for G . [ 24 ] also proposes optimizations based on graph decomposition techniques that enable complexity of the single source path expression problem to be reduced to O(|EG|α(|EG|,|VG| ) ) where α is the functional inverse of Ackermann ’s function . To support disk resident graphs , path sequence can be indexed using a B+ tree , psIndex , and SOLVE algorithm can be implemented as a generalization of an indexed scan of a path sequence [ 6 ] . Indexed scan uses a getNext( ) method to advance through the path sequence and returns the next path expression in the current retrieved leaf of the B+ tree . Once the last path expression in the leaf is processed , it advances to the next leaf of the B+ tree .
+424 Query source nodes number
+Step i : PE processed at step i : ‹1 , 3 , a› ‹1 , 4 , k› ‹2 , 3 , b› ‹2 , 4 , i› ‹3 , 4 , c› ‹4 , 5 , d› ‹4 , 7 , f› ‹5 , 6 , e› ‹5 , 7 , h› ‹7 , 8 , g›
+10
+1
+2
+3
+4
+5
+6
+7
+8
+9
+Step 1
+Step 2
+Step 3
+Step 4
+Step 5
+1
+2
+5
+1
+2
+5
+1
+2
+5
+1
+2
+5
+1
+2
+1 ε Ø Ø ε Ø Ø ε Ø Ø ε Ø Ø ε Ø Ø
+2 Ø ε Ø
+Ø ε Ø
+Ø ε Ø
+Ø ε Ø
+Ø ε Ø
+3 a Ø Ø a Ø Ø a b Ø a b Ø a b Ø
+4 Ø Ø Ø k Ø Ø k Ø Ø k i Ø
+5 Ø Ø ε
+Ø Ø ε
+Ø Ø ε
+Ø Ø ε
+6 Ø Ø Ø
+Ø Ø Ø
+Ø Ø Ø
+Ø Ø Ø
+7 Ø Ø Ø
+Ø Ø Ø
+Ø Ø Ø
+Ø Ø Ø
+8 Ø Ø Ø
+Ø Ø Ø
+Ø Ø Ø
+Ø Ø Ø
+Ø Ø Ø
+Ø Ø Ø
+Ø Ø Ø k ( cid:137 ) ( a • c ) i ( cid:137 ) ( b • c )
+Ø Ø ε
+Step 6
+Step 7
+Step 8
+Step 9
+Step 10
+1
+2
+5
+1
+2
+5
+1
+2
+5
+1
+2
+5
+1
+2
+1 ε Ø Ø ε Ø Ø ε Ø Ø ε Ø Ø ε Ø Ø
+2
+Ø ε Ø
+Ø ε Ø
+Ø ε Ø
+Ø ε Ø
+Ø ε Ø
+3 a b Ø a b Ø a b Ø a b Ø a b Ø
+4
+5 k ( cid:137 ) ( a •c ) i ( cid:137 ) ( b •c )
+( k ( cid:137 ) ( a • c ) ) • d ( i ( cid:137 ) ( b • c ) ) • d
+Ø
+ε k ( cid:137 ) ( a • c ) i ( cid:137 ) ( b • c )
+( k ( cid:137 ) ( a • c ) ) • d ( i ( cid:137 ) ( b • c ) ) • d
+Ø
+ε
+6
+Ø Ø Ø
+Ø Ø Ø
+7
+Ø Ø Ø
+( k ( cid:137 ) ( a • c ) ) • f ( i ( cid:137 ) ( b • c ) ) • f
+Ø k ( cid:137 ) ( a • c ) i ( cid:137 ) ( b • c )
+( k ( cid:137 ) ( a • c ) ) • d ( (k ( cid:137 ) ( a • c ) ) • d ) • e ( k ( cid:137 ) ( a • c ) ) • f ( i ( cid:137 ) ( b • c ) ) • d ( (i ( cid:137 ) ( b • c ) ) • d ) • e ( i ( cid:137 ) ( b • c ) ) • f
+Ø
+ε e
+Ø k ( cid:137 ) ( a • c ) i ( cid:137 ) ( b • c )
+( k ( cid:137 ) ( a • c ) ) • d ( (k ( cid:137 ) ( a • c ) ) • d ) • e ( i ( cid:137 ) ( b • c ) ) • d ( (i ( cid:137 ) ( b • c ) ) • d ) • e
+( k ( cid:137 ) ( a • c ) ) • f ( i ( cid:137 ) ( b • c ) ) • f
+Ø
+ε e h
+8
+Ø Ø Ø
+Ø Ø Ø
+Ø Ø Ø
+Ø Ø Ø k ( cid:137 ) ( a • c ) i ( cid:137 ) ( b • c )
+( k ( cid:137 ) ( a • c ) ) • d ( (k ( cid:137 ) ( a • c ) ) • d ) • e ( i ( cid:137 ) ( b • c ) ) • d ( (i ( cid:137 ) ( b • c ) ) • d ) • e
+( k ( cid:137 ) ( a • c ) ) • f ( i ( cid:137 ) ( b • c ) ) • f
+( k ( cid:137 ) ( a • c ) ) • f • g ( i ( cid:137 ) ( b • c ) ) • f • g
+5
+Figure 2 : Stages of M Solve for Sources 1 , 2 , and 5 : ( i ) rows 1,2 , and 3 for sources 1,2 , and 5 resp and order is top to bottom then left to right ; ( ii ) all row 1s simulate stages of S Solve for source node 1 h • g h
+Ø
+Ø e
+ε
+5
+Figure 1 shows a graph G and its indexed path sequence as leaves of B+ tree . The bold numbers indicate the position of the path expression in P S , eg,P E ( 2 , 4 ) is the 4th path expression in P S .
+Generalizing SOLVE algorithm to incorporate the index scan of a path sequence leads to an algorithm we refer to here as S Solve . Given a path sequence and a source node s , S Solve computes a path expression of type ( s , d ) for all d ∈ VG . S Solve uses an array SA , here called solve array , of size |VG| and begins by initializing SA[s ] withff s , s , ε .
+S Solve ( psIndex , s , SA ) Initialization : SA[s ] ← ε and SA[v ] ← ∅ for v '= s ; 1 . i = 1 2 . while ( P Ei(vi , wi ) ← psIndex.getN ext( ) ) '= N U LL SA[wi ] ← SA[wi ] ∪ ( SA[vi ] • P Ei(vi , wi ) ) 3 . 4 . i = i + 1 5 . end while
+Step i ( ie , iteration i ) retrieves the ith path expression P Ei(vi , wi ) in P S with source vi and destination wi ( line 2 ) . Line 3 extends the path expression currently in SA[vi ] ie , P E(s , vi ) , by concatenating it with P Ei(vi , wi ) . The resulting path expression P E(s , wi ) represents paths from s to wi via vi . It then is used to extend the path expression currently in SA[wi ] using a union operation . We refer to each step ie , each iteration as a s SolveStep single SolveStep . If during a s SolveStep line 3 “ extends ” P E(s , vi ) with P Ei(vi , wi ) ( to create P E(s , wi) ) , then we refer to the action in line 3 as a ( vi , wi ) extension . Extensions will not be produced if SA [ vi ] is empty . This implies that so far no paths have been found from source s to vi , thus there is no path from s to wi via vi . Consequently , we view the action of line 3 in this situation as a ∅ extension . At the end of SSolve , SA[d ] containsP E ( s , d ) representing all paths from s to d . The running time of S Solve is O(l ) , where l is the length of the path sequence .
+Example 1 . To illustrate the behavior of S Solve on a single node 1 , we consider the first rows of each of steps in Figure 2 . In each step , the row represents the states of the solve array after that step . Specifically , each location d in the array contains the current state of the path expression P E(1 , d ) . Before step 1 , S Solve initializes SA[1 ] with ff1 , 1 , ε and SA[v ] withff v , v,∅ for v ∈ VG \ {1} . Step 1 processes the first element in P S , ff1 , 3 , a , and produces the path expression ff1 , 3 , a since the regular expression in current location is ε and ε•a = a which is then unioned with the current path expression in SA[3 ] to produce a since a∪∅ = a . The result of this iteration is a ( 1 , 3 ) extension . In a similar manner , step 2 computes ff1 , 4 , k and stores it in SA[4 ] , resulting in a ( 1 , 4 ) extension . Step 3 produces ∅ extension since the current path expression in SA[3 ] is ∅ and ∅•b = ∅ . The process continues similarly as it steps through the elements of the path sequence . 2.1 Evaluating MSMD Path Queries Using Path
+Sequences
+An MSMD path query is defined as follows : Definition 1 . ( MSMD Path Query ) Given a graph G = ( VG , EG , λ ) , an MSMD path query is a 2 tuple ( S , D ) where S , D ⊆ VG are sets of sources and destinations resp . The result of an MSMD path query is the set {P E(si , dj)| si ∈ S ∧ dj ∈ D} , and P E(si , dj ) represents all paths from si to dj in G .
+[ 24 ] suggests a straightforward adoption of S Solve algorithm to an MSMD problem : execute S Solve once for each source . We call this algorithm Iterative MultiSolve and its complexity is O(|S|l ) where l is the length of path sequence . However , when the path sequence resides on disk , this approach incurs high I/O costs from the repeated path sequence scans . In [ 5 ] , we propose the M Solve algorithm as an improvement over Iterative MultiSolve that reduces I/O costs by restructuring the for loops . During SolveStep i in M Solve which processes path expression P Ei(vi , wi ) from the path sequence , we produce ( vi , wi ) extensions for a subset of sources . Specifically , ( vi , wi ) extensions are produced for those sources that have paths to wi via vi . We refer to each SolveStep as an m SolveStep , since each step consists
+425 Symbol R L(R ) ( vi , wi , Ri ) P Ei(vi , wi ) Descendant SolveStep m SolveStep k is a descendant SolveStep of step i if i < k and either i ) for P Ei(vi , wi ) and i < j < k and SolveStep
+Table 1 : Symbol Table Description Regular expression over edge labels ( eg , a • c ∪ k ) Language of the regular expression R The ith PE processed by SolveStep i that has src = vi and dest = wi , and regular exp . Ri Shorthand for the PE ( vi , wi , Ri ) P Ek(vk , wk ) , wi = vk ( direct descendant ) or ii ) ∃ m SolveStep j st j is a direct descendant of step i and SolveStep k is a descendant of step j . For SolveStep i whose source node isx , ∃ SolveStep j whose source node is y st descendant SolveStep of step i , thenx is called an ancestor of y . A subset of a set S of query source nodes containing elements that produce ( vi , wi ) extension Suffix equivalent set wrt node n at m SolveStep i MSMD path query with source set S and destination set D x ancestor y
+S+ i SES(n,i ) M Q = ( S , D ) step j is a of multiple s SolveSteps that each produces an extension for one of the sources . we can ensure that wasted SolveSteps are not computed repeatedly .
+Example 2 . Figure 2 shows the 10 step M Solve process for MSMD query ( {1 , 2 , 5} , VG ) . Each step is represented by three rows that show the intermediate path expressions computed for the 3 different sources . The “ multi source ” processing begins from step 3 , which initiates the solve process for source 2 ( happens with the first incoming path exff2 , 3 , b ) . For subsequent pression whose source is 2 ie m SolveSteps , the subset of query sources ie , sources 1 and 2 produce ( 3 , 4 ) extension ie rows 1 and 2 are filled . Step 8 initiates the solve process for source 5 , which is reflected in the first non ∅ entry ie , entry 6 in the third row . This represents that so far source 5 only has path to 6 . Typically , the solve array maintains for each location a list of path expressions ( one for each source ) . However , for ease of exposition , we separate the computations for different sources into different rows .
+Discussion . The multiprocessing strategy of M Solve avoids repeated scanning of a path sequence , however , there is some repetition within an m SolveStep , this occurs when paths from two different sources overlap . Eg , for sources 1 and 2 and destination 5 , the m SolveSteps beginning from 5 will produce the same extensions for both 1 and 2 . Specifically , at step 5 , both sources 1 and 2 compute the suffix expression “ •c ” as the extension ( 3 , 4 ) . Similarly , the suffix expression “ •d ” is computed as the extension ( 4 , 5 ) at step 6 and all subsequent steps also compute “ equivalent ” extensions . We consider such SolveSteps “ redundant ” since the same computation is essentially repeated for all sources . Factorizing such redundant computations will enable an approach in which we can compute the shared subpath expression once for a set of “ equivalent ” sources . Although , both strategies have overall time complexity bounds of O(|S|l ) , there are salient cost advantages to the approach with factorized computation ,
+1 . it allows the average number of extensions per m SolveStep to remain close to 1 unlike |S| in the regular M Solve algorithm .
+2 . it reduces the overhead due to “ wasted redundant SolveSteps ” : wasted SolveSteps do not eventually lead to a destination in the query . Predicting which SolveSteps are wasteful during processing is impractical ( requires reachability checks for source destination pairs at every SolveStep ) . However , by enabling a work sharing approach across the solve processes for the different sources ,
+3 . HOLISTIC MSMD PATH QUERY EVAL
+UATION
+3.1 Foundations
+Each step in M Solve can be viewed as a multi SolveStep ( m SolveStep ) that encapsulates multiple s SolveSteps , where each s SolveStep is associated with some s in S . We now formalize m SolveSteps in a way that allows explicit capturing of equivalent or redundant extensions in an m SolveStep using a notion called suffix equivalence . Table 1 summarizes terms and notations used in the paper .
++
++ i , P ES
++
++ i is the set of path expressions P E(sj , wi ) such that + i .
+Definition 2 . ( m SolveStep ) Given a graph G with path sequence P S = P E1(v1 , w1) , . . . , P El(vl , wl ) and an MSMD path query M Q = ( S , D ) where S , D ⊆ VG , m SolveStep i proi where cesses P Ei(vi , wi ) and produces a 2 tuple ffS i =⇒ P E(s , wi ) =P E ( s , vi ) • 1 . S i ⊆ S such that s ∈ S+ P Ei(vi , wi ) )= ∅ ; 2 . P ES sj ∈ S + i where elements in m SolveStep i generates a subsets S + i produce the same ( vi , wi ) extension indicating the reachS ability of wi via an intermediate vertex vi by sources in + i . In example 2 , m SolveStep 3 is represented as a 2 tuple S .{S+ 4 = {2}} , {P E(2 , 4)}fi . On the other hand , m SolveStep 5 is represented as a 2 tuple .{S+ 5 = {1 , 2}} , {P E(1 , 4 ) , P E(2 , 4)}fi because sources 1 and 2 produce the same extension ( 3 , 4 ) . Since an ( vi , wi ) extension amounts to extending paths with suffix subpaths ( those represented in P Ei(vi , wi) ) , the can be thought of as being “ equivalent ” in sources in S terms of their suffix paths . We make this notion more precise in the following definition . Definition 3 . ( Suffix Equivalence ≡ ) Source node sp is suffix equivalent to source node sq wrt extension ( vi , wi ) , denoted as sp ≡(vi,wi ) sq , if sp , sq ∈ S . Further , sp ≡(vi,wi ) sq =⇒ sp ≡(vj ,wj ) sq for m SolveStep j which is a de
++ i
++ i
++ i scendant m SolveStep of i . ( The implication that the suffix is preserved over all descenequivalence of sources in S dant m SolveSteps of i holds due to the transitivity of path connectivity . ) In our example , 1 and 2 are suffix equivalent wrt ( 3 , 4 ) and therefore are suffix equivalent wrt all extensions in descendant m SolveSteps of step 5 , which are ( 4 , 5 ) , ( 4 , 7 ) , ( 5 , 6 ) , ( 5 , 7 ) , and ( 7 , 8 ) . 1 and 2 share multiple common suffix path expressions P E(3 , 8 ) , P E(4 , 8 ) , P E(5 , 8 ) , and P E(7 , 8 ) .
+426 PS = { ‹ 1 , 3 , a › , ‹ 1 , 11 , e › , ‹ 2 , 3 , k › , ‹ 2 , 11 , h › , ‹3 , 11 , i › , ‹ 11 , 13 , d › , ‹ 13 , 15 , g › }
+1
+2 a k e
+3 h i d
+11 g
+13
+15
+Step i & PEi(vi , wi ) SES(vi ,h ) 1 PE1(1 , 3 ) PE2(1 , 11 ) 2 PE3(2 , 3 ) 3 PE4(2 , 11 ) 4 5 PE5(3 , 11 )
+6
+7
+PE6(11 , 13 )
+PE7(13 , 15 )
+SES(1,0 ) = {1}1 SES(1,0 ) = {1}1 SES(2,0 ) = {2}2 SES(2,0 ) = {2}2 SES(3,3 ) = {{1}1 , {2}2}3 SES(11,5 ) = {{1}1 , {2}2 , {{1}1 , {2}2}3}11 SES(13,6 ) = {{1}1 , {2}2 , {{1}1 , {2}2}3}11
+SES(wi ,k ) SES(3,0 ) = Ø SES(11,0 ) = Ø SES(3,1 ) = {1}1 SES(11,2 ) = {1}1 SES(11,4 ) = {{1}1 , {2}2}11
+SES(wi ,i)= SES(vi ,h ) ( cid:134)θ SES(wi ,k ) SES(3,1 ) = {1}1 SES(11,2 ) = {1}1 SES(3,3 ) = {{1}1 , {2}2}3 SES(11,4 ) = {{1}1 , {2}2}11 SES(11,5 ) = {{1}1 , {2}2 , {1}1 , {2}2}3}11
+SES(13,0 ) = Ø
+SES(15,0 ) = Ø
+SES(13,6 ) = {{1}1 , {2}2 ,{{1}1 , {2}2}3}11
+SES(15,7 ) = {{1}1 , {2}2 ,{{1}1 , {2}2}3}11
+( a )
+( b )
+Figure 3 : ( a ) A graph G and its PS ( b ) An example of SES computation for mq = ( {1 , 2} ,{11 , 15} ) for G
+Exploiting suffix equivalence can enable reduction in cost of MSMD path query evaluation . Specifically , if the computation of suffix extensions can be shared by “ equivalent ” sources , then recomputations of the same extension for all such sources can be avoided . More precisely , given an MSMD path query M Q = ( S , D ) andl 1 number of shared extension . ⊆ S , steps ( ie , the number of SolveSteps ) shared by S then the suffix extension computations can be shared to reduce the cost of processing by a factor of ( l1 × ( |S .| −1 ) − .|)/(|S .|×Cbpe×l1 ) toO ( Cbpe×(|S .|+l1 ) ) |S where Cbpe is the cost of a single extension .
+.|×l1 ) , from O(|S
+3.2 Sharing SolveSteps Across “ Suffix Equiv alent Sets ” in M Solve
+.
+.
+.
++
++ i
++ 5 = S
++ i = S
++ i become suffix equivalent ie
++ i . . We will refer to m SolveStep i
+To maximize the amount of shared computation amongst suffix equivalent nodes , it is important to be able to identify the earliest possible m SolveStep for which the elements of such the smallest i an S and that m SolveStep i is a descendant of m SolveStep i as the anchor S m SolveStep for S since its source node ( minimal anchor node ) is the origin of the longest shared suffix computations + i . For example , m SolveStep 5 in Figure 3 is the anchor in S + 6 since SolveStep 5 is the lowest step such m SolveStep for S 6 = {1 , 2} and step 6 is the descendant step that S + 6 . However , of 5 . Also , node 3 is the anchor node for S the problem of identifying and managing shared suffixes is + i may have not that simple . This is because the nodes in S multiple “ interacting ” suffix equivalent relationships when + i do some of the prefix paths originating from nodes in S not share the longest possible suffix paths . In this case , + there is a shorter suffix that is shared by all prefixes in S i but a longer suffix rooted at anchor node that is shared by a subset of prefixes ie there is a “ conflict ” in their suffix equivalence relationship . For example , in Figure 3 , a shorter suffix ff11 , 15 , d • g is shared by 4 prefixes : ff1 , 11 , a • i , ff1 , 11 , e , ff2 , 11 , k•i , and ff2 , 11 , h . However , a longer suffix ff3 , 15 , i • d • g is shared by 2 prefixes ff1 , 3 , a and ff2 , 3 , k . We call the origin node of the shorter suffix aconflict anchor node . In the above example , node 11 is a conflict anchor node for {1 , 2} .
+To develop an efficient representation of nodes that are suffix equivalent , we can conflate information about all pairs j , 1 ≤ i , j ≤ l ( length of path sequence ) , of sets S 1 = {1} and i ffi= j and wi = wj . For example , in Figure 3 , S 3 = {2} both have wi as node 3 , thus can be conflated . S
++ i and S
++
++
++
++
++ 1 and S
+This will switch the perspective of suffix equivalence to be in terms of a node n in the graph , rather than in terms of m2 ie , {1 , 2} SolveSteps . For example , conflated S can be seen as the suffix equivalent set wrt node 3 . In effect , conflating will summarize suffix equivalence relationships between nodes that reach n , allowing us to have |VG| suffix equivalent node sets or Suffix equivalent Sets rather than l sets . However , this representation must also capture information about conflict and anchor nodes as well as their precedence relationships . For example , the information that the suffix equivalent set {1 , 2} has node 3 as an anchor node also needs to be captured by the desired representation .
+Definition 4 . ( Suffix Equivalent Set ( SES ) ) Given a graph G and a setS of query sources , a Suffix Equivalent Set SES(wi,i ) wrt node wi ∈ VG at m SolveStep i is a labeled set {X}y where y ∈ VG is referred as a label of the suffix equivalent set representing the anchor node of SES(wi,i ) , and X is either a subset of S or a set of suffix equivalent sets . For example , SES(3,3 ) = 3 . This represents the fact that sources 1 and 2 are suffix equivalent wrt node 3 at step 3 .
+.{1}1 , {2}2 fi
+Since labels associated with each nested set represent an anchor node , a desirable property of an SES is that its nesting structure preserves the structure of path prefixes . This ensures that reassembling the subpaths from SES structure information produces valid path structures .
+Definition 5 . ( Prefix Preserving Property of SESes ) The prefix preserving property of an SES implies that if we generate a set AL = {al1 , . . . , alm} where ali is a sequences of anchor nodes ( ie , labels ) ordered from the innermost to the outermost level , and 1 ) every anchor node is represented in some ali ; 2 ) ∀ali = ( n1 , . . . , nt ) is ordered topologically ; 3 ) ∀ali,∃alj ∈ AL st suffix(ali)= suffix(alj ) .
+The inclusion relationships between suffix equivalent sets that naturally arise due to the transitivity of suffix equivalence enable us to reuse previously computed suffix equivalent sets . This results in an incremental computation strategy that aligns naturally with the execution of M Solve . This leads to an inductive definition of suffix equivalent sets wrt a node n in a way that updates their states over mSolveSteps i in which n is the wi as follows : i ) i = 0 : SES(s,0 ) = {s}s , ∀s ∈ S ii ) i > 0 : SES(wi,i ) = SES(wi,k ) ⊕θ SES(vi,h ) , where 1 ≤ k , h ≤ i and steps k and h are the most recent m SolveSteps
+427 that update SES(wi,k ) and SES(vi,h ) resp . and ⊕θ is a combination operator which we define shortly . In case i ) , SES(s,0 ) = {s}s because at m SolveStep 0 , node s is only suffix equivalent to itself and there is no anchor node besides itself since no paths have been computed . To define the ⊕θ operator in case ii ) , we assume the existence of the following functions defined on suffix equivalent sets . For SES(n,i ) = {X}y and SES(m,j ) = {U}t , • add(SES(n,i),SES(m,j ) ) returns {X , SES(m,j)}y ; • label(SES(n,i ) ) returns the label y ; • isLabel(SES(n,i ) , r ) returns T rue if r = y ; otherwise , re• isEmpty(SES(n,i ) ) returns T rue if SES(n,i ) = ∅ ; otherDefinition 6 . ( ⊕θ Operation ) Assume SES(vi,h ) is suf wise , returns F alse . turns F alse ; fix equivalent set wrt vi which is last updated at SolveStep h and SES(wi,k ) is suffix equivalent set wrt wi which is last updated at SolveStep k , then , SES(vi,h ) ⊕θ SES(wi,k ) = ⎧⎪⎨ SES(vi,h ) {SES(wi,k ) , SES(vi,h)}wi ⎪⎩ add(SES(wi,k ) , SES(vi,h ) ) If the ⊕θ operator can enforce the prefix preserving property at each m SolveStep , then integrating the operator at every m SolveStep can guarantee the prefix preservation of all SESes at the end of final m SolveStep . isEmpty(SES(wi,k ) ) ¬isLabel(SES(wi,k ) , wi )
+Lemma 1 . Assume ∃SES(wi,k ) and SES(vi,h ) , where 1 ≤ k , h ≤ i and steps k and h are the most recent m SolveSteps that update SES(wi,k ) and SES(vi,h ) resp . At m SolveStep i , SES(wi,i ) = SES(vi,h ) ⊕θ SES(wi,k ) is prefix preserving .
+. are three cases that need to be considered . .
+Proof . To prove that SES(vi,wi ) is prefix preserving , there Condition ( 1 ) , SES(wi,k ) = ∅ =⇒ . m SolveStep i st < i and wi = wi . . This means that so far node wi has i not been reached by any other node except vi . Therefore , all nodes including those that are suffix equivalent wrt vi reach wi via vi due to the transitivity of path connectedness . Since there is no new branch to wi , wi is not an anchor node . For SES(wi,i ) , wi is not an anchor node and the anchor node for SES(wi,i ) is the same asSES ( vi,h ) . For the second and third conditions of ⊕θ , some SES has already been associated with wi from a previous mSolveSteps . We will need to update the SES to include new sources and/or new anchor node sequences to reflect any new prefix paths depending on two possibilities : either wi has already been identified as an anchor node or wi is just being identified as an anchor node . In the former , the nesting level does not change and we merely need to add vi ’s SES into the current outermost level that has wi as anchor node . ( This represents new set of prefixes that merge at wi ) . Nesting in this way preserves the ordering in which these nodes will appear on a path . In the latter case , we need to increase the nesting depth by creating a new SES with the two SESes nested as elements and make wi the label for the outermost level . In this case , since the anchor nodes for SES(vi,h ) and SES(wi,k ) meet at wi , nesting them in the new SES preserves the order of these nodes .
+The second and third condition address the two situations when both SESes ( from left and right operands ) are nonempty . First condition addresses condition with SES(wi,k ) as empty . We ignore the case of both operands being empty since we initialize the SESes for each node s in query source set ( left operand ) with {s}s at the beginning . Subsequently , the destination node ( right operand ) of the previous step serves as the source node ( left operand ) for the next step .
+Example 3 . Figure 3(b ) shows the first 5 steps of computing SESes for mq = ( {1 , 2} ,{11 , 15} ) given the graph and its path sequence in Figure 3(a ) . Initially ( ie , i = 0 ) , we have SES(1,0 ) = {1}1 and SES(2,0 ) = {2}2 . SESes As shown here , m SolveStep 1 propagates SES(1,0 ) ie {1}1 to node 3 leading to SES(3,1 ) = {1}1 . On the other hand , computed at m SolveSteps 1 to 5 are listed in Figure 3(b ) . at m SolveStep 3 , source 2 meets source 1 at node 3 , thus , we nest SES(2,0 ) and SES(3,1 ) into SES(3,3 ) and update its label to 3 resulting in SES(3,3 ) = 3.3
+Implementation
+{1}1 ,{2}2
+3 .
+Our approach for MSMD path query evaluation with suffix computation sharing is a two phase algorithm PrefixSolve that consists of algorithms sesSolve and solveSelectedDest . sesSolve ( Algorithm 1 ) extends the original M Solve algorithm by integrating the management of suffix equivalent sets as well as corresponding prefix and suffix sub path expressions and their associations . solveSelectedDest ( Algorithm 2 ) reconstructs complete path information for destination nodes that are found to be reachable from some source using information about any shared suffixes that reach those destinations . 331 The sesSolve Algorithm For each node v , sesSolve maintains two lists P ref ixList and Suf f ixList in SA[v ] that store prefix and suffix path expressions respectively and a map that associates node v to the current state of v ’s SES ie SES(v,i ) . sesSolve initializes the SES(s,0 ) with {s}s and P ref ixList with ffs , s , ε for s ∈ . ∈ VG \ S , it S and stores them in SA[s ] ( lines 1 3 ) . For s ].P ref ixList to ∅ ( lines 4 5 ) . sets SA[s At m SolveStep i ( ie , the ith iteration ) , sesSolve mainly performs two tasks : 1 ) computing prefix path expressions or storing suffix path expressions ; and 2 ) updating suffix equivalent set . Task 1 is performed by considering two cases :
+]SES(s,0 ) and SA[s
+.
+.
+• Case 1 ( lines 9 10 ) : SES(vi,i ) = {s}s , which means that at step i , only s has been found to have a path to vi . There are no redundant constituent steps in m SolveStep i , and thus the extension ( vi , wi ) is produced for s in the same way as the S Solve resulting in prefix path expression P E(s , wi ) stored in SA[wi ] .
+• Case 2 ( lines 11 12 ) : SES(vi,i ) is not a singleton , which means that a set of suffix equivalent sources all reach vi and share P Ei(vi , wi ) as suffix path expression . Thus , the algorithm inserts P Ei(vi , wi ) into SA[wi].Suf f ixList .
+Then , sesSolve updates SES(wi,i ) ( lines 13 19 ) according to the definitions 4 and 5 . Example 4 . Given mq = ( {1 , 2} ,{11 , 15} ) in Figure 3 , after initialization we have SES(1,0 ) = {1}1 and SES(2,0 ) = {2}2 stored in SA[1 ] and SA[2 ] resp . At step 1 , since SES(1,0 ) is singleton , sesSolve produces ( 1 , 3 ) extension resulting in prefix path expression P E(1 , 3 ) = ff1 , 3 , a . We update SES(3,1 ) = {1}1 . SESes at steps 2 to 4 are computed similarly and shown in Figure 3(b ) . In addition , we compute prefix path
+428 Algorithm 1 : sesSolve
+Input : psIndex , S ; Output : An array SA to store SESes , P ref ixList , and Suf f ixList for node d at location d ;
+Algorithm 2 : solveSelectedDest
+Input : SA[d ] , where d ∈ D ; Output : SA[d ] consisting of complete path expressions for all sources to d ;
+1 P Q ← ∅ ; 2 SA[d].bP E ← ( d , d , ε ) ; 3 P Q.insert(SA[d ] ) ; 4 while P Q.size > 0 do 5 pq ← P Q.dequeue( ) ; cID ← P Q.getID( ) ; y ← label(pq.SES ) ; if y '= cID then while y '= sID do
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19 foreach P E with source sID in pq.Suf f ixList do
+SA[sID].bP E ← pq.Suf f ixList.get(sID ) • pq.bP E ∪ SA[d].P ref ixList.get(sID ) ; P Q.insert(SA[sID ] ) ; else if ses = {s}s then foreach nested ses with label z in pq.SES do P E(s , d ) ← SA[y].P ref ixList.get(s ) • SA[y].bP E ∪ SA[d].P ref ixList.get(s ) ; SA[z].bP E ← SA[y].Suf f ixList.get(z ) • SA[y].bP E ∪ SA[d].P ref ixList.get(z ) ; P Q.insert(SA[z ] ) ; else
+20 return SA ;
+• assembling suffix path expressions ; specifically , it computes SA[sID].bP E representing paths from sID to d by concatenating P E(sID , cID ) ( currently retrieved suffix sub path expression ) with SA[cID].bP E which is the already assembled suffix path expression for cID ; Note that , initially , we have SA[d].bP E = ffd , d , ε .
+• concatenating the prefix path expressions in SA[cID ] . P ref ixList with SAcID.bP E if there exist any prefixes for cID to compute path expressions for d .
+During each step , there are two cases need to be considered : ( 1)(lines 9 12 ) if current node does not have prefixes associated with it , then the algorithm only assembles the suffix path expressions for each retrieved node until it encounters the node whose prefix list is not empty ; ( 2)(lines 13 19 ) otherwise , the algorithm first assembles the suffix path expressions using retrieved suffix sub path expression and then computes path expressions for d . At the end of the algorithm , SA[d].bP E stores all complete path expressions for d from sources that reach d . Example 5 . Considering the destination 11 , at initialization , we have SA[11].bP E = ff11 , 11 , ε . The algorithm starts by processing SA[11 ] . From example 3 , we have that SES of 11 has label 11 satisfying the condition y = cID . The algorithm then retrieves and processes its nested SESes . For singleton SESes , eg , {1}1 ( ie , source 1 reaches 11 via a prefix sub path expression P E(1 , 11) ) , it computes P E(1 , 11 ) by concatenating P E(1 , 11 ) with SA[11].bP E resulting in P E(1 , 11 ) = ff1 , 11 , e . Similarly , we compute P E(2 , 11 ) = ff2 , 11 , h . For non singleton SES ie , SES(3,3 ) , the algorithm computes SA[3].bP E by concatenating the suffix path expression ie , P E(3 , 11 ) with SA[11].bP E resulting in SA[3].bP E = ff3 , 11 , i . It then processes SA[3 ] by retrieving the nested SESes in SES(3,3 ) and processing them
+1 foreach s ∈ S do
+SA[s].SES(s,0 ) ← {s}s ; . ∈ V ( G ) \ S do ]SES(s ,0 ) ← ∅ ;
+SA[s
+4 foreach s . 5
+SA[s].P ref ixList.add((s , s , ε ) ) ;
+6 i = 1 ; 7 while P Ei(vi , wi ) ← psIndex.getN ext( ) not NULL do src ← label(SA[vi].SES(vi ,i ) ) ; if |SA[vi].SES(vi ,i)| = 1 then SA[wi].P ref ixListadd(SA[vi]P ref ixList.get(src)• P Ei(vi , wi ) ∪ P E(src , wi ) ) ; else if |SA[vi].SES(vi ,i)| > 1 then
+SA[wi].Suf f ixList.add(P Ei(vi , wi ) ) ;
+//Handle condition isEmpty(SES(wi ,k ) ) if SA[wi].SES(wi ,i ) = ∅ then
+SES(vi ,h ) ;
+//Handle condition isLabel(SES(wi ,k,wi ) ) else if label(SA[vi].SES(vi ,i ) ) =w i then //Handle condition ¬isLabel(SES(wi ,k,wi ) ) add(SES(wi ,k ) , SES(vi ,h ) ) ; else
+{SES(wi ,k ) , SES(vi ,h)}wi ; i = i + 1 ;
+2
+3
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21 return SA ; expressions P E(1 , 11 ) = ff1 , 11 , e , P E(2 , 3 ) = ff2 , 3 , k , and P E(2 , 11 ) = ff2 , 11 , h . Then , at step 5 , since SES(3,3 ) is not singleton , which satisfies the condition on line 11 , we only save P E(3 , 11 ) = ff3 , 11 , i in SA[11 ] instead of producing ( 3 , 11 ) extension for 1 and 2 .
+At the end of sesSolve , each non empty element of SA maintains a suffix equivalent set and a set of prefix and suffix sub path expressions . solveSelectedDest uses suffix equivalent sets to determine associations between suffix and prefix path expressions and concatenates them to produce complete path expressions for source destination combinations .
+332 The solveSelectedDest Algorithm To eliminate the wasted computations , we only run solveSelectedDest for query destinations . Further , given some profitable ordering scheme used for graphs eg , topological ordering of its strong components , we can select the order of destinations to run thoughtfully , so that repeated computations do not arise across computations for different destinations . For the query mq in Example 3 , running node 11 before node 15 , leads to repetition for some of the computation that has been done for 11 because the path expression from source to 15 contains the one from source to 11 as a subexpression . We can avoid this by proceeding in reverse topological order from destination nodes . In implementation , we keep nodes to be processed in order using a priority queue . The algorithm uses BFS strategy to explore the nodes that reach d in a backward direction and processes them in a specific order ie , the element with higher topological order has higher priority . For each node cID being processed , the algorithm does two things :
+429 Table 2 : Properties of the Datasets BSBM
+SP2B
+1,571,149 9,053,235 5,798,502 1,569,530
+1,154,367 7,757,574 4,867,370 1,154,332
+# of Nodes # of Edges # of PEs # of SCCs
+BioCyc 1,160,709 5,278,504 4,192,419 105,014 individually resulting in P E(1 , 11 ) = ff1 , 3 , a• SA[3].bP E = ff1 , 11 , a • i ∪ e and P E(2 , 11 ) = ff2 , 11 , k • i ∪ h .
+Theorem 1 . At the end of sesSolve , all the shortest complete prefixes to one anchor node have been computed and all path expressions that comprise suffixes have been recorded in the topological order . solveSelectedDest assembles prefixes with associated suffixes correctly . ( Proof omitted for brevity )
+To further improve performance , we integrated a prefetching strategy to decrease the latency of accessing a path expression during M Solve . This is achieved by prefetching a set of path expressions into a cache using a separate thread , which ensures that the path expressions are in memory when needed . Retrieving a subsequence of path expressions also reduces latency by reducing the overall seek time .
+4 . EXPERIMENTAL EVALUATION
+In this section , we evaluate the scalability and performance of the different approaches for MSMD path queries . Among the algebraic approaches , we compared 3 variants with different optimization strategies : Iterative Multisolve ( ITRMS ) , M Solve ( MSOLVE ) , and PrefixSolve ( PRFS ) . Additionally , we compared an extended version of PRFS that enables a prefetching strategy ( PRFSPF ) . We also implemented 1 representative navigational evaluation technique DFSS that is based on depth first search that executes on disk resident graphs . To minimize the random I/O access patterns typically generated by navigational style algorithms , we used a storage model that clusters nodes on disk based on disconnected subgraphs of a graph . The subgraphs were indexed using BerkeleyDB and for each pair of query sourcedestination nodes , the associated subgraphs were loaded into memory , and the DFSS algorithm was executed . Since joinbased techniques [ 18 , 15 ] address shortest or bounded length paths and are not optimized for multiple sources and destinations , we do not compare against them in this evaluation . We also do not include algorithms requiring memory based graphs [ 11 , 26 ] .
+Setup . All experiments were conducted on a machine with 2.33GHz Intel Xeon running on Linux , with a 2618 kernel with maximal runtime memory of JVM was set to 15G . All algorithms were implemented using Java 1.6 and Berkeley DB Java Edition was used for storage and B+ tree indexing with a cache size of 8G . Each query was executed three times without dropping the caches and the average execution time was measured across three runs .
+Datasets . Two synthetic datasets generated using RDF benchmark generators BSBM [ 2 ] and SP2B [ 3 ] were used for scalability evaluation . Additionally , a subset of the realworld data collection Biocyc [ 1 ] that consists of 1763 databases describing the genome and metabolic pathways of a single organism was used . The path sequences for datasets were precomputed and loaded into BerkeleyDB prior to query processing . Table 2 summarizes the properties of the datasets .
+Table 3 : PEs and Query Time on BioCyc Dataset
+# of Nodes P Exps Time P Exps Time
+MSOLVE
+PRFS
+100K 200K 400K 600K 850K 1100K
+112,219 227,122 454,387
+– – –
+116 269 662
+– – –
+293 472 472 7,193 7,193 15,991
+6 11 31 82 85 86
+4.1 Scalability Evaluation
+We conducted a total of 6 scalability experiments by 1 ) varying sizes of MSMD path queries ( from 20 to 200 ) with a fixed size of data graphs ; 2 ) varying sizes of the data graphs ( from 100K to 1100K ) with a fixed size of MSMD queries ( 120 ) . Note that the size of a MSMD path query mq’= ( S , D ) is defined as |S| + |D| . For both cases , a subset of nodes from the three datasets were selected as sample queries . The set of nodes were verified to be connected .
+Figure 4(a) (c ) show the results of 1 ) for BioCyc , SP2B , and BSBM datasets , resp , while Figure 5(a) (c ) show the results of 2 ) . Note that missing bars in the charts represent cases where the corresponding algorithms did not finish query evaluation within two hours or ran out of memory before obtaining the results . The experimental results show overall superiority of the algebraic based PRFS algorithm whose performance gains over other approaches increases with query and data sizes , indicating better scalability . The reasons are as follows .
+The query decomposition strategy of DFSS results in large I/O costs and repeated exploration of the same search space across multiple subqueries making the total cost prohibitive , particularly for queries with a large number of query nodes . ITRMS suffers similar limitations . However , for BSBM dataset , DFSS outperforms ITRMS for both scalability experiments ( see Figure 4(c ) and Figure 5(a) ) . We note that BSBM datasets consist of a large number of star substructures with depth of 1 and the schema graph is small with 10 nodes and 8 edges resulting in low connectivity . This results in a smaller search space for DFSS during query processing . On the other hand , the algebraic techniques scan the entire path sequence representing the entire graph . We also notice that for Biocyc dataset , DFSS outperforms ITRMS when the number of query nodes is no greater than 100 . A close observation of the results reveals that some sources and destinations ( randomly selected ) are not connected . In this case , DFSS exploits the indexing strategy to detect the disconnection immediately without exploring the graph ( different components have different range of keys ) . MSOLVE shows improved performance by avoiding a potential |Q| ( ie , the number of query nodes ) separate disk I/Os for each path expression . The results for PRFS shows the benefits of avoiding redundant and wasted computations .
+Table 3 shows the total number of path expressions ( ie path expression computation as a unit of work ) computed and execution time of the solve process to highlight the performance characteristics of both algorithms on six data graphs ranging from 100K to 1100K nodes ( BioCyc dataset shown in Figure 5(b) ) . Missing entries indicate failure to compute results after 2 hours . PRFS demonstrates clear benefits by doing less work due to the sharing strategy reflected in the fewer number of path expressions computed .
+430 DFSS
+ITRMS MSOLVE
+PRFS
+DFSS
+ITRMS MSOLVE
+PRFS
+DFSS
+ITRMS MSOLVE
+PRFS
+Dataset=Biocyc
+10000
+Dataset=SP2B
+10000
+Dataset=BSBM i
+) s ( e m T n o i t u c e x E
+1000
+100
+10
+1
+20
+( b )
+80
+60
+40 100 # of Query Nodes
+120
+200 i
+) s ( e m T n o i t u c e x E
+1000
+100
+10
+1
+20
+( c )
+80
+60
+40 100 # of Query Nodes
+120
+200 i
+) s ( e m T n o i t u c e x E
+10000
+1000
+100
+10
+1
+20
+( a )
+80
+60
+40 # of Query Nodes
+100 120 200
+Figure 4 : Scalability study with increasing number of query nodes
+DFSS
+ITRMS
+MSOLVE
+PRFS
+10000
+Dataset=BSBM
+DFSS
+ITRMS MSOLVE Dataset=Biocyc
+10000
+PRFS
+DFSS
+10000
+ITRMS MSOLVE Dataset=SP2B
+PRFS i
+) s ( e m T n o i t u c e x E
+1000
+100
+10
+1
+( a )
+100
+400
+200 600 # of Nodes(K ) i
+) s ( e m T n o i t u c e x E
+1000
+100
+10
+1
+850
+1100
+100
+( b )
+600
+400
+200 # of Nodes(K )
+850
+1100 i
+) s ( e m T n o i t u c e x E
+1000
+100
+10
+1
+( c )
+100
+400
+600
+200 # of Nodes(K )
+850
+1100
+Figure 5 : Scalability study with increasing size of graphs
+4.2 Performance Evaluation
+In this sub section , we take a closer look at the PRFS algorithm . We first study the impact of paths originating from different query nodes but with overlapping suffixes , on the performance of algorithms . Then , we present a study on the benefits of optimization using the prefetching strategy . 421 We introduce a metric DP O(S , D ) to capture the degree of path overlap between a set of sources S and a set of destinations D defined as follows :
+Impact of DP O on the Performance
+DP O(S , D ) =
+# of nodes in the overlap paths betweenS and D total # of nodes in all paths between S and D .
+Intuitively , a smaller DP O implies a lower degree of overlap . For this experiment , DP O varied from 0 to 0.67 , and the graph size varied from 100K to 1100K nodes . Test cases were generated by running M Solve with 100 randomly selected query nodes to obtain path information for the nodes . We then select source and destination node sets manually based on connectivity and compute DP O for each case . The total number of query nodes used for this experiment is less than 40 since the algorithms that do not use a sharing strategy have prohibitively long execution times with large query sizes . The results are shown in Figure 6 . When DP O = 0 ( no path overlap in query node paths ) , PRFS offers no advantage and is equivalent to M Solve . On the other hand , for DP O = 0.26 , 0.5 , and 0.67 , PRFS ’s performance advantage is clear for all data sizes .
+In addition , we observe that DFSS outperforms PRFS and other approaches for DP O = 0 and 026 The reasons are as follows . During the query processing , DFSS first checks if the pair of nodes is in the same component , if yes , it loads the component into memory and finds paths using DFS ; otherwise , no path exists between them . In this test , since all query nodes reside in the same component , DFSS only loads the component into the memory once similar to an in memory algorithm . However , for DP O = 0 , PRFS will not benefit from saving redundant path expressions computations since there are no common suffix path expressions . For DP O = 0.26 , there are only 12 pairs of nodes to be computed , so DFSS performs well in this case . On the other hand , for the last two cases with high existence of common suffix path expressions , PRFS outperforms the other approaches .
+422 Optimization Using Prefetching Strategy Here , we study the performance of PRFS with prefetching optimization , denoted by PRFSPF . In this experiment , we introduce a parameter called prefetching capacity ( P C ) to capture the proportion of path expressions prefetched to memory . Figure 7(a ) and ( b ) compare the time cost by PRFS and PRFSPF on BioCyc and SP2B datasets for P C = 10 % and 50 % , resp . For all six data sizes over two datasets , we see an overall performance gain of up to 22 % for P C = 10 % and 54 % for P C = 50 % . Prefetching a good number of path expressions into cache allows m Solvesteps to retrieve path expressions from memory instead of from disk without requiring the entire path sequence to be maintained in memory . This decouples the latency associated with the getNext( ) call on the B+ tree index . However , in some cases , PRFS may not benefit from prefetching . For example , for the BioCyc dataset with 100K nodes , when P C is set to 10 % , execution time of PRFSPF is similar to that of PRFS . A close observation reveals that : 1 ) All
+431 200 180 160 140 120 100 80 60 40 20 0
+) s ( i e m T n o i t u c e x E
+Dataset=Biocyc o = 0
+DFSS ITRMS MSOLVE PRFS
+) s ( i e m T n o i t u c e x E
+100 200 400 600 850 1100
+Dataset=Biocyc o = 0.26
+DFSS ITRMS MSOLVE PRFS
+100 200 400 600 850 1100
+600
+500
+400
+300
+200
+100
+0
+Dataset=Biocyc o = 0.5
+DFSS ITRMS MSOLVE PRFS
+100 200 400 600 850 1100
+600
+500
+400
+300
+200
+100
+0
+) s ( i e m T n o i t u c e x E
+Dataset=Biocyc o = 0.67 DFSS ITRMS MSOLVE PRFS
+100 200 400 600 850 1100
+600
+500
+400
+300
+200
+100
+0
+) s ( i e m T n o i t u c e x E
+( a )
+# of Nodes(K )
+( b )
+# of Nodes(K )
+( c )
+# of Nodes(K )
+( d )
+# of Nodes(K )
+Figure 6 : Performance study with varying DPO i
+) s ( e m T n o i t u c e x E
+PRFS
+PRFSPF(10 % )
+PRFSPF(50 % )
+PRFS
+PRFSPF(10 % )
+PRFSPF(50 % )
+100 90 80 70 60 50 40 30 20 10 0
+Dataset = Biocyc Query Nodes = 200 i
+) s ( e m T n o i t u c e x E
+100
+200
+400
+600
+850
+1100
+# of Nodes ( K )
+( b )
+80 70 60 50 40 30 20 10 0
+Dataset = SP2B Query Nodes = 200
+100
+200
+400
+600
+850
+1100
+# of Nodes ( K )
+Figure 7 : Varying prefetching capacities solveSelectedDest(Phase II ) sesSolve(Phase I )
+Dataset=Biocyc
+) s m i
+( e m T n o i t u c e x E
+100
+200
+400
+600 # of Nodes(K )
+850
+1100
+( b )
+70000 60000 50000 40000 30000 20000 10000 0 solveSelectedDest(Phase II ) sesSolve(Phase I )
+Dataset=SP2B
+100
+200
+400
+600 # of Nodes(K )
+850
+1100
+( a )
+) s m i
+( e m T n o i t u c e x E
+( a )
+100000 90000 80000 70000 60000 50000 40000 30000 20000 10000 0
+Figure 8 : Impact of PRFS phases on performance path expressions in the path sequence are relatively small containing only single edges . This means that a disk page containing B+ tree contains a large number of path expressions reducing overall disk I/O . 2 ) For all these path expressions , the algorithm produces ∅ extensions . In other words , the algorithm did not build new path expressions using the prefetched path expressions . Therefore , in this case , prefetching does not improve performance . Assuming a fixed size cache , prefetching strategy may not always decrease the query execution time based on the above observations . Therefore , a more optimal prefetching strategy is needed in the future .
+423
+Impact of Two Phases of PRFS on the Performance
+Figure 8 shows the impact of different phases of PRFS algorithm on the performance . The execution time for sesSolve dominates since the reassembly of prefixes and suffixes handled by solveSelectedDest is performed on path expressions in the solve array in main memory and there is less work because complete suffix path expressions have been assembled only once and attached to associated prefixes .
+5 . RELATED WORK
+In recent years , there have been several research efforts in providing navigational functionalities for query languages for RDF data . These languages can be classified into two categories : path pattern matching queries [ 22 , 23 , 20 , 10 , 17 ] that find node pairs connected by paths matching a path pattern ; and path “ extraction ” queries [ 21 , 13 , 4 , 18 , 12 ] that return paths . We will focus our related work discussion on path extraction queries . For evaluating path extraction queries , some existing systems [ 13 , 12 ] leverage navigational style approach which is not suitable for large disk resident data , while some other systems [ 21 , 4 , 18 ] provide solutions from a database perspective by using join based approach . Specifically , [ 18 ] , which is the most closely related to our work , provides a full fledge database solution by proposing a join based graph operation and cardinality estimation for path triples during the query processing . However , all of the above approaches are different from our work in the following aspects : ( 1 ) All these approaches only supported single source multi destination ( or vice verse ) shortest path queries . To use them for MSMD path queries , we need to repeat the process for multiple sources ( or destinations ) , which will lead to inefficiency , especially for disk resident graphs . ( 2 ) Since most of the algorithms are designed for mainly supporting fixed length or shortest path query , it is unclear how to generalize them to solve all path queries . 6 . CONCLUSIONS AND FUTURE WORK This paper extends an algebraic framework to enable sup port for generalized MSMD path query evaluation . It presents framework for work sharing across subqueries that avoids redundant wasted computations . Future work will address the issue of efficient representation of path expressions during the execution time for further performance improvement .
+7 . ACKNOWLEDGMENTS
+The work presented in this paper is partially funded by
+NSF grant IIS 0915865 .
+432 8 . REFERENCES [ 1 ] Biocyc http://downloadbio2rdforg/data/biocyc/ [ 2 ] Bsbm http://www4wiwissfu berlinde/bizer/berlinsparqlbenchmark/
+[ 3 ] Sp2b http://dbisinformatikuni freiburgde/forschung/projekte/sp2b/
+[ 4 ] F . Alkhateeb , J F Baget , and J . Euzenat . Extending sparql with regular expression patterns ( for querying rdf ) . J . Web Sem . , 7(2):57–73 , 2009 .
+[ 5 ] K . Anyanwu , M . P . Kumar , and A . Maduko . Structure discovery queries in disk based semantic web databases . In SKG , pages 336–342 , 2008 .
+[ 6 ] K . Anyanwu , A . Maduko , and A . P . Sheth . Sparq2l : towards support for subgraph extraction queries in rdf databases . In WWW , pages 797–806 , 2007 .
+[ 7 ] M . Arenas , S . Conca , and J . P´erez . Counting beyond a yottabyte , or how sparql 1.1 property paths will prevent adoption of the standard . In WWW , pages 629–638 , 2012 .
+[ 8 ] P . Barcel´o , C . A . Hurtado , L . Libkin , and P . T . Wood .
+Expressive languages for path queries over graph structured data . In PODS , pages 3–14 , 2010 .
+[ 9 ] E . Cohen , E . Halperin , H . Kaplan , and U . Zwick .
+Reachability and distance queries via 2 hop labels . In SODA , pages 937–946 , 2002 .
+[ 10 ] L . T . Detwiler , D . Suciu , and J . F . Brinkley . Regular
+Paths in SparQL : Querying the NCI Thesaurus . AMIA Annual Symposium proceedings / AMIA Symposium . AMIA Symposium , pages 161–165 , 2008 . [ 11 ] C . Faloutsos , K . S . McCurley , and A . Tomkins . Fast discovery of connection subgraphs . In KDD , pages 118–127 , 2004 .
+[ 12 ] V . Fionda , C . Gutierrez , and G . Pirr`o . Extracting relevant subgraphs from graph navigation . In International Semantic Web Conference ( Posters & Demos ) , 2012 .
+[ 13 ] V . Fionda , C . Gutierrez , and G . Pirr`o . Semantic navigation on the web of data : specification of routes , web fragments and actions . In WWW , pages 281–290 , 2012 .
+[ 14 ] G . H . L . Fletcher , M . Gyssens , D . Leinders , J . V . den Bussche , D . V . Gucht , S . Vansummeren , and Y . Wu . Relative expressive power of navigational querying on graphs . In ICDT , pages 197–207 , 2011 .
+[ 15 ] J . Gao , R . Jin , J . Zhou , J . X . Yu , X . Jiang , and T . Wang . Relational approach for shortest path discovery over large graphs . PVLDB , 5(4):358–369 , 2011 .
+[ 16 ] S . Gao , H . Fu , and K . Anyanwu . An agglomerative query model for discovery in linked data : Semantics and approach . In WebDB , 2010 .
+[ 17 ] S . H . Garlik , A . Seaborne , and E . Prud’hommeaux .
+SPARQL 1.1 query language . http://wwww3org/TR/sparql11 query/
+[ 18 ] A . Gubichev and T . Neumann . Path query processing on very large rdf graphs . In WebDB , 2011 .
+[ 19 ] K . Kochut and M . Janik . Sparqler : Extended sparql for semantic association discovery . In ESWC , pages 145–159 , 2007 .
+[ 20 ] A . Matono , T . Amagasa , M . Yoshikawa , and
+S . Uemura . A path based relational rdf database . In ADC , pages 95–103 , 2005 .
+[ 21 ] M . Przyjaciel Zablocki , A . Sch¨atzle , T . Hornung , and G . Lausen . Rdfpath : Path query processing on large rdf graphs with mapreduce . In ESWC Workshops , pages 50–64 , 2011 .
+[ 22 ] A . Seaborne . Rdql a query language for rdf ( member submission ) . Technical report , W3C , January 2004 .
+[ 23 ] A . Souzis . Rxpath specification proposal . [ 24 ] R . E . Tarjan . Fast algorithms for solving path problems . J . ACM , 28(3):594–614 , 1981 .
+[ 25 ] R . E . Tarjan . A unified approach to path problems . J .
+ACM , 28(3):577–593 , 1981 .
+[ 26 ] H . Tong and C . Faloutsos . Center piece subgraphs : problem definition and fast solutions . In KDD , pages 404–413 , 2006 .
+433

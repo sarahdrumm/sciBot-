@@ -1,0 +1,287 @@
+Inverted Index Compression via Online Document Routing
+Gal Lavee
+Technion , Haifa , Israel gallavee@cstechnionacil
+Ronny Lempel , Edo Liberty ,
+{rlempel , edo , orens}@yahoo inc.com and Oren Somekh
+Yahoo! Labs . , Haifa , Israel
+ABSTRACT Modern search engines are expected to make documents searchable shortly after they appear on the ever changing Web . To satisfy this requirement , the Web is frequently crawled . Due to the sheer size of their indexes , search engines distribute the crawled documents among thousands of servers in a scheme called local index partitioning , such that each server indexes only several million pages . To ensure documents from the same host ( eg , wwwnytimescom ) are distributed uniformly over the servers , for load balancing purposes , random routing of documents to servers is common . To expedite the time documents become searchable after being crawled , documents may be simply appended to the existing index partitions . However , indexing by merely appending documents , results in larger index sizes since document reordering for index compactness is no longer performed . This , in turn , degrades search query processing performance which depends heavily on index sizes . A possible way to balance quick document indexing with efficient query processing , is to deploy online document routing strategies that are designed to reduce index sizes . This work considers the effects of several online document routing strategies on the aggregated partitioned index size . We show that there exists a tradeoff between the compression of a partitioned index and the distribution of documents from the same host across the index partitions ( ie , host distribution ) . We suggest and evaluate several online routing strategies with regard to their compression , host distribution , and complexity . In particular , we present a term based routing algorithm which is shown analytically to provide better compression results than the industry standard random routing scheme . In addition , our algorithm demonstrates comparable compression performance and host distribution while having much better running time complexity than other document routing heuristics . Our findings are validated by experimental evaluation performed on a large benchmark collection of Web pages .
+Categories and Subject Descriptors H3m [ Information Systems ] : Information Storage and Retrieval
+Copyright is held by the International World Wide Web Conference Committee ( IW3C2 ) . Distribution of these papers is limited to classroom use , and personal use by others . WWW 2011 , March 28–April 1 , 2011 , Hyderabad , India . ACM 978 1 4503 0632 4/11/03 .
+General Terms Algorithms , Experimentation , Performance
+Keywords Inverted Index , Index Compression , Index Partitioning , Document Routing , Online Algorithm
+1 .
+INTRODUCTION
+Modern search engines serve enormous query loads over tens of billions of Web pages , and are expected to deliver fresh and relevant results to users in sub second time . Due to the sheer size of the Web , search engines partition their index over thousands of servers , where each server typically processes only several millions documents . At query time , the top results retrieved from all servers are merged to produce the final results , which are returned to the user .
+The main data structure used by search engines to efficiently map queries to Web pages is the inverted index [ 2 , 25 ] . The inverted index contains a postings list for each unique term appearing in the corpus . The postings list of a term consists of the list of document identifiers1 ( docIds ) containing it , which are typically sorted by increasing docId values . The list is represented by encoding the gaps ( called dGaps ) between successive docIds . Another data structure in an inverted index is the lexicon , or dictionary , which is a lookup table that for each term in the corpus , points to the postings list corresponding to it .
+It is well known that index size has a major effect on query processing throughput . In addition to the direct reduction in memory and disk space , more compact indexes lead to savings in data transfers and increase the hit rate of memory caches [ 24 , 23 ] . Therefore , a large body of work has focused on index compaction and compression methods . The structure described above leaves two main degrees of freedom for compression optimization . The first is the assignment of docIds to documents ( also referred to as document reordering ) . The second is the actual encoding of the dGaps into bits ( also referred to as dGap compression ) . The basic idea behind an effective docId assignment is to assign “ similar ” documents with close docIds , hence , potentially reducing the dGaps since similar documents contain many common terms . Alas , the problem of finding the optimal docId assignment is NP hard and so various heuristics have been proposed in the literature .
+1Although terms frequencies and offsets within the document occupy a major portion of modern inverted indexes , we focus here on the documents identifiers only .
+WWW 2011 – Session : Search Systems March 28–April 1 , 2011 , Hyderabad , India487 However , previous work has focused on compacting the inverted index of a single server , whereas large corpora are indexed over thousands of servers . A standard approach distributes the corpus in a random fashion across the servers , which in particular routes ( with high probability ) similar documents to different servers . While this adversely affects document reordering schemes , it creates a more balanced query processing workload across the servers and eases communication bottlenecks as pages of popular Web sites are scattered about evenly across the servers .
+This work considers a real time partitioned indexing scenario where newly arriving content must be indexed on some server and made available for search immediately upon arrival . This prohibits the application of time consuming stateof the art document reordering schemes . However , the partitioned setting allows a degree of freedom in the form of the policy that routes incoming documents to the various partitions . We thus apply online document routing schemes – instead of the industry standard random routing scheme – to reduce the aggregated size of the partitioned index . We further monitor and constrain the distribution of documents belonging to the same hosts across the partitions ( referred to as host distribution hereafter ) . We tested our algorithms on the 25 million Web page TREC .gov2 collection . Our main contributions are the following :
+• We introduce the idea of using online document routing for aggregated index size compression in locally partitioned indexes . As far as we are aware , this novel approach has not been studied previously .
+• We propose and evaluate several online routing strategies with regard to their compression , host distribution , and complexity . We show that there exists a tradeoff between the compression of a partitioned index and host distribution across the partitions .
+• In particular , we present a term based routing algorithm . Adhering to a simple document generating model presented in [ 11 ] , we show analytically that the algorithm provides better compression results than the industry standard random routing scheme . In addition , our algorithm demonstrates comparable compression performance and host distribution while having much better running time complexity than other document routing heuristics .
+The rest of this work is organized as follows . Section 2 surveys related work . Section 3 formally defines our model , problem and metrics . Algorithms for document routing are presented in Section 4 , with the term based algorithm analyzed in Section 5 . Our experimental results are reported in Section 6 . We conclude in Section 7 .
+2 . RELATED WORK 2.1 Index Partitioning
+The sheer size of the Web , the enormous number of search queries , and the required low latency , enforce a distributed inverted index architecture [ 2 , 4 , 5 , 25 ] . To support these requirements , both distribution and replication principles are applied . Replication ( also known as mirroring ) means making enough identical copies of the system so that the required query load can be served , and is beyond the scope of this work . Distribution means the way the inverted index is partitioned across a collection of nodes .
+The two main strategies of partitioning an inverted index are local index partitioning and global index partitioning [ 4 ] . According to the local index partitioning strategy ( or document based partition ) , each node is responsible for a disjoint subset of documents in the collection . In the global indexpartitioning strategy ( or term based partition ) , terms are divided into subsets , such that each node stores postings lists only for a subset of the terms in the collection .
+Due to various theoretical and practical considerations , modern large scale search engines follow the local inverted index partitioning strategy and distribute the documents across the nodes [ 4 , 5 ] . Documents can be assigned to nodes using different policies . For example , the hash distribution policy allocates documents to nodes in a random fashion by hashing the documents’ URLs to yield a node identifier [ 2 ] . Various other distribution policies such as round robin distribution are also possible [ 14 ] .
+While random distribution of documents to nodes is commonly used by commercial search engines , other distribution schemes were considered in distributed information retrieval systems and peer to peer networks . For instance , in [ 22 ] the authors used a two pass K means clustering algorithm and a KL divergence distance metric to organize a document collection into 100 topical clusters ( or shards ) and demonstrated the benefits of selectively searching only a few shards per query . Query logs were used by the authors of [ 16 ] to organize a document collection into multiple shards . Selectively searching shards defined by these clusters was found to be more effective than selectively searching randomly defined shards .
+2.2 Inverted Index Compression
+1 , dt
+1 , dt
+2 − dt
+1 , . . . , dt
+2 , . . . , dt nt , where dt
+Here we focus on a single node of a local index partitioning architecture . We consider a simplified model of an inverted index in which the postings list of term t holds the list of docIds containing t , sorted by increasing value . Denote the list by dt i denotes the docId of the i’th document containing t out of nt such documents . The list is actually represented by encoding the first docId and the sequence of gaps ( dGaps ) between successive identifiers thereafter , ie dt nt−1 . The two degrees of freedom available for compressing the size of the lists are ( a ) docId assignment ; and ( b ) dGap encoding . As we focus on the former , we start by briefly reviewing the latter . dGap encoding techniques aim to compress a sequence of integers . The literature contains schemes that encode each gap individually , eg Gamma , Delta , Golomb Rice [ 21 ] and Zeta [ 9 ] encodings , as well as schemes that encode certain blocks of gaps , eg PForDelta [ 24 , 13 ] and Simple9 [ 1 ] . Additionally , the Interpolative Encoding scheme [ 15 ] is applied directly on the docIds rather than their dGaps , and works well for clustered term occurrences . nt − dt
+In general , the docId assignment problem seeks a permutation of the the documents that minimizes the invertedindex size under a specific dGap encoding scheme . As shown in [ 6 ] , this problem is NP hard and various heuristics are used to provide approximations .
+The size of an inverted index is a function of the dGaps . All effective dGap encoding techniques represent smaller numbers with fewer bits ( about logarithmic in the number value ) . Hence , assigning docIds in a way which results in
+WWW 2011 – Session : Search Systems March 28–April 1 , 2011 , Hyderabad , India488 smaller dGaps is the key for better compression . This principle drives most works dealing with docId assignment , and they strive to assign close docIds to “ similar ” documents , ie documents that share many terms .
+Technically , most works define a graph G = ( D , E ) , where D is the set of documents , and E is a set of edges representing the similarity between two documents di , dj ∈ D . One line of work started by [ 17 ] traverses the graph G to find the maximal weight path connecting all the nodes , assigning docIds accordingly . This is equivalent to the NP Hard traveling salesman problem ( TSP ) . Several TSP approximations were applied for docId assignment in [ 17 , 7 , 12 ] . In [ 17 ] , a simple greedy nearest neighbors ( GNN ) approach is used to add one edge at a time . To reduce the computational load , [ 7 ] uses singular value decomposition ( SVD ) to reduce the dimensionality of the term document matrix . To scale up TSP based schemes [ 12 ] proposes a new framework based on computing TSP on a reduced sparse graph obtained through locality sensitive hashing .
+In yet another line of work , the nodes of G are clustered according to their similarity and close docIds are assigned to the nodes ( documents ) within each cluster . A top down approach is used in [ 8 ] , where the whole collection is recursively split into sub collections , inserting “ similar ” nodes into the same sub collections . Then , the sub collections are merged into an ordered group of nodes . A bottom up approach called k scan was proposed in [ 19 ] . A hybrid method which combines k scan clustering and TSP for intra cluster docId assignment is proposed by [ 6 ] .
+A different approach , which is both highly scalable and highly effective , was proposed for Web collections in [ 18 ] . It assigns docIds according to the lexicographically sorted order of the documents’ URLs , utilizing the fact that URL similarity is a strong indicator of document similarity . The scheme was found to perform remarkably well on various Web collections indexed as a whole .
+In all the aforementioned works , a heuristic of docId assignment or an encoding of dGaps were empirically tested against several collections and compared to the results of other works . In contrast , [ 11 ] analyzes the compressibility of a collection whose documents are generated by a simple probabilistic model in which terms are chosen independently from a given distribution .
+2.3 Online Problems
+Online algorithms propose solutions to problems where the input is not known in advance and must be processed as it arrives in a sequential “ online ” fashion [ 10 ] . At first glance , the document routing problem tackled in this paper resembles two classical online problems the Metrical Task System ( MTS ) and the Load Balancing ( aka Job Scheduling ) problems .
+MTS is a general framework for online problems that generalizes several known online problems such as the paging problem and the k servers problem [ 10 ] . An MTS is composed of two components . The first is a metric space M =< S , d > , where S is a set of points in the space and d : S × S → R is a metric over S . The second component of an MTS is a set of tasks R . Each task r ∈ R may be seen as a vector < r1 , r2 , . . . , r|S| > of costs where each entry , ri , is the cost of processing the request in state i ∈ S . Since the requests must be processed in the order which they arrive , the cost of an MTS algorithm is then the cost of moving from one state to another plus the cost of processing each request in the current state , given by the formula :
+ALG(σ ) = n
+Xi=1 d(ALG(i − 1 ) , ALG(i ) ) + ri(ALG(i ) ) , n
+Xi=1
+Here σ denotes a particular request sequence of size n and ALG(i ) denotes the state of the algorithms immediately before processing request i .
+The Load Balancing problem seeks to assign arriving jobs requests to m possible machines ( one machine per job ) . Each of the jobs is associated with a cost , and a load balancing algorithm ’s objective is to balance the cumulative cost of jobs assigned to each machine . We may think of a job j as a vector rj =< rj,1 , rj,2 , . . . , rj,m > , where rj,i is the cost of job j on machine i [ 3 ] .
+The major difference between the document routing problem and either MTS or Load Balancing stems from the fact that the cost associated with appending document d to index partition j depends on the sequence of documents previously routed to j . This doesn’t fit at all within the Load Balancing framework , and causes a factorial explosion of states in MTS that renders its computation infeasible and its competitiveness non existent . Therefore , we cannot transfer the analytical results of MTS or Load Balancing to our setting . Nevertheless , load balancing approaches and intuitions may still be applied and assessed empirically ( see Section 4 ) .
+3 . FORMAL PROBLEM DEFINITION
+The online problem setting we tackle is the following . The system consists of a document dispatcher and m ( initially empty ) index partitions . Documents , modeled as bags of words , arrive in some arbitrary sequence to the dispatcher ( eg as the result of a large scale distributed crawl policy ) . Each document belongs to some Web host . The dispatcher must immediately route each document to one of the m partitions , whereby that partition simply appends the document to its existing inverted index . Each index consists of ( 1 ) a dictionary , and ( 2 ) inverted lists per term . The inverted lists encode document IDs only , ie no intradocument offsets or any other payload .
+For example , consider a document d containing terms t1 , . . . , tk that is appended as the j’th document of partition ℓ . d will be assigned docId j on ℓ . Any of t1 , . . . , tk that has not appeared in any of the previous j − 1 documents routed to ℓ will be added to ℓ ’s dictionary , and docId j will then be appended by dGap encoding to the k postings lists corresponding to the terms . ie
+The dispatcher attempts to minimize the overall index the sum of index sizes on all partitions , while size , maintaining some balance between the number of pages from each host residing on each partition . Specifically , our algorithms will typically attempt to minimize the overall index size subject to some constraint on the skewness allowed in the distribution of same host pages across the m partitions . Since documents are routed and indexed one at a time ( no buffering is allowed , either at the dispatcher or on the partitions ) , only single dGap encoding schemes apply . Specifically , our experiments use Delta encoding . Block based dGap encoding schemes such as PForDelta and Simple9 are not applicable .
+The following subsections formally define our metrics for index size and host distribution across partitions .
+WWW 2011 – Session : Search Systems March 28–April 1 , 2011 , Hyderabad , India489 3.1 The Bits per Posting Metric
+4 . ALGORITHMS
+Let a corpus with N overall postings be indexed across m partitions , and let Ti denote the set of distinct terms on the i’th partition . Let t be a term appearing in nt documents in some partition , and denote those docIds by dt 2 < . . . < dt nt . Assume all postings lists are encoded using Delta encoding . Then , the overall size of all postings lists on the i’th partition , Pi , is given by
+1 < dt
+Pi = Xt∈Ti δ(dt
+1 ) + nt
+Xj=2
+δ(dt j − dt j−1 ) ! , where δ(k ) is the length ( in bits ) of the Delta encoding of the integer k :
+δ(k ) = 1 + ⌊log2 k⌋ + 2⌊log2(1 + ⌊log2 k⌋)⌋ .
+( 1 )
+The overall size of the postings across the m partitions , P , is defined as m
+P =
+Pi .
+Xi=1
+We further define the overhead OH of a partitioned index as the space taken by the m dictionaries of the individual partitions . Each entry of the i’th dictionary is a pointer into the sequence of postings lists on the i’th server , and hence requires log2 Pi bits . Overall ,
+OH =
+|Ti| log2 Pi . m
+Xi=1
+Finally , the bits per posting metric comes in two flavors , with and without overhead . Those are simply P+OH and P N , respectively . 3.2 Host Distribution Measure
+N
+We evaluate the distribution of pages belonging to Nh hosts across m partitions using the Chi squared ( χ2 ) distribution [ 20 ] . Let Nh,i denote the number of documents from host h on partition i , and denote by Ni the total number of documents on partition i . Also , let ph denote the proportion of the documents belonging to host h of the total number of documents , N . The following host balancing value B is distributed χ2 with ( m − 1)(Nh − 1 ) degrees of freedom :
+B = m
+Nh
+Xi=1
+Xh=1
+( Nh,i − Ni · ph)2
+Ni · ph
+Essentially , this expression checks the null hypothesis that the host distribution resulted from a random routing of documents to the partitions . Intuitively , the value corresponding to a document routing scheme that approximately preserves the overall host distribution on each of the servers will be low .
+When the number of degrees of freedom is large , the exact χ2 distribution is difficult to compute . Hence we use a standard Normal approximation , where the mean is the number of degrees of freedom and the variance is twice this number . We will thus report the value
+B − ( m − 1)(Nh − 1 ) p2(m − 1)(Nh − 1 )
+, which is an approximately normally distributed random variable N ( 0 , 1 ) .
+This section described several Algorithms for online doc ument routing in the framework defined in Section 3 .
+Random document routing .
+The random algorithm , commonly used in search engines , simply routes each incoming document to a partition chosen uniformly and independently at random .
+Greedy document routing .
+The greedy algorithm routes each document d to the partition whose inverted lists will grow by the least amount when appending d to its existing index .
+Let d contain the set of terms Td and denote by φ(j , t ) the dGap created in the postings list of term t ∈ Td on partition j , j ∈ {1 , 2 , . . . m} upon appending d to the current state of partition j . Note that φ(j , t ) ranges from 1 to the number of documents already routed to partition j ( in case term t has not yet appeared there ) .
+The change in the size of the inverted lists of partition j upon appending document d , ∆(j , d ) is thus given by :
+∆(j , d ) = Xt∈Td
+δ(φ(j , t ) ) ,
+( 2 ) where δ(· ) denotes the Delta dGap encoding function ( 1 ) .
+Load balancing document routing .
+The load balancing algorithm is inspired by the relationship of our problem to the online load balancing problem of permanent jobs on unrelated machines . In this algorithm , which is based on [ 3 ] , we start with an initial estimate L of the maximum load ( ie , the maximum aggregated index size ) . We then calculate the normalized load ˜ℓj,d = ℓj,d/L and normalized cost of adding the next document d , C(j , d ) = ∆(j , d)/L , for each partition j = 1 . . . m . Here ∆(j , d ) denotes the cost of adding document d to partition j ( see equation ( 2) ) , and ℓj,d denotes the size of partition j assuming document d will be routed to it .
+Next , we compute the following cost function for all par titions :
+˜ℓj,d+C(j,d ) − a
+˜ℓj,d , where a = 1 + a
+1 1.1
+, and route the document to the partition of lowest cost . As more documents are added to the index , it is possible that the initial guess of the maximum load , L , will be exceeded . In this case we simply update our maximum load estimate to 2L . More precisely , we check if ℓj,d + ∆(j , d ) > βL , where β is a parameter ( see [ 3] ) . For the unrelated machines load balancing problem , this algorithm promises an O ( log m ) competitive solution . Of course , as our document routing algorithm is different , this analytical guarantee does not hold .
+Term based document routing .
+The term based algorithm associates a disjoint set of “ representing ” terms with every partition . Each new document is routed to the partition with which it has the most overlapping terms . Section 5 proves that this algorithm achieves better compression than random routing , the current de facto standard .
+The algorithm requires a strategy for associating the terms
+WWW 2011 – Session : Search Systems March 28–April 1 , 2011 , Hyderabad , India490 in such a way that the probability of a particular term to “ represent ” each partition is about equal , as is the total probability mass of terms assigned to each partition . Due to the Power law nature of term popularities , random association of terms to partitions creates partitions with imbalanced probability mass of their assigned terms . We therefore used a heuristic approach which first sorts the terms in the corpus according to frequency2 , and then associates them in a “ zig zag ” pattern , ie the m highest frequency terms are associated with partitions 1m in ascending order ; the next m highest frequency terms are associated with partitions m1 in descending order ; and so on . After this initial phase , we use iterative swapping of the highest frequency term from the partition with the maximum cumulative frequency ( over all terms associated with it ) with the lowest frequency term from the partition with the minimum total frequency . This process is allowed to iterate until convergence of the difference between the maximal cumulative frequency and the minimal cumulative frequency .
+Note that in practice there ’s no need to associate all terms in the corpus among the servers . Our experiments will leave most terms unassigned , effectively ignoring them when making routing decisions . 4.1 Adding Host Balancing Constraints
+We extend both the Greedy and Term based routing algorithms by limiting the number of documents from each host that are assigned to any single partition3 . The resulting routing schemes are called Constrained Greedy and Constrained Term based , respectively .
+For each host h of ( estimated ) size nh , we bound the number of its documents which may be routed to any single partition . Then , upon arrival of a document of host h , the constrained algorithm ( either Greedy or Term based ) simply considers only partitions on which the number of alreadyrouted documents belonging to host h is below the bound . We apply two flavors of bounds , denoted b1(h ) and b2(h ) , to each host : b1(h ) = maxnlα b2(h ) = maxfl nh mm , 3o + αr nh m , 3 nh m
+( 3 )
+( 4 )
+The first bound flavor requires a slack value of α > 1 , to allow each partition to hold some multiplicative factor of its “ fair share ” of documents from host h . Our experiments use α ∈ {1.05 , 1.1 , 12} The second bound defines the slack in terms of the ( approximate ) standard deviation of the random routing of h ’s documents across the m partitions . Our experiments use α ∈ {1 , 2 , 3} . With either flavor , we always allow partitions to hold 3 documents of each host . This relaxes our constraints over hosts with very few pages relative to the number of partitions . 4.2 Implementation Notes
+The Random routing algorithm is obviously trivial to implement , with each routing decision being made by the dispatcher in O(1 ) . All other algorithms compute some value
+2We assume that approximate term statistics are known from previous crawls . 3We assume here that the sizes of the hosts are approximately known due to previous crawls . for routing document d to each of the m partitions , where the value depends on the set of terms Td contained in d .
+The Greedy and Load Balancing algorithms each compute a cost , which requires examining all |Td| terms in the document to be appended , for each of the m partitions . These computations can be done in a centralized fashion in the dispatcher , or in a distributed fashion with an extra round of communication between the dispatcher and each of the partitions .
+For the centralized computation , the dispatcher must keep track of the number of documents routed to each partition , as well as the serial number of the last document routed to each partition for each term in the corpus . Effectively , this means keeping a global dictionary with m entries per term . Let T denote the number of distinct terms in the corpus . The centralized computation requires O(mT ) memory at the dispatcher and O(m |Td| ) time upon dispatching d .
+In the distributed computation , the dispatcher sends d to each partition , which computes its local cost and sends it back to the dispatcher , who then sends an indexing request to the “ cheapest ” partition . Each local cost computation requires O(|Td| ) time and requires O(T ) extra memory per partition , as the last document ID per term needs to be kept in the local dictionary4 .
+Turning to the Term based algorithm , the centralized computation requires the dispatcher to keep track of the terms associated with each partition . This requires O(T ) space . The routing decision can then be achieved in O(|Td| + m ) time while maintaining m additional counters , for overall space complexity of O(T + m ) . Therefore , comparing centralized implementations , this algorithm requires about m times less time and space than the Greedy and Load Balancing algorithms . This becomes significant as m grows . In the distributed computation , each partition can track its own set of associated terms at the cost of O(T ) space across all partitions , or roughly O(T /m ) per partition .
+In addition to the above resources , the Constrained versions of the Greedy and Term based algorithms must also store the Nh host size estimates ( or bounds ) , as well as the number of pages per host that have been routed to each partition . This entails some extra O(mNh ) memory . This memory can be kept at the dispatcher , or ( in case of a distributed implementation ) each partition may maintain its own counters for the number of pages per host it holds .
+5 . TERM BASED DOCUMENT ROUTING
+ALGORITHM ANALYSIS
+This section shows that the Term based routing algorithm results in a smaller aggregated index size than that of the industry standard random routing scheme under the simplified document generation model of [ 11 ] .
+According to the model of [ 11 ] , the N documents of the corpus may include up to L unique terms . Documents are independently generated as follows : each of the L terms is chosen independently with replacement , according to some frequency rank distribution {pi} ( eg , power law or doublePareto distributions ) defined over the vocabulary T . The resulting corpus can be described by a |T |×N boolean termdoc matrix that has a 1 in entry ( i , j ) if term i is included in document j .
+4While this ID is already encoded in the inverted index , decoding it requires decoding a long sequence of dGaps .
+WWW 2011 – Session : Search Systems March 28–April 1 , 2011 , Hyderabad , India491 Let Si denote the rv corresponding to the size of the postings list that encodes the ith row of the term doc matrix ( ie term ti ) , when applying some single dGap encoding ( eg , Delta encoding ) . In addition , let Pi , P r ( ti ∈ d ) = 1 − ( 1 − pi)L denote the probability that term ti is included in document d . Moreover , for 1 ≤ g ≤ N , let Xg,i be the rv denoting the number of dGaps of length g in row i . According to [ 11 , Thm . 2 ]
+S(N , Pi ) = E [ Si ] =
+N
+Xg=1
+δ(g)E [ Xg,i ] ,
+( 5 ) where
+E [ Xg,i ] = Pi ( 1 − Pi)g−1 + P 2 i ( 1 − Pi)g−1 ( n − g ) ,
+( 6 ) and δ(g ) is the number of bits needed to encode a dGap of length g . In particular , [ 11 , Sec 7 ] shows that S(N , Pi ) achieves the entropy bound for every term ti that satisfies5 w , log N size can be approximated by6 S(N , Pi ) ≈ N H(Pi ) .
+N = Pi = o(1 ) . Hence , for these terms the expected
+Let ˆT denote the subset of terms that satisfy the conditions of [ 11 , Sec 7 ] and randomly divide it into m disjoint sets of size | ˆT |/m ( a set for each partition ) . We represent the sets by vectors {Vℓ}m ℓ=1 with Vℓ(i ) = 1 if ti is included in the ℓth set and Vℓ(i ) = 0 otherwise . A document d is assigned to the kth partition if it maximizes the dot product between the document term vector and the corresponding partition defining term vector , ie k = arg max
+ℓ
+{Vℓ · d} .
+( 7 )
+We note that since the terms of ˆT are randomly and evenly divided between the partitions , the m dot products {Vℓ · d}m are identically distributed random variables .
+ℓ=1
+Proposition 1 For the above document generating model , the Term based document routing algorithm achieves smaller expected aggregated index size than that of the Random document routing scheme .
+Proof . We start by examining how the probability of a term being included in a document changes given that the document was assigned to a certain partition according to the Term based routing algorithm . Focusing on the ℓth partition ,
+Pi,ℓ , P r ( ti ∈ d|d ∈ ℓ )
+( a ) =
+P r ( d ∈ ℓ|ti ∈ d )
+P r ( d ∈ ℓ )
+P r ( ti ∈ d )
+= βi,ℓPi ,
+( 8 ) where ( a ) is achieved by applying Bayes’ theorem ; Pi , P r(ti ∈ d ) , and βi,ℓ , P r ( d ∈ ℓ|ti ∈ d ) /P r ( d ∈ ℓ ) . We note that since the partition “ representing ” terms were divided randomly and equally among the partitions ( hence , the decision dot products are identically distributed rv ’s ) , then the probability that a document d is routed to the ℓth partition P r ( d ∈ ℓ ) ≈ 1/m . Examining the definition of βi,ℓ we observe that three cases should be considered : ( 1 ) the term ti is a member of the set which “ represents ” the ℓth
+5Practically it means terms with not “ too high ” and not “ too low ” probability . 6Here H(q ) denotes the binary entropy function H(q ) = −q log2 q − ( 1 − q ) log2(1 − q ) . partition , ie , Vℓ(i ) = 1 in this case it is easily verified that βi,ℓ > 1 ; ( 2 ) the term ti is a member of the set which “ represents ” some other partition ℓ′ 6= ℓ in this case it is easily verified that βi,ℓ < 1 ; and ( 3 ) the term ti is not “ representing ” any partition ti /∈ ˆT in this case βi,ℓ = 1 . Hence , the probability that a term ti appears in a document which was routed to partition ℓ increases in case ti “ represents ” the ℓth partition , decreases in case ti “ represents ” some other partition , and remains unchanged otherwise . Moreover , since every document is always routed to one of the servers , we have that m
+Xℓ=1
+P r ( d ∈ ℓ ) Pi,ℓ = Pi ≈
+1 m
+Pi,ℓ .
+( 9 ) m
+Xℓ=1
+Intuitively , this states that the overall probability of a term in the corpus remains unchanged regardless of the partitioning . We complete the proof by showing that the expected aggregated size difference between the Random routing and the Term based routing setups is positive m
+( a ) ≈
+∆
+( S(N/m , Pi ) − S(N/m , Pi,ℓ ) )
+( S(N/m , Pi ) − S(N/m , Pi,ℓ ) ) m m
+( c )
+( b ) =
+N m
+Xℓ=1 Xti∈T Xℓ=1 Xti∈ ˆT Xℓ=1 ≈ Xti∈ ˆT = N Xti∈ ˆT H(Pi ) − Xℓ=1 > N Xti∈ ˆT H(Pi ) − H 1
+1 m
+( d ) m m
+H(Pi,ℓ)!
+Pi,ℓ!! = 0 , m
+Xℓ=1
+( H(Pi ) − H(Pi,ℓ ) )
+( 10 ) where ( a ) holds assuming each partition for both setups includes approximately N/m documents due to the strong law of large numbers and since partitions are homogeneous ; ( b ) is achieved since we show that Pi,ℓ = Pi for all terms ti /∈ ˆT ; ( c ) is achieved since S(N , Pi ) ≈ N H(Pi ) for ti ∈ ˆT ; ( d ) holds since H(· ) is a strictly concave function ; and the last equality is due to ( 9 ) .
+To corroborate the results of the last Proposition , we generated a corpus using the document generation model of [ 11 ] , selected the partition “ representing ” term sets , applied term based document routing , and appended the routed documents to their partitions using Delta encoding . The resulting aggregated bits per posting were compared to those calculated for an identical system using the Random document routing scheme . The comparison shows a consistent although minor reduction in the aggregated index size when Term based routing is used . This small improvement , while obeying Proposition 1 , is far from the 20 % improvement achieved by the Term based routing when applied to the .gov2 corpus ( see Section 6 ) . We conjecture that the performance gap stems from the simplified nature of the document generation model used to produce the synthetic corpus , as assuming independent documents of independent terms does not capture the inherent similarity between real documents belonging to the same host ( the properties which make URL document ordering so successful [ 18] ) . Hence , the probability for .gov2 documents of the same host ending up in the
+WWW 2011 – Session : Search Systems March 28–April 1 , 2011 , Hyderabad , India492 same partition is much higher than that of two arbitrary documents generated by the model of [ 11 ] . Accordingly , as indicated by our experiments , the difference ( 10 ) is expected to be much larger for real life documents .
+6 . EXPERIMENTAL RESULTS
+6.1 Experimental Setup
+We use the TREC .gov2 Web corpus , a collection of about 25.2 million pages crawled from the gov domain , for the experiments7 . After parsing , tokenizing , and removing all empty documents , we are left with 24.9 million documents across 17,000 hosts , 74.5 million distinct terms , and 5,705.2 million postings ( distinct term appearances in documents ) . Our experiments apply a random order of documents arrival and measure the resulting aggregated bits per posting metric for every algorithm ( see section 31 ) As mentioned earlier , we use the Delta dGap encoding scheme throughout our experiments . 6.2 Index Compression Results
+Figure 1 plots the Bits per Posting measure achieved by the different online algorithms as functions of the number of servers m . The left plot focuses on the inverted lists alone ( without the overhead incurred by the dictionaries ) , and shows a downward trend in the number of bits per posting needed to encode the partitioned index as the number of servers increases . This trend was observed in all algorithms and is mainly an artifact of the additional degrees of freedom present when there are more partitions to choose from when routing . However , random routing also enjoys the increasing number of machines this can be understood intuitively by considering the extreme case where there are as many servers as documents and each server uses only 1 bit to encode each posting .
+Turning to the right side of the figure which takes into account the dictionary induced overhead , there is an upward trend in the amount of bits per posting needed to encode the partitioned index . This is caused by overlapping term sets across the various partitions overlapping terms require multiple dictionary entries , up to m entries in the worst ( and realistic for many words ) case .
+The relative performance of the various algorithms is the same in both plots , and so the following discussion is applicable to both . At the two extremes , Random routing upper bounds the compression results , whereas Greedy routing trumps all algorithms and saves about a third of the space as compared with Random . It manages to decrease the overall index size ( ie including overhead ) for most of the growth in the number of partitions . The reason for this is that the greedy algorithm manages to assign documents with similar term sets to the same server , keeping the overlap in term sets across the partitions relatively small .
+As we further discuss in Section 6.3 , Greedy and Random routing also perform at the two extremes in terms of host distribution , but the Random performs best ( quite intuitively ) while Greedy performs worst , as same host documents tend to share many terms and will thus tend to be routed by Greedy to the same small set of partitions , rather than uniformly across all servers .
+The Load Balancing algorithm shows results very similar to those of the random algorithm , for a low number of partitions ( m < 200 ) . Around 200 servers , its curve starts to improve on that of Random ’s , achieving fewer bits per posting . For m = 1000 , Load Balancing beats out the constrained versions of the Greedy and Term based routing schemes , but still loses to the unconstrained versions .
+The Term based algorithm whose curve is plotted in Figure 1 is based on the association of about 8 million terms to the various partitions . The terms are those whose frequencies in the corpus range from 5 to 106 . It achieves about 20 % improvement in index size over the Random algorithm at m = 1000 .
+The constrained versions of both the Greedy and Termbased schemes attempt to decrease index size while not deviating too much from a balanced allocation of each host ’s pages across the partitions . Qualitatively , they achieve about the average compression of Random and their non constrained version . Note that the curves shown in Figure 1 use found flavor b1(h ) with α = 1.2 , as defined in Section 41 Section 6.3 will further analyze the constrained versions of the algorithms .
+Other results ( not presented here ) reveals that the Termbased routing is not so sensitive with regards to the number of terms associated with the various partitions . Experiments with 6 and 4 millions terms of the unconstrained and constrained Term based routing yields similar index sizes as those presented here for the 8 million terms version . 6.3 Host Distribution Results
+This section further studies the trade off between the quality of compression and the balanced routing of same host documents across the different partitions . The conclusion from the data points given below is one of “ no free lunch ” . Most of the redundancy in the document stream that is exploited by the better compressing routing schemes stems from the ability to route same host documents to a small set of partitions , rather than scattering them evenly across the partitions . This is yet another indication of why reordering Web collections by URL sorting[18 ] is so successful .
+Table 1 shows the normalized Chi squared host distribution values , as defined in Section 3.2 , for the routing schemes presented in Figure 1 , for several values of m . The schemes are listed in the order of their compression effectiveness , from worst ( Random , left ) to best ( Greedy , right ) . Observe the following :
+• Random routing , as expected , achieves values that are typical of a N ( 0 , 1 ) random variable .
+• The tradeoff between compression ( Figure 1 ) and hostbalancing ( Table 1 ) is near perfect . The relative order of the schemes in terms of the two measures is almost entirely reversed . The sole exception is that the Constrained Greedy scheme outperforms the Constrained Term based scheme in both measures8 .
+• Whenever the Load Balancing scheme achieves randomlevel host balancing ( m = 10 , 40 , 100 ) , it is basically
+7We note that since it was crawled almost to exhaustion , .gov2 is very “ dense ” and includes almost all relevant pages [ 12 ] .
+8The difference between Random and Load Balancing for m = 10 , 40 is just a random fluctuation and does not contradict the above statement .
+WWW 2011 – Session : Search Systems March 28–April 1 , 2011 , Hyderabad , India493 g n i t s o p r e p s t i
+B
+13
+12
+11
+10
+9
+8
+7
+6
+5
+4 100
+Random Load−balancing Constrained term based ( 8M terms ) Constrained greedy Term based ( 8M terms ) Greedy
+102 101 Number of partitions
+( a ) Aggregated index size without overhead
+13
+12
+11
+10
+9
+8
+7
+6
+5 g n i t s o p r e p s t i
+B
+( b ) Aggregated index size with overhead
+Random Load−balancing Constrained term based ( 8M terms ) Constrained greedy Term based ( 8M terms ) Greedy
+103
+4 100
+102 101 Number of partitions
+103
+Figure 1 : Bits per posting as function of the number of partitions for different document routing strategies and Delta encoding applied to .gov2 corpus , ( a ) without and ( b ) with overhead .
+Table 1 : Normalized host distribution values per scheme , as functions of the number of partitions m
+Scheme Random m 10 40 100 400 700
+0.06 0.96 1.31 0.79 1.88
+Load
+Constrained
+Constrained Term based Greedy
+Balancing Term based ( 8M )
+Greedy
+0.47 1.49 2.59 303 1820
+3314 1607 734 897 1704
+2050 1390 825 427 457
+( 8M ) 77229 97814 123029 111377 113754
+177828 389281 382995 428874 433871 similar to Random routing in terms of compression . Other than those three points , all other schemes distribute same host pages with an imbalance that is statistically impossible to achieve with random routing .
+• The constrained versions of the Greedy and Termbased schemes achieve a host balancing value that is orders of magnitude lower ( ie more balanced ) than the corresponding non constrained schemes , while sacrificing about half of the compression improvement over Random routing . While they still distribute samehost pages in a manner that is statistically very far from random , they are also very far from the skewed distribution of the non constrained versions .
+Next , Table 2 checks the sensitivity of both measures , Bits per Posting and host balancing , to the bound flavor and value of α as defined in Section 4.1 , with the Constrained Term based scheme over m = 400 partitions . The sensitivity is quite minor9 . Still , it preserves the trend of the normalized host distribution value being larger when the Bits per Posting value is lower .
+9This was true also for the Constrained Greedy scheme , whose results are not shown
+Table 2 : Normalized host distribution and bits per postings ( without overhead ) values , with the Constrained Term based scheme ( 8 million terms ) over m = 400 partitions , as functions of the constraint parameter α .
+Constraint type
+Bits per Posting
+Normalized host distribution max( nh max( nh max(1.2 nh max( nh max(1.1 nh max(1.05 nh m + 3p nh m + 2p nh m , 3 ) m +p nh m , 3 ) m , 3 ) m , 3 ) m , 3 ) m , 3 )
+9.47 9.48 9.48 9.49 9.495 9.5
+1284 917 897 562 428 325
+7 . CONCLUSIONS
+This work introduced the problem of reducing a partitioned index size in a low latency indexing setting via document routing . In such settings , incoming documents must be made searchable quickly , and time consuming document
+WWW 2011 – Session : Search Systems March 28–April 1 , 2011 , Hyderabad , India494 reordering algorithms cannot be applied . The industry standard routes documents randomly to the partitions , evenly distributing same host pages across the partitions , which is advantageous for query time performance . However , this results in indexes which do not compress well . We frame document routing as an online problem , and present document routing schemes that result in indexes that are up to 30 % more compact . These algorithms can be run in both centralized and distributed fashions .
+We prove that one such scheme – Term based routing – yields better compression than Random routing over a corpus model appearing in the literature . Its advantages are accentuated on real life corpora , where same host documents exhibit high similarity between them . Term based routing is also lightweight in terms of time and space complexity as compared with the other non random routing schemes .
+For each routing scheme , we explored how same host pages are spread across the partitions , and found a clear tradeoff between compression and a balanced host distribution . This holds also when the routing algorithms are constrained to not exceed certain imbalance criteria . Essentially , this shows that much of the redundancy that routing algorithms exploit in Web collections stems from routing each host ’s pages unevenly , to a small set of partitions .
+We believe that low latency partitioned index systems offer additional trade offs between issues that are well understood in batch indexing settings , and plan to pursue such trade offs in future work . In addition , we plan to investigate weighted versions of the Term based routing scheme . These weights , which will be functions of the terms’ frequencies , will refine the current intersection based score of a document with respect to each partition .
+8 . REFERENCES [ 1 ] V . Anh and A . Moffat . Inverted index compression using word aligned binary codes . In Proc . Information Retrieval , pages 8(1):151–166 , Jan . 2005 .
+[ 2 ] A . Arasu , J . Cho , H . Garcia Molina , A . Paepcke , and S . Raghavan . Searching the web . ACM Trans . Internet Technol . , 1(1):2–43 , 2001 .
+[ 3 ] J . Aspnes , Y . Azar , A . Fiat , S . Plotkin , and
+O . Waarts . On line routing of virtual circuits with applications to load balancing and machine scheduling . J . ACM , 44(3):486–504 , 1997 .
+[ 4 ] C . Badue , R . Baeza yates , B . Ribeiro neto , and
+N . Ziviani . Distributed query processing using partitioned inverted files . In Proc . of the 9th String Processing and Information Retrieval Symposium ( SPIRE’01 ) , pages 10–20 , 2001 .
+[ 9 ] P . Boldi and S . Vigna . Codes for the world wide web .
+Internet Mathematics , 2(4):405–427 , 2005 .
+[ 10 ] A . Borodin and R . El Yaniv . Online computation and competitive analysis . Cambridge University Press , New York , NY , USA , 1998 .
+[ 11 ] F . Chierichetti , R . Kumar , and P . Raghavan .
+Compressed web indexes . In Proc . WWW 2009 , pages 451–460 , Madrid , Spain , Apr . 20 24 2009 .
+[ 12 ] S . Ding , J . Attenberg , and T . Suel . Scalable techniques for document identifier assignment . In in Proc . WWW 2010 , pages 311–320 , North Carolina , USA , Apr . 26 30 2010 .
+[ 13 ] S . H´aman . Super scalar database compression between ram and cpu cache . Master ’s thesis , Centrum voor Wiskunde en Informatica ( CWI ) , 2005 .
+[ 14 ] J . Hirai , S . Raghavan , H . Garcia Molina , and
+A . Paepcke . Webbase : A repository of web pages . In Proc . of the Ninth International World Wide Web Conference ( WWW’00 ) , pages 277–293 , May 2000 .
+[ 15 ] A . Mofat and L . Stuiver . Binary interpolative coding for effective index compression . Inf . Retr . , 3(1):25–47 , 2000 .
+[ 16 ] D . Puppin , F . Silvestri , and D . Laforenza .
+Query driven document partitioning and collection selection . In Proc . of the 1st international conference on Scalable information systems ( InfoScale’06 ) , Hong Kong , May 30–Jun . 1 2006 .
+[ 17 ] W . Shieh , T . Chen , J . Shann , and C . Chung . Inverted file compression through document identifier reassignment . Inf . Processing and Management , 39(1):117–131 , 2003 .
+[ 18 ] F . Silvestri . Sorting out the document identifier assignment problem . In Proc . of 29th European Conference on IR Research ( ECIR’07 ) , pages 101–112 , 2007 .
+[ 19 ] F . Silvestri , R . Perego , and S . Orlando . Assigning document identifiers to enhance compressibility of web search engines indexes . In Proc . of the 2004 ACM Symposium on Applied Computing ( SAC’04 ) , pages 600–605 . ACM Press , 2004 .
+[ 20 ] G . Snedecor and W . Cochran . Statistical Methods .
+Iowa State University Press , 8th edition , 1989 .
+[ 21 ] I . Witten , A . Moffat , and T . Bell . Managing
+Gigabytes . Morgan Kaufmann , 1999 .
+[ 22 ] J . Xu and W . B . Croft . Cluster based language models for distributed retrieval . In Proc . of the 22nd conference on Research and development in Information Retrieval ( SIGIR’99 ) , Berkeley , CA , Aug . 15–19 1999 .
+[ 5 ] L . A . Barroso , J . Dean , and U . H¨olzle . Web search for
+[ 23 ] H . Yan , S . Ding , and T . Suel . Inverted index a planet : The Google cluster architecture . IEEE Micro , 23(2):22–28 , Apr . 2003 .
+[ 6 ] R . Blanco . Index Compression for Information Retrieval Systems . PhD thesis , University of A Coru˜na , 2008 .
+[ 7 ] R . Blanco and R . Barreiro . TSP and cluster based solutions to the reassignment of document identifiers . Journal of Information Retrieval ( IR ) , 9(4 ) , Sep . 2006 . 499 517 .
+[ 8 ] D . Blandford and G . Blelloch . Index compression through document reordering . In Data Compression Conference ( DCC’02 ) , Los Alamitos , CA , USA , 2002 . compression and query processing with optimized document ordering . In Proc . WWW 2009 , Madrid , Spain , Apr.20 24 2009 .
+[ 24 ] J . Zhang , X . Long , and T . Suel . Performance of compressed inverted list caching in search engines . In Proc . WWW 2008 , pages 387–396 , Beijing , China , Apr . 21 25 2008 .
+[ 25 ] J . Zobel and A . Moffat . Inverted files for text search engines . ACM Computing Surveys , 38(2 ) , Jul . 2006 .
+WWW 2011 – Session : Search Systems March 28–April 1 , 2011 , Hyderabad , India495

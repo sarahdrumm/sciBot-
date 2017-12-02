@@ -1,0 +1,340 @@
+IntervalRank — Isotonic Regression with Listwise and Pairwise Constraints
+∗ Taesup Moon , Alex Smola
+, Yi Chang , Zhaohui Zheng
+Yahoo! Labs
+701 First Avenue
+Sunnyvale , CA 94051
+{taesup , smola , yichang , zhaohui}@yahoo inc.com
+ABSTRACT Ranking a set of retrieved documents according to their relevance to a given query has become a popular problem at the intersection of web search , machine learning , and information retrieval . Recent work on ranking focused on a number of different paradigms , namely , pointwise , pairwise , and list wise approaches . Each of those paradigms focuses on a different aspect of the dataset while largely ignoring others . The current paper shows how a combination of them can lead to improved ranking performance and , moreover , how it can be implemented in log linear time .
+The basic idea of the algorithm is to use isotonic regression with adaptive bandwidth selection per relevance grade . This results in an implicitly defined loss function which can be minimized efficiently by a subgradient descent procedure . Experimental results show that the resulting algorithm is competitive on both commercial search engine data and publicly available LETOR data sets .
+Categories and Subject Descriptors H33 [ Information Storage and Retrieval ] : Information Search and Retrieval ; G16 [ Numerical Analysis ] : Optimization convex programming
+General Terms Algorithms , Experimentation , Theory
+Keywords learning to rank , pairwise constraints isotonic regression , listwise constraints ,
+∗ search School of Information Sciences and Engineering
+AS is also with the Australian National University , Re
+1 .
+INTRODUCTION
+Ranking a set of retrieved documents according to their relevance for a given query is a popular problem at the intersection of web search , machine learning , and information retrieval . Over the past decade , a large number of learning to rank algorithms have been proposed [ 12 ] . Based on how they treat sets of ratings , they can be effectively categorized into the following three groups : pointwise , pairwise , and listwise approaches .
+For a given query and a set of retrieved documents , pointwise approaches try to directly estimate the relevance label for each query document pair . While one may show that these approaches are consistent for a variety of performance measures [ 4 ] , they ignore relative information within collections of documents . In other words , they ignore that a document with a mediocre rating may actually be desirable if all other documents carry even lower scores ( ie , the oneeyed may be king among the blind ) . Pairwise approaches , as proposed by [ 9 , 10 , 2 , 24 ] , take the relative nature of the scores into account by comparing pairs of documents . They ensure that we obtain the correct order of documents even in the case when we may not be able to obtain a good estimate of the ratings directly . Finally , listwise approaches , as proposed by [ 3 , 20 , 16 , 22 ] , treat the ranking in its totality , and they exploit the fact that we may not even care about the entire ranking , and that , furthermore , even among the retrieved subset of documents we may care considerably more about the topmost documents . For a more comprehensive references see [ 12 ] .
+There has been significant discussion about the relative merit of these strategies , and the common wisdom is that the listwise is better than the pairwise , which outperforms the pointwise . However , we argue that the listwise methods , when used naively , ignore some parts that the pointwise or pairwise algorithms are able to capture ; pointwise approaches are able to capture the absolute relevance of a document for a query . Moreover , they are sensitive to the fact that queries with equal relevance should be rated equally ( listwise approaches are typically indifferent of the order without a given relevance tier ) . Pairwise approaches capture some of these aspects , eg , by weighting pairwise comparisons according to their score discrepancy .
+In this paper , we present a novel algorithm — IntervalRank — which exploits all three of those aspects . That is , we use Isotonic Regression to deal with the listwise , translationinvariant aspects of the ranking problem . Secondly , we add a penalty to ensure that documents within the same grade be rated approximately equally . Finally , we impose large mar
+151 gin constraints between the grades which effectively ensure that different grades are well separated , and thus , ratings are obtained in a reliable fashion .
+The idea of incorporating all three approaches to design a learning to rank algorithm has also been attempted in [ 21 ] . However , whereas their method is to sequentially vary the focus on the three approaches as the training process goes , we try to incorporate them all at once . Our IntervalRank achieves this by regressing on the pairwise ordinal intervals , which are optimized in a listwise fashion . Size constraints on the intervals ensure that like documents are rated alike . In a departure from previous methods , our loss function is only defined implicitly as the solution of a convex optimization problem . We show that this nontrivial variant of Isotonic Regression can be solved in loglinear time ( in the number of relevant documents ) even though we are dealing with a dense quadratic program . As we shall see , the key idea is to reformulate the intermediate quadratic program as a smaller program in terms of the boundary variables separating different grades and to use the log barrier interior point algorithm for the reduced problem . The experimental results on both the commercial search engine data and publicly available LETOR data show that our algorithm is competitive with state of the art algorithms .
+The rest of this paper is organized as follows ; in Section 2 , we set notations necessary for the paper and present some preliminary backgrounds for our work . We derive our algorithm IntervalRank in Section 3 and show how we can implement it efficiently . Two experimental results are given in Section 4 to support the competitiveness of the IntervalRank . We conclude the paper in Section 5 with the key contributions of the paper .
+2 . BACKGROUND
+2.1 Notation
+We assume that we are in a classical learning to rank scenario . That is , at training time , we are given a set of queries Q = {q1 , . . . , qQ} . For each query qk , we are also given a set of retrieved documents Dqk = {dk1 , . . . , dknk } and as} , where nk sociated relevance grades Gqk = {gk1 , . . . , gknk is the number of documents for query qk . The relevance grade gkj is typically represented by numeric values in R indicating how relevant a document dkj is to the given query qk . For example , the usual editorial relevance judgments of {Bad , Fair , Good , Excellent , Perfect} can be mapped into the grade values {0 , 1 , 2 , 3 , 4} , respectively . We will denote by G the set of possible relevance grades . With slight abuse of notation , we will drop the index k from queries q and associated documents dkj whenever the index is obvious or irrelevant ( ie q , dj , Gq , Dq ) to simplify notation .
+For a given query q , we denote by
+Oq . {(di , dj ) ∈ Dq × Dq : gi > gj} and Tq . {(di , dj ) ∈ Dq × Dq : gi = gj} the set of ordered relevance pairs and tied relevance pairs , respectively , generated from the retrieved document set Dq . Moreover , we denote by the set of indices of documents in Dq with grade g . We associate a numeric target yg ∈ R with every g ∈ G . For instance , we may set y0 = 0 , y1 = 0.5 , y2 = 3 , y3 = 7 , and y4 = 10 for G = {0 , 1 , 2 , 3 , 4} . Alternatively we might choose yg = 2g − 1 for g ∈ G . Finally ,
+Δg+1,g . yg+1 − yg represents the label margin between grades g and g + 1 . Whenever clear from the context we denote by yi the numeric target associated with document di and by Δij the label margin between documents di and dj .
+We assume that each query document pair ( qk , dkj ) , where dkj ∈ Dqk , is represented as a feature vector xkj ∈ Rp . Again , when the context is clear , we will drop the index k for brevity . The ranking function is denoted by f : Rp → R . At test time , the ranking function produces a set of scores for the corresponding retrieved documents , and the ranking of documents for a given query is determined by sorting the documents in terms of the scores . Discounted Cumulative Gain ( NDCG ) and Mean Average Precision ( MAP ) are commonly used metrics that measure the quality of ranked list , of which definitions will be given in Section 4 . 2.2 Inference
+As common in the supervised learning , the estimation problem is often cast as one of the ( regularized ) risk minimization problem . That is , we assume that we have some loss function l : R2n → R+
+0
+( 2 ) which scores the performance of f ( x ) relative to the numerical targets y via l ( {f ( x1 ) , . . . , f ( xn)} ,{y1 , . . . , yn} ) . For convenience , we use the shorthand l(f , xk , yk ) := l ( {f ( xk1 ) , . . . , f ( xknk )} ,{yk1 , . . . , yknk
+} ) to denote the loss function applied to the nk query document collections and the relevance targets for query qk . Inference is then carried out by ( regularized ) empirical risk minimization , that is , by finding some f which minimizes
+R[f ] :=
+QX k=1
+1 Q l(f , xk , yk ) + λΩ[f ] .
+Here Ω[f ] is an ( optional ) regularization term with regularization constant λ ≥ 0 , and the first term denotes the average performance of the ranking function f on the aforementioned training set . One may show that under fairly general conditions [ 19 ] , minimization of a regularized risk term will produce a minimizer f which has good performance on the unseen data ( in our case , queries and documents which one might expect to see in the deployed system ) .
+Some of the key questions arising from the regularized risk minimization problem in the context of ranking are a ) how to choose a suitable loss function l , b ) how to find a flexible enough function class containing f , and c ) how to solve the resulting optimization problem . It is the first of the three questions that this paper contributes to . For completeness , we discuss b ) and c ) briefly .
+2.3 Functional gradient descent
+Sg . {i : di ∈ Dq , gi = g}
+( 1 )
+The problem of minimizing R[f ] has been addressed in a number of different contexts . For instance , we can treat this
+152 as a convex minimization problem and use subgradient procedures [ 15 , 5 ] . This works whenever the objective function itself is convex , and derivatives can be computed efficiently . Similar procedures can be applied to smooth proxies of the ranking performances [ 2 ] .
+For the purpose of this paper , we adopt a functional gradient descent representation [ 8 , 14 , 7 ] . This allows us to deal efficiently with cases where the function class F containing f is not explicitly available , but , rather , where we are able to draw functions from the class which are well correlated with the functional derivative of R[f ] . This allows us to minimize R[f ] within function classes which are implicitly defined as convex combinations of some “ weak learners ” ( ie , the function classes defining the generators of the convex set ) , such as decision trees .
+Algorithm 1 Functional gradient descent Require : Training examples {(xi , yi)}n Ensure : f that minimizes R[f ] i=1
+∗ initialize f = f0 ∈ F repeat
+Compute functional gradient gi =
+∂R[f ( xi ) ]
+∂f ( xi )
+, i = 1 , . . . , n
+Find h ∈ F via weak learner that is well correlated with g ∈ Rn Update f ← f − νh until converged
+Algorithm 1 describes how to obtain a functional gradient at every step . For notational brevity , we simplified the indices of the examples to i = 1 , . . . , n above . Once we compute the functional gradient g , we subsequently obtain a regression tree h that is well correlated with g ( ie we use the component wise derivatives as regression targets ) . Finally , we update f by moving ν ∈ ( 0 , 1 ) into the direction of the current gradient . More sophisticated variants of this procedure are possible . For instance , we may replace g by an update estimate computed by a ( non)convex second order optimization procedure such as LBFGS [ 11 ] .
+3 .
+INTERVALRANK
+The IntervalRank defines an implicit loss function via a convex optimization problem and applies the functional gradient descent as described in Section 23 A nontrivial step of such formulation is to compute the functional gradient of the loss function . Section 3.1 describes how we define the loss function in detail and proves that the solution of the optimization problem is equivalent to the functional gradient of the loss function . Then , Section 3.2 ∼ Section 3.4 elaborate how we can solve the optimization problem efficiently by reducing the number of the optimization variables , efficiently evaluating the objective function of the optimization problem , and applying the logarithmic barrier interior point method . Finally , Section 3.5 shows that we can also easily add the pointwise loss function to our loss function . 3.1 Loss Functions
+We begin our analysis by discussing isotonic regression as proposed by [ 25 ] . From now on , we will only consider a single query q since all the procedures can be easily parallelized .
+The key idea in isotonic regression ranking is to estimate the document grades up to a constant ( latent variable ) offset . This takes into account that it is the relative order of the documents that are being retrieved that matters for ranking performance . The corresponding loss function can be written as
+( yi − f ( xi ) + w)2 .
+( 3 ) l(f , x , y ) := min w∈R
+1 2 nX i=1
+While this is desirable in its own right , it misses an important part of the ranking problem , namely that individual category labels should be well separated . This is achieved by defining l(f , x , y ) :=
+( δ
+∗(2
+2
+( 4 )
+1 2 where δ
+∗ ∈ Rn solves the optimization problem
+( δ(2
+1 2
+δ∈Rn minimize subject to f ( xi ) + δi − f ( xj ) − δj ≥ Δij for ( i , j ) ∈ Oq
+2
+( 5 )
+That is , the loss function ( 4 ) measures the minimal norm of the offset vector δ ∈ Rn we need to apply to f ( x1 ) , . . . , f ( xn ) such that the list of shifted scores are consistent with the pairwise target label margins {Δij : ( i , j ) ∈ Oq} . Note that this is a listwise optimization with pairwise constraints .
+A naive approach to solve the optimization problem ( 5 ) would be at least cubic in terms of the number of variables used ; the number of constraints encoded in Oq is typically quadratic in the number of documents n . Taking into account of the sparsity of the constraint matrix , an efficient brute force solution of the resulting quadratic program would require at least O(n3 ) operations to compute the reduced Karush Kuhn Tucker system [ 18 ] , and thus , solving ( 5 ) has at least cubic cost . We shall see in Section 3.2 that efficient variable reduction and reordering can reduce this to O(n log n ) cost .
+Before we do so , let us extend the objective function in two ways . Firstly , the pairwise constraints ignore the fact that documents with equal relevance scores yi should lead to ratings f ( xi ) which are also close . This can be addressed by a parameter tying constraint on Tq . Secondly , while a separation by Δij is desirable , it may not always be entirely achievable . Hence , we relax the separation constraint by adding another slack variable . This leads to the following loss function : Define l as in ( 4 ) where δ ( ξ(2
+∗ ∈ Rn solves minimize
+( δ(2
+( ( 2
+( 6 )
+|f ( xi ) + δi − f ( xj ) − δj| ≤ ξgi subject to f ( xi ) + δi − f ( xj ) − δj ≥ Δij − gi for ( i , j ) ∈ Oq for ( i , j ) ∈ Tq Note that we only need to enforce adjacent constraints for intervals since they automatically enforce the larger range constraints , hence the vector ∈ R |G|−1 rather than matrixvalued variable suffices . The relaxation takes care of overly optimistic separation requirements Δij . Moreover , the addition of the constraint on Tq and the slack variables ξ ∈ R |G| ensures that ratings of the same score are tightly packed .
+δ , ,ξ
+1 2
+2 +
+λ1 2
+2 +
+λ2 2
+2
+For the sake of using the functional gradient descent method as in Section 2.3 , we need to compute the gradient of the loss function ( 4 ) with respect to f . In other words , we need to compute the gradient of the minimum of the objective
+153 function ( 6 ) with respect to f , which requires the following stability result from convex duality , eg [ 1 , Section 563 ] :
+Lemma 1 Consider the convex minimization problem ( F and ci are convex functions )
+F ( x ) minimize subject to ci(x ) ≤ zi for all i x
+( 7 )
+( 8 )
+∗ and let Λi be the Lagrange multipliers associated with ci . Moreover , let x ( z ) be the solution and Lagrange multipliers associated with z . Then , if strong duality holds and F ( x
+( z ) ) is differentiable , we have ∂zF ( x
+( z ) ) = −Λ ∗
+∗ ( z ) , Λ
+( z ) .
+∗
+∗
+Lemma 2 The gradient of the loss satisfies ∂f l(f , x , y ) = δ .
+Proof . We begin by writing out the Lagrange function of ( 6 ) . In order to obtain linear constraints we replace the absolute value function by a pair of constraints , ie |a| ≤ b transforms into a ≤ b and −a ≤ b . This yields
+L(δ , , ξ , Λ ) =
+( δ(2 1 2 + X 2 −
+−
+− i,j∈Oq X i,j∈Tq X i,j∈Tq
+λ1 2
+( ( 2
+2 +
+λ2 2
+( ξ(2 − f ( xi ) − δi + f ( xj ) + δj ]
+2
+Λij [ Δij − gi Λij [ f ( xi ) + δi − f ( xj ) − δj − ξgi ] ¯Λij [ −f ( xi ) − δi + f ( xj ) + δj − ξgi ]
+For a suitably chosen matrix A and an offset vector b the terms in Λ ( and ¯Λ ) can be subsumed by the expression Λ
+'
+[ b + A(f + δ , , ξ ) ] which leads to − Λ '
+( ξ(2
+( δ(2
+( ( 2
+L =
+2 +
+2 +
+2
+λ2 2
+λ1 2
+1 2
+[ b + A(f + δ , , ξ ) ]
+Now denote by Af the upper slice of A pertaining to f + δ . First order optimality conditions require that
+∂δL = δ − A
+' f Λ = 0 and hence δ = A
+' f Λ .
+If we were to change f by an infinitesimal amount df , the constraints of the optimization problem would change by Af df . Since the objective function is quadratic and strongly convex and all constraints are linear we may apply Lemma 1 . It states that the change in the objective function is given by Λ df . This proves the claim that δ is the variational derivative with respect to f .
+Af df and therefore by δ
+'
+'
+This result is surprising since it implies that in the first order , changes in f are directly reflected in δ . It also means that computing gradients is as simple as solving the optimization problem itself . Note that for more general convex ( δ(2 , the connection is somewhat penalties Ω[δ ] instead of 1 2 more complex . The condition δ = A
+' f Λ is replaced by
+∂δΩ[δ ] = A
+' f Λ .
+This leads to the gradient ∂δΩ[δ ] . We believe that implicitly defined loss functions constitute a fertile field of research , as long as they are computationally accessible for estimation .
+3.2 Variable Reduction
+The key trick to an efficient solution of the Quadratic Program ( 6 ) is to eliminate all but the boundary variables between different grades such that , regardless of the size of the initial optimization problem , we have a smaller subproblem which only scales with the number of different grades . Without loss of generality , we assume that there exists at least one document for all the relevance grades in the training data . If this were not the case , we could simply drop the corresponding value yi from the problem and obtain an identical problem with a smaller number of relevance grades . The key observation when solving ( 6 ) is that we may rewrite the constraints such that the boundaries between different grades are explicitly specified .
+Lemma 3 For fixed slack variables and ξ , let P1( , ξ ) and P2( , ξ ) be polyhedra , where P1 and P2 are defined via n z ∈ Rn : zi − zj ≥ Δij − gi for all ( i , j ) ∈ Oq ,
+P1( , ξ ) =
+|zi − zj| ≤ ξgi for all ( i , j ) ∈ Tq o
+:
+|G|
+P2( , ξ ) = n , u ∈ R z ∈ Rn , l ∈ R |G| zi ∈ [ lgi , ugi ] for all 1 ≤ i ≤ n , lg ≤ ug ≤ lg + ξg for all g ∈ G , o lg+1 − ug ≥ Δg+1,g − g for all g ∈ G\{gmax} , where gmax . max{g : g ∈ G} . Then the projection of P2 onto its first n coordinates is equivalent to P1 . Proof . For any z ∈ P1 we define lg := mini:yi=g zi and ug := maxi:yi=g zi . Since , in particular , the extremes satisfy the conditions of P1 , hence they also satisfy the conditions of P2 . Likewise , for any ( z , l , u ) ∈ P2 the conditions on z are equivalent to those in P1 . The projection preserves this property .
+Lemma 4 The optimization problems arising by replacing the constraints P1 in ( 6 ) by P2 are equivalent . tion of P2 onto Rn equals P1 if we define zi = f ( xi)− δi .
+Proof . The objective functions match , and the projec
+The reason for introducing P2 is that we may now eliminate δ entirely from the optimization problem since we are able to express the problem in terms of the boundaries between different grades . First , recall ( 1 ) that Sg stands for the set of indices of all documents with grade g . Also , from now on , let fi . f ( xi ) . Then , we have following theorem .
+Theorem 5 The optimization problem ( 6 ) is equivalent to the following problem : X
+X
+ˆ
+˜
+( lg − fi)2
++ + ( fi − ug)2
++ minimize l,u , ,ξ
+1 2 g∈G λ1 2
++ i∈Sg ( ( 2
+2 +
+( ξ(2
+2
+λ2 2 subject to lg ≤ ug ≤ lg + ξg , ∀g ∈ G lg+1 − ug ≥ Δg+1,g − g , ∀g ∈ G\{gmax} where ( η)+ . max(0 , η ) , and l ∈ R δ ∈ Rn is given by δi = fi − max(lgi , min(ugi , fi) ) .
+, u ∈ R
+|G|
+|G|
+. Moreover ,
+154 + , which proves the theorem .
+Proof . Since on P2( , ξ ) the constraints in terms of δi = fi − zi decouple , we can see that the optimization problems in delta are solved by δi = fi − max(l , min(u , fi) ) . Plugging + +(fi− this value into the objective function yields ( lgi ugi )2 The benefit of Theorem 5 is that we now have a reduced optimization problem in 4|G| − 1 variables with simple neighboring constraints ( between adjacent grades ) rather than n + 2|G| − 1 variables and considerably more complicated constraints . 3.3 Computing the objective function
+−fi)2
+To solve the optimization problem of Theorem 5 , eg , by means of a logarithmic barrier function , we need to be able to compute values and gradients of the objective function cheaply . A naive implementation would require O(n ) operations , since we need to carry out a sum over O(n ) terms . A more efficient strategy is to sort the values {fi : i ∈ Sg} for each g ∈ G once ( this costs O(n log n ) operations in QuickSort ) , and then , simply perform a lookup to decide for which set of fi the terms ( lg − fi)2 + are nonzero . It works as follows : Assume that the documents {fi : i ∈ Sg} with grade g are sorted in the ascending order . Then , define the linear and quadratic partial sums for grade g as
++ or ( fi − ug)2 iX f 2 j fj j=1 and
+Lgi :=
+Qgi :=
+( 9 ) for i = 1 , . . . ,|Sg| , which can be computed in O(n ) time and O(n ) space . Denote by ag . max {i : fi ≤ lg} and bg . min {i : fi ≥ ug} the indices of the largest and smallest elements fi exceeding lg and ug , respectively . Then , for grade g , we can write X j=1
+( lg − fi)2
++ iX i∈Sg X i∈Sg
+=
+1 2
+1 2
+1 2
+( l2 g + f 2 i − 2lgfi)1{fi ≤ lg}
+( 10 )
+= agl2 g +
+− lgLg,ag ,
+Qg,ag
+1 2 where 1{fi ≤ lg} in ( 10 ) is 1 if fi ≤ lg , and 0 otherwise . A similar partial sum can be computed with regard to the upper boundary . This sum now only contains as many terms as we have different grades . An initial lookup to construct ag and bg costs at most log n time . Subsequent lookups are likely to be O(1 ) since at every optimization step we will adjust l and u only slightly , so it is unlikely that the indices will change by more than one or two at a time . In the same fashion we can compute gradients with respect to l and u .
+This means that up to a negligible O(n log n ) expense to sort the values fi initially , all other operations are O(log n ) or O(1 ) respectively , thus greatly reducing the computational cost of the optimization procedure making it virtually independent of the number of documents involved . Such an algorithm makes the implementation of loss functions such as those defined via ( 6 ) possible in the first place : this is the reason why [ 25 ] only consider the Isotonic Regression problem without the constraint |f ( xi ) + δi − f ( xj ) − δj| ≤ ξgi for ( i , j ) ∈ Tq since this reduced optimization problem can be solved more efficiently , albeit with reduced ranking performance .
+3.4 Logarithmic Barrier
+For completeness we briefly describe the basic log barrier template for constrained convex optimization :
+Algorithm 2 Logarithmic Barrier initialize feasible parameters l , u , , ξ for μ = 1 step : μ ← 2μ end : μ > 100 do
+X
+Minimize objective function with constraints added via ( ξ(2
++ + ( fi − ug)2
+( lg − fi)2
+( ( 2
+X
+ˆ
+˜
++
+2 +
+2
+1 2 g∈G − μ −1 i∈Sg X g∈G
++
+λ1 2 log(ug − lg ) + log(lg + ξg − ug ) X
+λ2 2 log(lg+1 − ug − Δg+1,g − g )
+− μ
+−1 end for g∈G\{gmax}
+The inner loop of the optimization algorithm proceeds by using conjugate gradient descent with line search which is run until approximate convergence is achieved ( we do not need to run it to full convergence since we keep on adjusting μ during the process of the optimization procedure ) . Note that there is no need to optimize the problem to high precision ( ie very large μ ) — a smaller μ imposes an additional benefit for having even larger separation between the grades than required by Δij and . 3.5 Adding a Pointwise Loss
+Besides the pairwise and effectively listwise constraints on the scores it is easy to add pointwise regression loss to the objective function . This ensures that we obtain a calibration that is correct in absolute terms . Since gradients are additive , it is straightforward to add this to the listwise loss function as it stands . Hence we have λ3 2 l(f , x , y ) = llistwise(f , x , y ) +
+( y − f ( x)(2
+( 11 )
+2
+While the changes effected by the pointwise loss are not massive ( it constitutes a consistent loss function in its own right , though ) , adding a score calibration exploits information that is not exploited by the listwise loss functions discussed in Section 31
+4 . EXPERIMENTAL EVALUATION
+We established in the previous section that a combined point and listwise loss function which ensures a large margin between ratings can be implemented efficiently . We now demonstrate that our loss function works well in practice , outperforming the state of the art on a number of datasets both public ( Letor 3.0 OHSUMED ) and proprietary ( commercial search engine ) .
+Two types of experiments are required to corroborate our claims : firstly , we show that the combined loss function composed of a listwise and a pointwise score outperforms the listwise only loss function . Secondly , we show that our loss function outperforms competing approaches . 4.1 Performance Metrics
+For comparison purposes we use a number of performance metrics — the Discounted Cumulative Gain@k ( NDCG@k ) , the Precision@k ( P@k ) , and the Mean Average Precision
+155 ( MAP ) . These three metrics tend to provide a rich representation of what matters in editorially annotated ranking problems . For conciseness we give a brief definition of the metrics below . We use r to denote the ranks of the documents after the scoring function f has been applied . That is , ri is the rank of document i .
+NDCG@k The NDCG at position k ( NDCG@k ) for a ranked document list of a query q is defined as a position and rating weighted score which is then normalized such that the maximum NDCG score is 1 for a perfect ranking . We have the definition
+NDCG@k[r ] := Z i=1 kX
+2gri − 1 log(1 + i )
+.
+( 12 )
+P
+Here gri is the relevance grade of document ranked at i . Denote by ˆr := argsort[g ] the optimally sorted version of the document collection . In this case we can gˆri −1 2 write Z = log(1+i ) . The motivation for truncating the sum at k is that in a search engine we are only interested in the top k results of a query rather than a sorted order of the entire document collection . k i=1
+P@k The Precision at position k for a ranked document list of a query q is defined as kX
+1 k
+I {gri = max(g)} . i=1
+P@k[r ] :=
+( 13 ) Here I {expr} is is the indicator function that assumes the value 1 if expr = TRUE and 0 otherwise . Hence , P@k only considers the top ranking documents as relevant and computes the fraction of such documents in the top k elements of the ranked list .
+MAP The mean of the Average Precision over test queries is defined as the mean over the precision scores for all retrieved relevant documents . It is given by n
+P k=1 P@k × I {grk = max(g)} P k=1 I {grk = max(g)}
+MAP = n
+.
+( 14 )
+As before , n is the number of documents associated with query q . On the OHSUMED dataset , max(g ) = 2 ( we only have 3 different grades ) .
+4.2 OHSUMED
+Data .
+The OHSUMED data set is one of the data sets contained It is widely used in inin the LETOR 3.0 package [ 13 ] . formation retrieval to evaluate the performance of various learning to rank algorithms . OHSUMED contains queries , the contents of the retrieved documents , and the relevance judgments of the document to the associated queries .
+A number of features have been added including BM25 , HostRank and topical PageRank . In addition , the LETOR 3.0 package contains the results of several learning to rank algorithms such as RankBoost [ 6 ] , RankSVM [ 10 ] , AdaRank [ 23 ] , FRank [ 17 ] , and ListNet [ 3 ] as baselines .
+OHSUMED contains medical publication abstracts . There are 106 queries and a total of 16,140 query document pairs with associated relevance judgements . Each query document pair is represented by a 25 dimensional feature vector . The relevance grade judgments are given in three levels , ie , G = {0 , 1 , 2} , where 0 means not relevant , 1 means possibly relevant , and 2 means definitely relevant . Among the query document pairs , 11,303 are judged as g = 0 , 2,585 are judged as g = 1 , and 2 , 252 are judged as g = 2 ( see Figure 1 ) .
+LETOR 3.0 also contains TREC and GOV . Unfortunately those datasets are not well suited to ranking since they only contain binary ratings ( relevant , irrelevant ) , which reduces the ranking problem to binary classification .
+Results .
+In our experiments we used 5 fold crossvalidation where 1 5 each were used for validation and testing and 3 5 for training . Appropriately all models were trained using the training set , tuned on the validation set , and tested on the test set .
+We used 125 trees , ie we performed 125 steps of the functional gradient descent method ( Algorithm 1 ) . The parameters for IntervalRank , namely the number of nodes in each tree and the shrinkage step size , the weight parameters λ1 and λ2 for the slack variables in our optimization problem , and the steplength of the functional gradient descent procedure ν were adjusted on the validation set .
+Table 1 contains a summary of the results . IntervalRank performs very well on NDCG@1 3 , and P@1 2 compared to the reference algorithms . Note that the improvements are significant on those metrics . However , we also see that for the bottom positions of the ranked list , IntervalRank ’s benefits are less significant . Overall , the experiments show that IntervalRank is state of the art and a useful addition to the machine learning ranking toolbox . Note that on datasets with only three grades some of the more detailed distinctions between elementwise , pairwise and listwise ranking are less pronounced . 4.3 Commercial search engine
+Data .
+The commercial search engine data is collected by sampling queries from the query logs and by manually labeling a number of associated documents with human understandable grades . In our collection we have five relevance grades , ie , G = {Bad , Fair , Good , Excellent , Perfect} . We collected total 8,180 queries with 341,300 query document pairs for the training set and 916 queries with 32,008 query document pairs . The distribution of the relevance grades for each set are given in Table 2 .
+The feature vector xi for each query document pair ( q , di ) consists of the following three categories :
+Query features They only depend on the query q and have constant values across Dq . For example , the number of terms in the query , language of the query , or the query classification result fall into this category .
+Document features They only depend on the document and do not vary over queries . The number of inbound links pointing to the document or the spam score of the document are such features .
+Query document features They explicitly depend on both the query and the document . This includes for instance the number of times query terms occur in the document or in the anchor text .
+156 Algorithms RankBoost RankSVM FRank ListNet AdaRank.MAP AdaRank.NDCG IntervalRank
+N@1 0.4632 0.4958 0.5300 0.5326 0.5388 0.5330 0.5628
+N@2 0.4504 0.4331 0.5008 0.4810 0.4789 0.4922 0.5448
+N@3 0.4555 0.4207 0.4812 0.4732 0.4682 0.4790 0.4900
+N@4 0.4543 0.4240 0.4694 0.4561 0.4721 0.4688 0.4703
+N@5 0.4494 0.4164 0.4588 0.4432 0.4613 0.4673 0.4609
+P@1 0.5576 0.5974 0.6429 0.6524 0.6338 0.6719 0.6892
+P@2 0.5481 0.5494 0.6195 0.6093 0.5959 0.6236 0.6522
+P@3 0.5609 0.5427 0.5925 0.6016 0.5895 0.5984 0.5768
+P@4 0.5580 0.5443 0.5840 0.5745 0.5887 0.5838 0.5556
+P@5 0.5447 0.5319 0.5638 0.5502 0.5674 0.5767 0.5488
+MAP 0.4411 0.4334 0.4439 0.4457 0.4487 0.4498 0.4466
+Table 1 : Performance on the OHSUMED dataset ( we use N@k to denote NDCG@k ) . Note that IntervalRank outperforms other ranking algorithms in the top NDCG categories and that it is very competitive otherwise .
+GBRank : It uses a loss function quite related to IntervalRank . The main difference is that it tries to regress explicitly on the large margin interval boundaries Δij and moreover , that it aims for vanishing pairwise difference between identical grades .
+X l(f , x , y ) =
+( i,j)∈Oq
+( Δij − f ( xi ) + f ( xj ))2 X
+( f ( xi ) − f ( xj))2
++
++ λ1
+( i,j)∈Tq
+Figure 1 : Grade distribution on OHSUMED
+Figure 2 : Grade distribution on search engine data
+Comparison to other algorithms .
+We compared IntervalRank with three other algorithms that we have implemented : the regression based pointwise algorithm ( GBDT ) [ 4 ] , the pairwise algorithm using squared hinge loss ( GBRank ) [ 26 ] , and the listwise algorithm using a probabilistic approach ( ListMLE ) [ 22 ] . All of these three algorithms are implemented within the functional gradient descent framework with decision trees as weak learners . The various algorithms differ only in the choice of the loss function .
+GBDT : This is simply a squared loss which weighs the deviation between target score yi and estimate f ( xi ) , that is nX
+( yi − f ( xi))2 l(f , x , y ) = i=1
+Here λ1 is a user defined parameter calibrating the trade off between the monotonicity and the clustering constraints . ListMLE : It uses a logistic regression model rather than a hinge loss in the ordinal regression setting of [ 9 ] . l(f , x , y ) = − nX log(1 +
+X exp(f ( xrj ) − f ( xri ) ) ) i=1 j>i
+Here ri is the original index of the document that should be ranked at i th position .
+Results .
+We used 600 trees for all four loss functions and we compared NDCG@1 and NDCG@5 performance for evaluation purposes . Besides directly computing the NDCG values , we make one practical consideration : we used only the two most relevant documents per host . For real world search engines this is a very reasonable restriction , since retrieval of multiple similar documents from the same host may deteriorate the quality of the result set considerably . Therefore , in our test result , only two documents from the same hosts that have the highest ranking scores were allowed to be listed in the retrieved result , and then the NDCG values were computed from that list ( this restriction was applied to all four algorithms ) .
+To test whether an additive pointwise score is needed for good performance we report results for GBRank and IntervalRank with and without the regression loss l(f , x , y ) =
+( y − f ( x)(2 2 .
+λ3 2
+For ListMLE this is added by default since it produces rather poor performance without it . We denote the regressioncalibrated variants by GBRankReg and IntervalRankReg .
+Figure 3 shows the ( host name limited ) performance with regard to the NDCG@1 and NDCG@5 scores as a function of the number of decision trees . Multiple configurations of parameters were used for each algorithm in training , and the results show the performances of the best configurations on the test set . As before IntervalRank outperforms other
+157 algorithms in both both metrics . However , we again observe larger improvements in NDCG@1 than in NDCG@5 , which suggests that IntervalRank performs well on the top portion of the list .
+A remark regarding the magnitude of the improvement is in order : a change of 1 % may appear small , however it is significant for web search in a commercial setting . Also note that the difference between the competing algorithms which represent about 5 years of progress in learning to rank is only approximately 4 % .
+5 . CONCLUSION
+In this paper we presented a novel combined loss function which outperforms related ranking functions on both commercial and publicly available datasets . It relies on a number of key ideas :
+• An adaptive listwise approach which incorporates tied pairwise constraints .
+• An efficient O(n log n ) algorithm for solving the result ing optimization problem .
+• A duality result which allows us to compute the loss gradient efficiently .
+• The combination of listwise and pointwise losses which ensures that we capture all relevant pieces of information inherent in an editorially annotated dataset .
+We believe that each of those four pieces is useful in its own right to design improved ranking functions and their application extends beyond machine learning ranking to collaborative filtering [ 20 ] and similar preference related problems .
+Acknowledgments .
+We thank Mingrui Wu and Hongyuan Zha for helpful suggestions and discussions . We also thank Shihao Ji for his help in experiments .
+6 . REFERENCES [ 1 ] S . Boyd and L . Vandenberghe . Convex Optimization .
+Cambridge University Press , Cambridge , England , 2004 .
+[ 2 ] C . Burges , T . Shaked , E . Renshaw , A . Lazier ,
+M . Deeds , N . Hamilton , and G . Hulldender . Learning to rank using gradient descent . In Proc . Intl . Conf . Machine Learning , 2005 .
+[ 3 ] Z . Cao , T . Qin , T Y Liu , M F Tsai , and H . Li .
+Learning to rank : from pairwise approach to listwise approach . In ICML ’07 : Proceedings of the 24th international conference on Machine learning , pages 129–136 , New York , NY , USA , 2007 . ACM .
+[ 4 ] D . Cossock and T . Zhang . Statistical analysis of bayes optimal subset ranking . IEEE Transactions on Information Theory , 54(11):5140–5154 , 2008 .
+[ 5 ] C . Do , Q . Le , and C . Foo . Proximal regularization for online and batch learning . In International Conference on Machine Learning ICML , 2009 .
+[ 6 ] Y . Freund , R . Iyer , R . Schapire , and Y . Singer . An efficient boosting algorithm for combining preferences . Journal of Machine Learning Research , 4:933–969 , 2003 .
+[ 7 ] J . Friedman . Greedy function approximation : a gradient boosting machine . Technical report , Stanford University , 1999 .
+[ 8 ] J . Friedman , T . Hastie , and R . Tibshirani . Additive logistic regression : A statistical view of boosting . The Annals of Statistics , 28(2):337–374 , 2000 .
+[ 9 ] R . Herbrich , T . Graepel , and K . Obermayer . Large margin rank boundaries for ordinal regression . In A . J . Smola , P . L . Bartlett , B . Sch¨olkopf , and D . Schuurmans , editors , Advances in Large Margin Classifiers , pages 115–132 , Cambridge , MA , 2000 . MIT Press .
+[ 10 ] T . Joachims . Optimizing search engines using clickthrough data . In Proceedings of the ACM Conference on Knowledge Discovery and Data Mining ( KDD ) . ACM , 2002 .
+[ 11 ] D . Liu and J . Nocedal . On the limited memory BFGS method for large scale optimization . Mathematical Programming , 45(3):503–528 , 1989 .
+[ 12 ] T . Y . Liu . Learning to Rank for Information Retrieval .
+Now Publishers , 2009 .
+[ 13 ] T Y Liu , J . Xu , T . Qin , W . Xiong , and H . Li . Letor :
+Benchmark dataset for research on learning to rank for information retrieval . In LR4IR 2007 , in conjunction with SIGIR 2007 , 2007 .
+[ 14 ] L . Mason , J . Baxter , P . L . Bartlett , and M . Frean .
+Functional gradient techniques for combining hypotheses . In A . J . Smola , P . L . Bartlett , B . Sch¨olkopf , and D . Schuurmans , editors , Advances in Large Margin Classifiers , pages 221–246 , Cambridge , MA , 2000 . MIT Press .
+[ 15 ] A . Smola , S . V . N . Vishwanathan , and Q . Le . Bundle methods for machine learning . In D . Koller and Y . Singer , editors , Advances in Neural Information Processing Systems 20 , Cambridge MA , 2007 . MIT Press .
+[ 16 ] M . Taylor , J . Guiver , S . Robertson , and T . Minka . SoftRank : Optimising non smooth rank metrics . In Proceedings of International ACM Conference on Web Search and Data Mining , 2008 .
+[ 17 ] M F Tsai , T Y Liu , T . Qin , H H Chen , and W Y
+Ma . FRank : A ranking method with fideltiy loss . In Proceedings of International ACM SIGIR Conference on Research and development in information retrieval , 2007 .
+[ 18 ] R . J . Vanderbei . Linear Programming : Foundations and Extensions . Kluwer Academic , Hingham , 1997 . [ 19 ] V . Vapnik and A . Chervonenkis . The necessary and sufficient conditions for consistency in the empirical risk minimization method . Pattern Recognition and Image Analysis , 1(3):283–305 , 1991 .
+[ 20 ] M . Weimer , A . Karatzoglou , Q . Le , and A . Smola .
+Cofi rank maximum margin matrix factorization for collaborative ranking . In J . Platt , D . Koller , Y . Singer , and S . Roweis , editors , Advances in Neural Information Processing Systems 20 . MIT Press , Cambridge , MA , 2008 .
+[ 21 ] M . Wu , H . Zha , Z . Zheng , and Y . Chang . Smoothing
+DCG for learning to rank : A novel approach using smoothed hinge functions . In Proceedings of CIKM ( Short Paper ) , 2009 .
+[ 22 ] F . Xia , T . Y . Liu , J . Wang , W . Zhang , and H . Li .
+158 Figure 3 : The regression calibrated version of IntervalRank outperforms all other ranking losses both for NDCG@1 and NDCG@5 for any number of trees . Also note that adding a pointwise loss to the pairwise and listwise approaches always improved performance .
+Listwise approach to learning to rank Theory and algorithm . In International Conference on Machine Learning ( ICML ) , 2008 .
+[ 23 ] J . Xu and L . Hang . Adarank : a boosting algorithm for information retrieval . In SIGIR ’07 : Proceedings of the 30th annual international ACM SIGIR conference on Research and development in information retrieval , pages 391–398 , New York , NY , 2007 . ACM Press .
+[ 24 ] Z . Zheng , H . Zha , K . Chen , and G . Sun . A regression framework for learning ranking functions using relative relevance judgments . In Proccedings of Annual International ACM SIGIR Conference on Research and Development in Information Retrieval , 2007 .
+[ 25 ] Z . Zheng , H . Zha , and G . Sun . Query level learning to rank using isotonic regression . In Proccedings of the 46th Annual Allerton Conference on Communication , Control and Computing . Allerton , IL , 2008 .
+[ 26 ] Z . Zheng , H . Zha , T . Zhang , O . Chapelle , K . Chen , and G . Sun . A general boosting method and its application to learning ranking functions for web search . In J . Platt , D . Koller , Y . Singer , and S . Roweis , editors , Advances in Neural Information Processing Systems 20 , pages 1697–1704 . MIT Press , Cambridge , MA , 2008 .
+159

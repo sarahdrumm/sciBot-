@@ -1,0 +1,524 @@
+Querying and Maintaining a Compact XML Storage
+Franky Lam William M . Shui Raymond K . Wong {raymond.wong , franky.lam , billshui}@nictacomau
+National ICT Australia ,
+University of New South Wales &
+Green Pea Software
+Sydney , Australia
+ABSTRACT
+As XML database sizes grow , the amount of space used for storing the data and auxiliary data structures becomes a major factor in query and update performance . This paper presents a new storage scheme for XML data that supports all navigational operations in near constant time . In addition to supporting efficient queries , the space requirement of the proposed scheme is within a constant factor of the information theoretic minimum , while insertions and deletions can be performed in near constant time as well . As a result , the proposed structure features a small memory footprint that increases cache locality , whilst still supporting standard APIs , such as DOM , and necessary database operations , such as queries and updates , efficiently . Analysis and experiments show that the proposed structure is space and time efficient .
+Categories and Subject Descriptors
+H32 [ Information Systems ] :
+Information Storage ; H24n
+[ Textual Databases ] : XML Databases
+General Terms
+Algorithms , Design , Performance
+Keywords
+XML , Compact Storage , Storage Optimization , Query Process ing
+1 .
+INTRODUCTION
+The popularity of XML as a data representation language has produced a wealth of research on efficiently storing and querying tree structured data . As the amount of XML data available increases , it is becoming vital to be able to not only query and maintain this information quickly , but also store it in a compact manner . Our work is also motivated by the mobile software development at National ICT Australia and Green Pea Software , in which managing large amount of XML data on mobile devices is mandatory . We thus turn to the problem of finding a compact storage scheme for XML , ie , a space efficient representation of the data structure which also maintains low access and update costs for all of the desired primitive operations for data processing . The flexibility of XML makes finding a scheme which satisfies all these requirements at the same time extremely challenging .
+Copyright is held by the International World Wide Web Conference Committee ( IW3C2 ) . Distribution of these papers is limited to classroom use , and personal use by others . WWW 2007 , May 8–12 , 2007 , Banff , Alberta , Canada . ACM 978 1 59593 654 7/07/0005 .
+When looking for a compact storage scheme for XML , there are several issues that need to be addressed . For example , it has to support fast operations , especially we are considering software applications that target people on the move . Moreover , if intensive compression methods are employed , they need to be optional and can be switched on or off due to low computation power of some mobile devices . In summary , from our experience , the major issues include :
+• It must support fast navigational operations : Many XML applications , such as collaborative document editing systems , depend upon efficient tree traversal , using a standard interface such as DOM . Halverson et al [ 10 ] demonstrated that a combination of navigational and structural join operators is most effective for evaluating queries . Hence , it is imperative that the storage scheme supports fast traversal of the XML tree , in all possible directions , preferably in constant time or near constant time . Previous work , such as that of Zhang et al [ 23 ] , has addressed the issue of succinctly representing XML , but at the cost of linear time navigational operations , which is not acceptable for many practical applications . Our proposed structure efficiently supports tree navigation primitives in O(lg n/ lg lg n ) time , and also includes support for efficient structural joins .
+• It must support efficient insertions and deletions : Several papers address the space issue by storing XML in compressed form [ 4,16,19,22 ] . They also support path expression queries or fast navigational access but do not allow efficient update operations such as node insertion . This can be a critical concern in many database applications . In this paper , we provide a scheme which allows near constant time for update operations in practice , with a theoretical worst case time of O(lg2 n ) .
+• It must support efficient join operations : Current query optimization techniques for XML such as work of Halverson et al [ 10 ] , make heavy use of the structural join [ 2 ] , which relies on a constant time operator to determine the ancestordescendant relationship between two nodes . Thus , any general XML storage scheme should also support such an operator in near constant time . Our scheme supports ancestordescendant queries in O(lg n/ lg lg n ) time .
+• It must be practical : Many succinct tree representation schemes are elegant theoretical structures that unfortunately do not translate well into practice . Thus , while theoretical guarantees are important for any proposed structure , practical considerations should not be forgotten . In this paper , we
+WWW 2007 / Track : XML and Web DataSession : Parsing , Normalizing , and Storing XML1073 focus on developing a practical storage scheme , using values that fit to the natural machine word size , block size and byte alignment , to allow our scheme to be used in real world database systems .
+• It should separate the topology , schema and text of the document : All XML query languages select and filter results based on some combination of the topology , schema and text data of the document . To allow efficient scans over these parts of the document , it is natural to find a representation that partitions them into separate physical locations .
+• It should permit extra indexes : Many applications may require addition specialized indexes to be built upon their data . Therefore , a general purpose database system is required to provide a storage representation , such that it is flexible enough to accommodate such need . More specifically , the storage scheme used by the database system must provide a simple , efficient and stable way of referencing its stored data items .
+In this paper , we propose a compact XML storage engine , called ISX ( for Integrated Succinct XML system ) , to store XML in a more concise structure and address all of the above issues . Theoretically , ISX uses an amount of space near the information theoretic minimum on random trees . For a constant ǫ , where 1 ≤ ǫ ≤ 2 , and a document with n nodes , we need 2ǫn + O(n ) bits to represent the topology of the XML document . Node insertions can be handled in constant time on average but worst case O(lg2 n ) time , and all node navigation operations take worst case O( lg n lg lg n ) time but constant time on average .
+The rest of this paper is organized as follows : Section 2 summarizes relevant work in the field . Section 3 presents the basics of ISX and its topology layer . The fast node navigation operators , the querying interfaces and the update mechanism are then described in detail in Section 4 . Finally , Section 5 presents the experiment results and Section 6 concludes the paper .
+2 . RELATED WORK
+To our best knowledge , Liefke and Suciu [ 16 ] proposed the first compressed XML scheme called XMill . Although XMill achieves a good compression ratio , its major drawback ( which is the lack of support for query and update ) hinders its broad application in database systems . Various approaches were proposed after XMill and they share similar benefits and drawbacks , eg , XMLPPM [ 7 ] . Related work that share the same motivations with this paper includes Maneth et al [ 17 ] , Tolani and Haritsa [ 22 ] , Min et al [ 19 ] and Buneman et al [ 4 ] . Compared to XMill , XGrind [ 22 ] has a lower compression ratio but supports certain types of queries . XPRESS [ 19 ] uses reverse arithmetic encoding to encode tags using start/end regions . Both XGrind and XPRESS require top down query evaluation , and do not support set based query evaluation such as structural joins .
+Buneman et al [ 4 ] separate the tree structure and its data . They then use bi simulation to compress the documents that share the same sub tree , however , they can only support node navigations in linear time . With a similar idea but different technique , Maneth et al [ 5 , 17 ] also compress XML by calculating the minimal sharing graph equivalent to the minimal regular tree grammar . In order to provide tree navigations , a DOM proxy that maintains runtime traversal information is needed [ 5 ] . Since only the compression efficiency was reported in the paper , both query and navigation performance of their proposed scheme are unclear .
+Most XML storage schemes , such as [ 9 , 10 , 12 , 15 ] , make use of interval and preorder/postorder labeling schemes to support constant time order lookup , but fail to address the issue of maintenance of these labels during updates . Recently , Silberstein et al [ 21 ] proposed a data structure to handle ordered XML which guarantees both update and lookup costs . Similarly , the L Tree labeling scheme proposed by Chen et al [ 6 ] addressed the same problem and has the same time and space complexity as [ 21 ] , however , they do not support persistent identifiers . The major difference between our proposal and these two work is that we try to minimize space usage while allowing efficient access , query and update of the database . In this paper , we show that our proposed topology representation costs linear space while [ 21 ] costs n log n space .
+The work most related to this paper regarding databases with efficient storage is from Zhang et al [ 23 ] . The succinct approach proposed by Zhang et al [ 23 ] targeted secondary storage , and used a balanced parentheses encoding for each block of data . Unfortunately , their summary and partition schemes support rank and select operations in linear time only . Their approach also uses the Dewey encoding for node identifiers in their indexes . The drawbacks of the Dewey encoding are significant : updates to the labels require linear time , and the size of the labels is also linear to the size of the database in the worst case . Thus , the storage of the topology can require quadratic space in the worst case .
+Finally , there are several related proposals published recently , eg [ 8 , 9 ] . [ 9 ] show that all XPath axes can be handled using a preorder/postorder labeling . Instead of maintaining these two labels ( ie , two integers ) , our proposed scheme requires less than 3 bits per node to process all XPath axes , which is an attractive alternative for applications that are both space and performance conscious .
+Ferragina et . al . [ 8 ] first shred the XML tree into a table of two columns , then sort and compress the columns individually . It does not offer immediate capability of navigating or searching XML data unless an extra index is built . However , the extra index will degrade the overall storage size ( ie , the compression ratio ) . Furthermore , the times for disk access and decompression of local regional blocks have been omitted from their experiments . As a result , the performance of actual applications may be different from what the experiments shown . Same as most other related work , data updates have been disregarded .
+3 .
+ISX STORAGE AND TOPOLOGY LAYER dblp inproceedings
+@mdate author title year booktitle
+2003−06−23 Jeffrey D . Ullman
+Improving the Efficiency of Database−System Teaching .
+2003 SIGMOD Conference
+Figure 1 : A DBLP XML document fragment
+This section describes the storage layer of the ISX system . It consists of three layers , namely , topology layer , internal node layer , and leaf node layer . In Figure 3 , the topology layer stores the tree structure of the XML document , and facilitates fast navigational accesses , structural joins and updates . The internal node layer stores the XML elements , attributes , and signatures of the text data for fast text queries . Finally the leaf node layer stores the actual text data . Text data can be compressed by various common compression techniques and referenced by the topology layer .
+WWW 2007 / Track : XML and Web DataSession : Parsing , Normalizing , and Storing XML1074 3.1 ISX Topology Layer
+Jacobson [ 11 ] showed that the lower bound space requirement for representing a binary tree is lg(Cn ) = lg(4n · Θ(n− 3 2 ) ) = 2n + o(n ) bits , where the Catalan number Cn is the number of possible binary trees over n nodes .
+Our storage scheme is based on the balanced parentheses encoding from [ 14 ] , representing the topology of XML . Different from [ 14 ] , our topology layer ( Figure 3 ) actually supports efficient node navigation and updates .
+The balanced parentheses encoding used in tier 0 reflects the nesting of element nodes within any XML document and can be obtained by a preorder traversal of the tree : we output an open parenthesis when we encounter an opening tag and a close parenthesis when we encounter a closing tag . In Figure 3 , the topology of a DBLP XML fragment shown in Figure 1 is represented in tier 0 using the balanced parentheses encoding . In our implementation , we use a single bit 0 to represent an open parenthesis and a single bit 1 to represent a close parenthesis .
+Definition : An excess is the difference between the number of open and close parentheses occurring in a given section of the topology . For instance , in Figure 3 , the excess between the open parenthesis of dblp and the close parenthesis of @mdate is 3 . The excess between the close parenthesis of the text node ” 2003 ” and booktitle is 1 . The depth of a node x in the XML document tree can be calculated by finding the excess between the open parenthesis of x and the beginning of the document . 3.2 Representation of Elements , Attributes and Texts
+We avoid any pointer based approach to link a parenthesis to its label , as it would increase the space usage from 2n to a less desirable Θ(n lg n ) . As our representation of the topology also does not include a O(lg n ) bit persistent object identifier for each node in the document , we must find a way to link the open parenthesis of x in tier 0 to the actual label itself . To address this , we adopt from Munro ’s work [ 20 ] although they do not use balanced parentheses encoding . Instead , they control the topology size by using multiple layers of variable sized pointers , and may require many levels of indirection . In addition , we make the element structure an exact mirror of the topology structure instead of mirroring to the pointers . This allows us to find the appropriate label for a node by simply finding the entry in the corresponding position at the element structure . As mentioned earlier , a pointer based approach would require space usage of Θ(n lg n ) , which is undesirable . The next issue is to handle the variable length of XML element labels . We adopt the approach taken in previous work [ 22 , 23 ] , and maintain a symbol table , using a hash table to map the labels into a domain of fixed size . In the worst case , this does not reduce the space usage , as every node can have its own unique label . In practice , however , XML documents tend to have a very small number of unique labels . Therefore , we can assume that the number of unique labels used in the internal nodes ( E ) is very small , and essentially constant . This approach allows us to have fixed size records in the internal node layer .
+Note that each element in the XML document actually has two
+Topology Layer
+Tier 2 Tier 1 Tier 0
+( ))(((
+)(())(
+)))(( )
+Internal Node Layer ( Tags )
+Leaf Node Layer ( Text Data )
+Symbol Table , Topology Labels + Text Data Signatures
+Offset Table
+Character Data available entries in the array , corresponding to the opening and closing tags . We could thus make the size of each entry 1 2 lg E bits , and split the identifier for each elements over its two entries . However , the two entries are not in general adjacent to each other , and hence splitting the identifier could slow down lookups as we would need to find the closing tag corresponding to the opening tag and decrease cache locality . Hence , we prefer to use entries of lg E bits and leave the second entry set to zero ; this also provides us with some slack in the event that new element labels are used in updates .
+Since text nodes are also leaf nodes , they are represented as pairs of adjacent unused spaces in the internal node layer . We thus choose to make use of this “ wasted ” space by storing a hash value of the text node of size 2 lg E bits . This can be used in queries which make use of equality of text nodes such as //*[year="2003" ] , by scanning the hash value before scanning the actual data to significantly reduce the lookup time . Since texts are treated independently from the topology and node layers , they can be optionally compressed by any compression schemes . Instead of employing more sophisticated compression techniques such as BWT [ 8 ] that are relatively slow on mobile devices , a standard LZW compression method ( eg , gzip ) is used in this paper . if ( tier0[NEXT(FINDCLOSE(node) ) ] is an open parenthesis ) then else else else return NOT FOUND return NOT FOUND return NEXT(node ) return NEXT(FINDCLOSE(node ) ) return BACKWARDEXCESS(node , |tier0| , 2 ) if ( tier0[NEXT(node ) ] is open parenthesis ) then
+Algorithm 1 Node Navigation Operators PARENT(node ) 1 FIRSTCHILD(node ) 1 2 3 4 NEXTSIBLING(node ) 1 2 3 4 PREVIOUSSIBLING(node ) 1 2 3 4 NEXTPRECEDING(node ) prec ←PREV(node ) 1 while ( prec is an open parenthesis ) do prec ←PREV(prec ) 2 3 prec ←PREV(prec ) while ( prec is a close parenthesis ) do prec ←PREV(prec ) 4 return prec 5 NEXTFOLLOWING(node ) 1 2 3 if ( PREV(node ) is a close parenthesis ) then return FINDOPEN(PREV(node ) ) return NOT FOUND f ollow ←NEXT(FINDCLOSE(node ) ) while ( f ollow is a close parenthesis ) do f ollow ←NEXT(f ollow ) return f ollow
+4 . QUERYING AND UPDATE
+MAINTENANCE
+In addition to efficiently storing large volumes of data , an XML database system should also have the following features : 1 ) direct node navigation operators ; 2 ) XPath query processing interface ;
+"2003−06−23" inproceedings mdate
+"Jeffrey" author dblp ( ( ( ( ) ) ( ( ) ) title ( (
+"Improving"
+"2003" year ) ) ( ( )
+D" O booktitle M "SIG ( ) ( ) ) )
+)
+Figure 2 : Overview of the data structure
+Figure 3 : Balanced parentheses encoding of Figure 1
+WWW 2007 / Track : XML and Web DataSession : Parsing , Normalizing , and Storing XML1075 and 3 ) efficient node insertion/deletion mechanism . For the rest of this section , we present algorithms and other auxiliary data structures satisfying the above features , utilising the ISX topology layer . Furthermore , we provide a detailed cost analysis of our proposed approach for the database operators . 4.1 Node Navigation with Topology Layer Primitives
+Given an arbitrary node x of a large XML document , a navigation operator should be able to traverse back and forth the entire document via various step axes of node x . Some frequently used step axes for an XML document tree are parent , first child , nextsibling , previous sibling , next following and next preceding . These step axes can then be used to provide programming interfaces , such as the DOM API , for external access to the XML database .
+Node navigation operators are described by the pseudo code in Algorithm 1 , which shows a tight coupling between the ISX topology layer primitives and the navigation operators . Each navigation operator in Algorithm 1 is mapped to a sequence of calls to the topology layer primitives described in Algorithm 2 . 4.2 Auxiliary Tiers
+Tier 2
+Tier 1
+Tier 0
+0 b10 ( ( ( ( ) b00
+T2 =9,6,0,4,−1,3,3
+0 b20 T1 =4,1,0,4,−1,3,1
+T2 =3,6,−3,1,−4,0,1
+1
+T1 =2,2,−1,1,−1,1,1
+1
+T1 =3,3,−1,1,−1,1,1
+2
+) ( ( ) b01
+) ( ( ) ) ( b02
+( ) ) ( ( b03
+T1 =0,4,−4,0,−4,0,0
+4
+T1 =3,2,−1,1,0,2,1
+3 b11 ) ) ) ) b04
+Figure 4 : Example of Tiers of Topology Part
+Node navigation operators are highly dependent on topology layer primitives such as FORWARDEXCESS and BACKWARDEXCESS . In the worst case , node navigation operators could take linear time . However , we can significantly improve the performance of the topology layer primitives by adding auxiliary data structures ( tier 1 and tier 2 blocks ) on top of the tier 0 layer described in Section 31
+Figure 4 presents the auxiliary tiers 1 ( T 1 ) and 2 ( T 2 ) , where each tier contains contiguous arrays of tuples , with each tuple holding summary information of one block in the lower tier . The tier 0 else if ( k = 0 ) then return NOT FOUND for each current from start to end do if ( tier0[current ] is an open parenthesis ) then if ( tier0[current ] is an open parenthesis ) then k ← k − 1 k ← k + 1 return current for each current from start to end step −1 do
+Algorithm 2 Primitive Operators for Topology Layer Access FORWARDEXCESS(start , end , k ) 1 2 3 4 5 6 7 8 BACKWARDEXCESS(start , end , k ) 1 2 3 4 5 6 7 8 PREV(node ) 1 NEXT(node ) 1 FINDCLOSE(node ) 1 FINDOPEN(node ) 1 if ( node > 0 ) then return node − 1 else return NOT FOUND if ( node < |tier0| ) then return node + 1 else return NOT FOUND return FORWARDEXCESS(node , |tier0| , 0 ) return BACKWARDEXCESS(node , |tier0| , 0 ) k ← k − 1 k ← k + 1 return current return NOT FOUND if ( k = 0 ) then else
+|B|
+1 , T 0
+2 , . . . , T 0 in the figure corresponds to the balanced parentheses encoding of the topology of the XML document , which was described in Section 3 . For tiers 1 and 2 , each tier 1 block stores an array of tier 0 tuples T 0 n , where n is the maximum number of tuples allowed per tier 1 block . Each T 0 i for 0 < i ≤ n is defined as ( L0 , R0 , m0 , M 0 , b0 , B0 , D0 ) and the density of each tier 0 block can be calculated by using the formula density = L0+R0 . For each tier 0 tuple , L0 is the total number of left parentheses of a block ; R0 is the total number of right parentheses of a block ; m0 is the minimum excess within a single block by traversing the parentheses array forward from the beginning of the block ; M 0 is the maximum excess within a single block by traversing the parentheses array forward from the beginning of the block ; b0 is the minimum excess within a single block by traversing the parentheses array backward from the last parenthesis of the block ; B0 is the maximum excess within a single block by traversing the parentheses array backward from the last parenthesis of the block ; and D0 is total number of character data nodes . In tier 2 , each block stores an array of tier 1 tuples T 1 n , where n is the maximum number of tuples allowed per tier 2 block , Each tuple T 1 i for 0 < i ≤ n is then defined as ( L1 , R1 , m1 , M 1 , b1 , B1 , D1 ) , where : L1 is the sum of all L0 for all tier 1 tuples T 0 ( P|B|/|T 0| L0 i ) ; R1 is the sum of all R0 for all tier 1 tuples T 0 ( P|B|/|T 0| R0 i ) ; m1 is the local forward minimum excess across all of its tier 1 tuples ; M 1 is the local forward maximum excess across all of its tier 1 tuples ; b1 is the local backward minimum excess across all of its tier 1 tuples ; B1 is the local backward maximum excess across all of its tier 1 tuples ; and D1 is the total number of character data nodes for all tier 1 tuples ( P|B|/|T 0|
+2 , . . . , T 1
+Although both tier 1 and tier 2 tuples look similar , the values of m1 , M 1 , b1 and B1 in tier 2 are calculated differently to that of in tier 1 . For tier 2 , the function TIER2LOCALEXCESS in Algorithm 3 is used to calculate the local minimum/maximum excess and it is not as trivial as the calculation for tier 1 blocks .
+1 , T 1
+D0 i ) . i=0 i=0 i=0
+Let X = ( L , R , m , M , b , B , D ) be a tier 2 tuple holding the summary information for the tier 1 tuples Y 1 , . . . , Y n . To calculate the local forward minimum excess X.m , we know the local minimum excess from the beginning of the first parentheses of Y 1 until the end of Y 1 is equal to Y 1.m , we then assign this value to Xm We know the excess at the end of Y 1 is Y 1.L − Y 1.R , so the minimum of Y 1.m and ( Y 1.L − Y 1.R + Y 2.m ) gives the forward minimum excess from beginning parenthesis of Y 1 to the end parenthesis of Y 2 . Similarly , the minimum of ( Y 1.m , Y 1.L − Y 1.R + Y 2.m , Y 1.L − Y 1.R + Y 2.L − Y 2.R + Y 3.m ) gives the minimum excess between the beginning parenthesis of Y 1 to the end parenthesis of Y 3 . Therefore , X.m can be calculated by scanning its tier 1 tuples , updating the excess along the way . Both maximum and minimum forward excesses can be calculated at the same time . For backward excesses , the algorithm is identical , except for the direction of traversal of the tier 1 tuples .
+|T 1|
+, ( t2+1)∗|T 2 |
+{t1start , t1end} ← { t2∗|T 2| {tier2[t2].m , tier2[t2].M} ← {tier1[t1start].m , tier1[t1start].M} excess ← tier1[t1start].L − tier1[t1start].R for each t1 from t1start + 1 to t1end do
+Algorithm 3 Calculate Local Excess in a Tier 2 Block TIER2LOCALEXCESS(t2 ) 1 2 3 4 5 6 7 8 9 tier1[t1].m ← excess + tier1[t1].m tier1[t1].M ← excess + tier1[t1].M if ( excess + tier1[t1].M > tier2[t2].M ) then if ( excess + tier1[t1].m < tier2[t2].M ) then excess ← excess + tier1[t1].L − tier1[t1].R
+− 1}
+|T 1 |
+WWW 2007 / Track : XML and Web DataSession : Parsing , Normalizing , and Storing XML1076 Example In Figure 4 , if we need to calculate the minimum forward excess for the tier 2 tuple T 21 , we first assign it to T 21.m = T 13.m = −1 . Now the excess at the end of T 13 is T 13.L − T 13.R = 1 and 1 + T 14 , m = 1 + ( −4 ) = −3 . As −3 is smaller than −1 , T 21.m is assigned −3 .
+In the ISX system , the fixed block size for each tier is 4 kilobytes in size . Therefore , each tier 0 block can hold up to 32768 bits and each tier 1 block can hold 4KB |T 0| tier 0 blocks . Similarly , each tier 2 block can hold up to 4KB |T 0| tier 1 blocks , which is equivalent to |T 0| )2 tier 0 blocks . For a 32 bit word machine , there are only ( 4KB 2 tier 2 blocks and in theory , there are Θ(n/ lg2 n ) tier 2 blocks . Therefore , the worst case for navigational accesses is O(n/ lg2 n ) , which is not much of an improvement on O(n ) . Fortunately , it is relatively simple to fix this limitation : instead of having 3 tiers , we generalize the above structure in a straightforward fashion to use O(lg n/ lg lg n ) tiers . This means that the top most tier has Θ(n/ lglg n/ lg lg n n ) = Θ(1 ) blocks , reducing the worst case navigational access time to O(lg n/ lg lg n ) . 4.3 Improved Topology Layer Primitives
+Algorithm 4 Topology Primitives using Auxiliary Structures improved primitives in Algorithm 4 . Furthermore , since the depths of real world XML documents are generally less than |B| ( even the depth of the highly nested Tree Bank dataset [ 18 ] is much less than 100 ) , most matching parentheses lie within the same block , and occasionally are found in neighboring blocks . Therefore , when FASTFORWARDEXCESS is called from navigation operations , we rarely need to access additional blocks in either the auxiliary data structure or the topology bit array . In the worst case , when the matching parentheses lie within different blocks , we only need to read two tier 1 blocks and two tier 2 blocks for a 32 bit word size machine , which is very small in size . 4.4 Update Operators
+In ISX system , we also facilitate efficient update operators , such as node insertion . So far for tier 0 layer , we have appeared to treat the balanced parentheses encoding as a contiguous array . This scheme is not suitable for frequent updates as any insertion or deletion of data would require shifting of the entire bit array .
+441 Updating Tier 0
+In this section , we present the modification to our storage scheme , that changes the space usage from 2n to 2ǫn , where ǫ ≥ 1 , so that we can efficiently accommodate frequent updates .
+NEXT(node ) 1 if ( I 0 2 3 else 4 5 6 7 node < L0 return I 0 if ( B0 else node + R0 node ) then node + 1 node is the last tier 0 block ) then return NOT FOUND return B0 node + |B|
+FASTFORWARDEXCESS(start , end , k ) 1 current ←FORWARDEXCESS(start , B0 2 if current 6= NOT FOUND then 3 4 for each T 0 5 6 i ∈ B1 return FORWARDEXCESS(T 0 current where T 0 if ( current + m0 return current i > T 0 i ≤ k ≤ current + M 0 current x + |B| − 1 , k )
+7 8 for each T 1 9 10 11 12 current ← current + L0 if ( current + m1 current where T 1 j ∈ B2 for each T 0 j ≤ k ≤ current + M 0 j ) then if ( current + m0 j where T 0 i ∈ B1 return FORWARDEXCESS(T 0 i > T 0 i ≤ k ≤ current + M 0 j i ) then
++ |B| − 1 , k )
+T 0 i i , B0 i − R0 i j > T 1 current current ← current + L0 13 j − R1 14 FASTBACKWARDEXCESS(start , end , k ) current ← current + L1 j i ) then
++ |B| − 1 , k ) i , B0 i − R0 i
+T 0 i
+// Implemented in the same way as FASTFORWARDEXCESS , // but in backward direction .
+FORWARDEXCESS and BACKWARDEXCESS return the position of the first parenthesis matching the given excess k within a given range [ start , end ] ( in forward and backward direction respectively ) .
+Using the auxiliary structures ( tiers 1 and 2 ) , instead of just a linear scan of tier 0 layer , we can use tier 1 to test whether the position of the parenthesis , matching k excess , lies within the i th tier 0 block , ie , checking whether ( m0 i + ei ) , where ei is the excess between start and the beginning of the i th tier 0 block ( excluding the first bit ) . However , as |B| = Θ(lg n ) , there are potentially n/|B| tier 1 tuples to scan . Hence , we use tier 2 find the appropriate tier 1 block within which excess lies , thus reducing the cost to a near constant in practice . i + ei ) ≤ k ≤ ( M 0
+Using the above approach , we can replace primitives NEXT , FORWARDEXCESS and BACKWARDEXCESS in Algorithm 2 with
+Density Threshold
+Depth
+[ 0.50 , 0.75 ]
+[ 0.42 , 0.83 ]
+[ 0.33 , 0.92 ]
+0
+1
+2
+[ 0.25 , 1.00 ] 3 d =56.25 % 6 v0
+0 b0 ( ( ( ( ) d =62.5 % 1 d =62.5 % 8 v2
+0
+1 v1
+0
+1 b1
+) ( ( ) d =50 % 2 b2
+) ( ( ) ) ( d =75 % 3 d =37.5 % 9 v3
+0
+1 d =68.75 % 7
+1 b3 ( ) ) ( ( d =62.5 % 4
+0 b4 ) ) ) ) d =50 % 5 d : density within a range of blocks height of virtual binary trie : 3
+Figure 5 : Densities of the parentheses array and the corresponding virtual balanced trie with block size |B| = 8 and height = 3 .
+In our approach , we first divide the array into blocks of |B| bits each , and store the blocks contiguously . Within each block , we leave some empty space by storing them at the rightmost portion of each block . Now , we only need to shift O(|B| ) entries per insertion or deletion . We can control the cost of shifting by adjusting the block size .
+After the initial loading of an XML document , the empty space allocated to leaf nodes will eventually be used up as more data is inserted into the database . Therefore , we need to guarantee an even distribution of empty bits across the entire parentheses array , so that we can still maintain the O(|B| ) bound for the number of shifts needed for each data insertion . This can be achieved by deciding exactly when to redistribute empty space among the blocks and which blocks are to be involved in the redistribution process .
+To better understand our approach , we first visualize these blocks as leaf nodes of a virtual balanced binary trie , with the position of the block in the array corresponding to the path to that block through the virtual binary trie . Figure 5 shows such a trie , where block 0 corresponds to the leaf node under the path 0 → 0 → 0 , and similarly block 3 corresponds to the path 0 → 1 → 1 . For each block , we define :
+• L : the total number of left parentheses within a block .
+• R : the total number of right parentheses within a block .
+• DENSITY(b ) : the density of a block b , defined as L+R |B| .
+WWW 2007 / Track : XML and Web DataSession : Parsing , Normalizing , and Storing XML1077 x + R0 x ] to [ x + 2 , L0
+Algorithm 5 Node Insertion and Order Maintenance Operations INSERT(x ) 1 2 3 4 5 MAINTAIN(x ) 1 2
+Rightshift tier0[x , L0 tier0[x , x + 1 ] ← {open parenthesis , close parenthesis} Increment L0 x + R0 if ( L0 MAINTAIN(x ) x , R0 x and R1 x > |B| − 2 ) then
+{height , weight , δ} ← {lg n , height , 1} {min , max} ← {B0 L0+R0 x + |B|} x + R0 x , B0 x + 2 ] x , L1 x while (
+4 + d
+4h ) do
+P min max
+B1 B1 ( max−min)|B| ≥ 3 depth ← depth − 1 δ ← 2δ min ← MAX(0 , min − δ ) max ← max + δ
+3 4 5 6 7 8
+Evenly distribute bits in blocks [ min , max ] and update the corresponding tier 1 and tier 2 tuples .
+Given the above definition of density for leaf nodes , the density of a virtual node is the average density of its descendant leaf nodes . We then control the empty space within all nodes in the virtual binary trie by setting a density threshold [ min , max ] , within which the block densities must lie . For a virtual node at height h and depth d in the virtual trie , we enforce a density threshold of [ 1 4 + d 4h ] . For example , the density threshold range for virtual node v0 in Figure 5 is [ 1 4×3 ] = [ 0.33 , 0.92 ] , since the depth for v0 is 2 and height of the trie is 3 .
+4 + 2
+2 − 2
+4×3 , 3
+2 − d
+4h , 3
+Why do we use the formula above for controlling the density threshold ? This is due to two factors : first , in order to guarantee good space utilization , the maximum density of a leaf node should be 1 , and the minimum density threshold of root node should be 1/2 . Secondly , the density threshold should satisfy the following invariant : the density threshold range of an ancestor node should be tighter than the range for its descendant nodes . This is so that space redistribution for an ancestor node v , the density threshold of all its descendants are also immediately satisfied .
+In the worst case , we use 4 bits per node , since the root node can be only half full . Thus , on a 32 bit word machine , we can store at most 232/4 = 230 nodes . However , by adjusting the minimum root node density threshold , from 1 ǫ it is possible to store more than 230 nodes by choosing a smaller ǫ . In practice , ǫ should be 2 and therefore 2ǫn bits is in effect 4n . The factor ǫ should only be less than 2 when the document is relatively static .
+2 to 1
+Notice that although we shift the parentheses within tier 0 during update , we never need to shift the tuples in tier 1 because the same T 0 tuple always corresponds to the same tier 0 block , regardless of its density . Therefore unlike tier 0 , we do not need to redistribute tuples within tier 1 ( similarly for tier 2 ) during the update operation .
+442 Updating Auxiliary Tiers
+From Section 4.2 , the auxiliary tiers may first appear to increase the update costs to O(lg3 n/ lg lg n ) , since moving a node requires updating O(lg n/ lg lg n ) tiers . However , this overhead can be
+Algorithm 6 Offset calculation for block and indexes within the block in all tiers
+|B| x5 lg |B|
+B0 |B| ⌋ , I 0 x = ⌊ x B0 B1 x = ⌊ B2 x = ⌊ T 0 x = ( L0 T 1 x = ( L1 x = ⌊x mod |B|⌋ ⌋ , I 1 x = ⌊(B0 |B|2 ) 5 lg |B| ⌋ , I 2 x , D0 x , D1
+|B| x , m0 x , m1 x , M 0 x , M 1 x , R0 x , R1 x5 lg(
+B1
+) x5 lg |B| ) mod |B|⌋ x5 lg( |B|2 ) x , . . . , I 0 x , . . . , I 1 x = ⌊(B1 x ) = ( I 0 x ) = ( I 1
+5 lg |B| ) ) mod |B|⌋ x + 4 lg |B| ) x + 4 lg |B| ) eliminated by updating the upper tiers once per redistribution , instead of once per node . A simple proof then demonstrates that the overall update cost is unaffected , and remains O(lg2 n ) .
+During the insertions and deletions in a tier 0 block , we simply update the appropriate tuples in the corresponding blocks in the higher tiers . Since the redistribution process we described in Section 441 can be seen as a sequence of insertions and deletions , the corresponding updates to the auxiliary tiers do not affect the worst case complexity for updates .
+4.5 Space Cost
+Having 2ǫn bits used per node including update , using 32 bits word , we can store as much as 230 nodes . In our implementation we also chose to use four kilobytes sized block . Based on these values , we now discuss the space cost of each component of our storage scheme . Of course , if larger documents need to be stored , we can increase the word size that we use in the data structure and adjust the bit length used on tier 1 and tier 2 .
+Tier 0 : . From above , Tier 0 can take up at most 232/2ǫ = 232 bits space ( or ⌈ 2ǫn
+|B| ⌉ = 217 blocks ) .
+Tier 1 : . We need lg |B| = 15 bits for each variable ( L0 , R0 , m0 , M 0 , b0 , B0 , D0 ) within a T 0 tuple . Each T 0 tuple requires a total of 7 lg |B| = 112 bits including bit alignments and based on this calculation , each tier 1 block can then store up to ⌊ |B| |T 0| ⌋ = 292 T 0 tuples , Since the maximum number of nodes can be stored in tier 0 is 230 , then we only need 2ǫn |B| = 217 T 0 tuples to represent all tier 0 blocks and they can be stored in |B| /⌊ |B| ˚ 2ǫn
+|T 0| ⌋ˇ = ⌈ 14 lg |B|ǫn
+⌉ = 449 tier 1 blocks .
+|B|2
+|T 0| ) = lg( |B|2
+Tier 2 : . We need a total of 24 bits for each variable ( L1 , R1 , m1 , M 1 , b1 , B1 , D1 ) within a T 1 tuple . This is derived from lg |B| + lg( |B| 7 lg |B| ) , where each variable holds the size of a tier 1 tuple and total number of bits required to represent the total number of tuples per tier 1 block . So each T 1 tuple requires a total of |T 1| = 7 lg( |B|2 7 lg |B| ) = 168 bits and each tier 2 block holds up to ⌊ |B| |T 1| ⌋ = 195 T 1 tuples . Thus , we will only need a total of ⌈ 14 lg |B|ǫn |T 1| ⌉ = blocks to store the 449 tier 1 tuples .
+/ |B|
+|B|2
+98 lg |B| lg( |B|2
+7 lg |B|
+)ǫn
+|B|3
+= 2 tier 2
+Since we only need a maximum of two tier 2 blocks , even for 230 nodes document , we can just keep them in main memory . In fact , the entire tier 1 can also be kept in main memory , since it requires at most 449 ∗ 4KB < 2MB . In summary , the space required by the topology layer ( in bits ) is :
+2ǫn +
+14 lg |B|ǫn
+|B|
++
+98 lg |B| lg( |B|2
+7 lg |B| )ǫn
+|B|2
+= 2ǫn + o(ǫn ) and the space required by the internal node layer ( in bits ) plus the symbol table is : ǫn lg E + O(E )
+We can use the above equations to estimate the space used by an XML file , using as our example a 100 MB copy of DBLP , which was roughly 5 million nodes . If we assume there are no updates after the initial loading , we can set ǫ = 1 . According to the equation , we will have used roughly 2ǫn = 1MB for the topology layer , and ǫn lg E + O(E ) = 8MB . This , of course , disregards the space needed for the text data in the document .
+Based on the block size |B| , we know the exact size of tuples
+WWW 2007 / Track : XML and Web DataSession : Parsing , Normalizing , and Storing XML1078 and tiers in our topology layer . Therefore , given a bit position xh , we can calculate which tier 0 block this bit belongs to and which tier 1 block contains summary information for the tier 0 block . For a given xh , Algorithm 6 lists all the calculations needed to find its resident tier 0 to tier 2 blocks and the index within the blocks to get the summary .
+5 . EXPERIMENTS
+Features
+Compression Doc traversal Node nav.of all axes Update operation Support XPath query
+XMill √ √
+XGrind
+√ √
+NoK √ uncertain
+√
+√
+TIMBER
+√ √ √ √
+ISX √ √ √ √ √
+Table 1 : Comparison of supported features
+The ISX system is implemented in C++ using Expat XML parser1 . In this section , we compare the performance of ISX with other related implementations , namely , XMill [ 16 ] , XGrind [ 22 ] , NoK [ 23 ] and TIMBER [ 12 ] . Experiments were setup to measure various performances according to the feature matrix of these implementations as shown in Table 1 .
+We used an Apple G5 2.0 GHz machine with 2.5GB RAM and 160GB of 7,200 RPM IDE hard drive . The memory buffer pool of ISX has been fixed to 64MB for all the experiments . Three XML datasets were used , namely , DBLP [ 1 ] , Protein Sequence Database ( PSD ) [ 3 ] , TreeBank [ 18 ] . We found that the experiment results from PSD are very similar to those from DBLP due to their regular , shallow tree structure . Therefore , PSD results are skipped from some plots below for clarity . Large datasets ( ie , ≥ 1GB ) were generated by repeatedly duplicating and merging the source dataset , eg , the 16GB DBLP document contains more than 770 million nodes . 5.1 Storage Size Comparison
+Table 2 and 3 show that XMill has the best compression ratio for both DBLP and TreeBank datasets . Compared to XMill that does not support any direct data navigation and queries , XGrind does allow simple path expressions . Therefore , it has a relatively less attractive compression ratio . In fact , XGrind failed to run on large datasets in our experiments . Both XMill and XGrind have better space consumption as they are primarily designed for readonly data and do not support efficient updates . Furthermore , they only support access to the compressed data in linear time .
+Table 2 and 3 show again that ISX is relatively less sensitive to the structure of the data . Although the compression ratio of ISX for TreeBank is not as good as for DBLP , the reason is that TreeBank has the text content that are harder to compress ( TreeBank text are more random than the DBLP ’s ) . XMill compression ratio on TreeBank is relatively much worse than that on DBLP is due to both the random text content as well as the more complex tree structure of the data . 5.2 Bulk Loading Performance
+The performance comparison of bulk loading using ISX , NoK , XGrind and XMill are shown in Figure 6 . For the smaller datasets ( up to 500MB DBLP ) , Figure 6(a ) shows our ISX system significantly outperforms NoK and TIMBER in loading . It also highlights the scalability of ISX in loading large datasets .
+9 1http://wwwsourceforgenet/projects/expat/
+To further test the scalability of loading even larger XML documents , we compared the loading time of ISX and the other well known systems such as XMill and XGrind on 1 to 16 GB of DBLP documents . During the loading process , XGrind failed to load XML documents greater than 100MB . Although Figure 6(b ) shows that the loading time for ISX is slower than XMill ’s , it still exhibits a similar trend ( similar scalability ) . The gap between the two curves is contributed by the fact that ISX does not compress the XML data as much as XMill does . This results in a larger storage layer than XMill , which will then uses higher number of disk writes .
+5.3 Query Performance
+When consider using the proposed structure as a storage scheme of a full fledged database system , one must consider its query performance . Figure 7 ( with details listed in Tables 4 ) shows the query performance of ISX against other schemes . Note that the query times in Figure 7 are in logarithmic scale . From this experiment , we found that ISX outperforms other systems in either the ISX or ISX Stream ( using the TurboXPath approach [ 13 ] ) modes . The performance of ISX is measured by using binary structural join to perform XPath queries ; while ISX Stream execute the same query by scanning ISX topology layer linearly .
+5.4 Navigation and Document Traversal
+To test the performance and scalability of random node navigation , we pre loaded our XML datasets , and for each database , we randomly picked a node and called the node traversal functions ( eg , FIRSTCHILD , NEXTSIBLING ) multiple times . The average access time for these node traversal operations are plotted in Figure 8(a ) . The graph shows that as the database size gets bigger , the running time for these functions remains constant . This is not surprising , since in general most nodes are located close to their siblings , and hence are likely to be in the same block . For example , it generally only takes a scan of a few bits on average to access either the first child node or the next sibling node . Some operations are faster than the others , due to their different implementation complexity ( listed in Algorithm 1 ) and the characteristics of the encoding itself . For instance , as Figure 8(a ) shows , FIRSTCHILD performed slightly faster than NEXTSIBLING function , because the first child is always adjacent to a node , whereas its next sibling might be several nodes away .
+With fast traversal operations , ISX can traversal XML data in the proposed compact encoding significantly faster than other XML compression techniques such as XMill , as shown in Figure 8(b ) . We argue that this feature is important to examine the content of large XML databases or archives .
+5.5 Update Performance
+The worst case for Algorithm 5 happens when nodes are inserted at the beginning of a completely packed database , ie , with no gaps between blocks . The insertion experiment was set to measure its average worst case performance by inserting nodes at the beginning of the database . For each experiment , we did multiple runs ( resetting the database after each run ) . The average insertion times ( per node ) are shown in Figures 9 . In Figure 9 , we see an initial spike in the execution time for the worst case insertion . This corresponds to the initial packed state of the database , in which case the very first node insertion requires the redistribution of the entire leaf node layer . Clearly , in practice this is extremely unlikely to happen , but the remainder of the graph demonstrates that even this contrived situation has little effect on the overall performance . The graph also shows that the cost of all subsequent insertions in
+WWW 2007 / Track : XML and Web DataSession : Parsing , Normalizing , and Storing XML1079 Source Data ( MB ) 1 2 5 8 16 32 64 128
+ISX ( MB )
+ISX
+Compressed ( MB )
+1 1 3 5 10 21 42 87
+0.4 0.7 1.5 2.5 5 10 20 40.2
+XMill ( MB ) 0.1 0.3 0.5 0.9 1.8 3.7 7.2 14.9
+XGrind ( MB ) 0.3 0.6 1.3 2.1 4.3 8.6 17.4 35.8
+Source Data ( MB ) 256 500 750 1000 2000 4000 8000 16000
+ISX ( MB ) 182 363 549 726 1452 2903 5807 9411
+ISX
+Compressed ( MB )
+82.7 163.7 249.7 327.5 654.9 1309.8 2619.6 4629.9
+XMill ( MB ) 31.5 62.6 94.0 125.3 250.5 501.0 978.48 1952.81
+XGrind ( MB ) 75.0 Failed Failed Failed Failed Failed Failed Failed
+Table 2 : Storage size of ISX ( with and without text compression ) , XMill and XGrind on DBLP
+Source Data ( MB ) 1 2 4 8 16 32 64 128
+ISX ( MB ) 0.51 1.02 2.04 4.09 8.19 16.39 32.77 65.54
+ISX
+Compressed ( MB )
+0.41 0.81 1.63 3.26 6.53 13.07 44.49 52.26
+XMill ( MB ) 0.30 0.58 1.16 2.30 4.60 9.19 18.35 36.69
+Source Data ( MB ) 256 500 750 1000 2000 4000 8000 16000
+ISX ( MB ) 131.08 243.72 365.50 487.43 974.69 1949.39 4052.58 7797.56
+ISX
+Compressed ( MB )
+104.53 192.79 289.21 385.58 770.98 1541.97 3205.59 6167.87
+XMill ( MB ) 73.38 146.74 220.10 293.489 586.969 1173.93 2347.85 4695.7
+Table 3 : Storage size of ISX ( with and without text compression ) , XMill on TreeBank
+10000
+1000
+100
+10
+1
+ISX TIMBER NoK
+) s d n o c e S
+( i e m T g n d a o L i
+0
+100 200 300 400 500 600
+XML Document Size ( MB )
+100000
+10000
+1000
+100
+10
+1
+0.1
+XMill ( DBLP ) ISX ( DBLP ) XGrind ( DBLP ) XMill ( TreeBank ) ISX ( TreeBank )
+0 2 4 6 8 10 12 14 16 18
+Document Size ( GB )
+9(a ) ISX vs . TIMBER and NoK ( up to 500 MB data )
+9(b ) ISX vs . XGrind and XMill ( up to 16 GB data )
+Figure 6 : Loading Time Comparison
+Query # XPath Expression
+Q1 Q2 Q3 Q4 Q5 Q6
+//inproceedings //mastersthesis /dblp/article //inproceedings/title //article[.//month/text( ) = ” July ” ]//title //inproceedings[.//ee]//pages
+1 GB |F inal| 402667 74 442184 402667 857309 796742
+2 GB |F inal| 981484 156 717449 981484 1729184 1607116
+4 GB |F inal| 2012761 315 1379945 2012761 3454708 3210628
+8 GB |F inal| 4160339 627 2630711 4160339 6920136 6430194
+16 GB |F inal| 8453066 1251 5135130 8453066 13848372 12868471
+Table 4 : Test Queries and Final Result Sizes
+) s d n o c e S
+( i e m T g n d a o L i
+WWW 2007 / Track : XML and Web DataSession : Parsing , Normalizing , and Storing XML1080 XMill/LibXML
+TIMBER NoK ISX
+ISX Stream
+) s d n o c e S i
+( e m T y r e u Q
+1000 100 10 1 0.1 0.01 0.001
+XMill/LibXML 1000
+100
+10
+1
+0.1
+0.01
+0.001
+TIMBER
+NoK
+ISX
+ISX Stream
+XMill/LibXML
+TIMBER
+NoK
+ISX
+ISX Stream
+) s d n o c e S i
+( e m T y r e u Q
+1000
+100
+10
+1
+0.1
+0.01
+0.001
+) s d n o c e S i
+( e m T y r e u Q
+2
+4
+8
+16
+32
+64
+128
+1
+2
+3
+4
+5
+6
+7
+1
+2
+3
+4
+5
+6
+7
+DBLP Document Size ( MB )
+9(a ) DBLP Q1
+DBLP Document Size ( MB )
+DBLP Document Size ( MB )
+9(b ) DBLP Q2
+9(c ) DBLP Q3
+XMill/LibXML
+TIMBER
+NoK
+ISX
+ISX Stream
+XMill/LibXML
+TIMBER
+NoK
+ISX
+ISX Stream
+XMill/LibXML
+TIMBER NoK ISX
+ISX Stream
+) s d n o c e S i
+( e m T y r e u Q
+1000
+100 10
+1
+0.1 0.01
+0.001
+) s d n o c e S i
+( e m T y r e u Q
+1000
+100
+10
+1 0.1
+0.01
+0.001
+) s d n o c e S i
+( e m T y r e u Q
+1000
+100 10
+1
+0.1 0.01
+0.001
+1
+2
+3
+4
+5
+6
+7
+1
+2
+3
+4
+5
+6
+7
+1
+2
+3
+4
+5
+6
+7
+DBLP Document Size ( MB )
+DBLP Document Size ( MB )
+9(d ) DBLP Q4
+9(e ) DBLP Q5
+DBLP Document Size ( MB )
+9(f ) DBLP Q6
+Figure 7 : Query Performance ( in log scale ) of ISX vs . Other Systems
+10
+1
+0.1
+0.01
+0
+5 next following next preceding previous sibling next sibling parent first child find open find close
+15
+10 25 Document Size ( GB )
+20
+) s d n o c e s ( e m T i l a s r e v a r T
+100
+80
+60
+40
+20
+0
+30
+35
+ISX XMill
+0
+2
+4
+6
+8 10 12 14 16 18
+Document Size ( GB )
+9(a ) Node navigation time ( microseconds )
+9(b ) Full document traversal time ( seconds )
+Figure 8 : Navigation and traversal performance time of ISX
+) s d n o c e s µ ( i e m T n o i t i a g v a N
+) c e s µ ( e m T n o i i t r e s n
+I
+24
+22
+20
+18
+16
+14
+12
+0
+10
+20
+128MB DB 250MB DB 500MB DB 1GB DB 2GB DB 4GB DB 8GB DB 16GB DB
+40
+30 70 Number of Nodes Inserted
+50
+60
+80
+90 100
+Figure 9 : Insertion time of ISX using 128 MB 16 GB DBLP
+WWW 2007 / Track : XML and Web DataSession : Parsing , Normalizing , and Storing XML1081 creases at a rate of approximately O(lg2 n ) . In fact , all subsequent insertions up to 100,000 took no more than 0.5 milliseconds .
+Updating the values of nodes will not cause extra processing time apart from the retrieval time for locating the nodes to be updated . In case of deletion , the reverse sequence of steps for node insertion will be performed ( freed space will be left as gaps to be filled by subsequent insertions ) .
+6 . CONCLUSIONS
+A compact and efficient XML repository is critical for a wide range of applications such as mobile XML repositories running on devices with severe resource constraints . For a heavily loaded system , a compact storage scheme could be used as an index storage that can be manipulated entirely in memory and hence substantially improve the overall performance . In this paper , we proposed a scalable and yet efficient , compact storage scheme for XML data .
+Our data structure is shown to be exceptionally concise , without sacrificing query and update performance . While having the benefits of small data footprint , experiments have shown that the proposed structure still out performs other XML database systems and scales significantly better for large datasets . In particular , all navigational primitives can run in near constant time . Furthermore , as shown in the experiments , our proposed structure allows direct document traversal and queries that are significantly faster and more scalable than previous compression techniques .
+7 . REFERENCES [ 1 ] Dblp bibliography . See http://wwwinformatikuni trierde/∼ley/db/
+[ 2 ] Shurug Al Khalifa , H . V . Jagadish , Nick Koudas , and
+Jignesh M . Patel . Structural joins : A primitive for efficient XML query pattern matching . In Proceedings of the 18th International Conference on Data Engineering ( ICDE ) , pages 141–153 . IEEE Computer Society , 2002 .
+[ 3 ] Rolf Apweiler , Amos Bairoch , and Cathy H . Wu . Protein sequence databases . Current Opinion in Chemical Biology , 8:76–80 , 2004 .
+[ 4 ] Peter Buneman , Martin Grohe , and Christoph Koch . Path Queries on Compressed XML . In Proceedings of the 29th International Conference on Very Large Databases ( VLDB ) , pages 141–152 . Morgan Kaufmann , 2003 .
+[ 5 ] Giorgio Busatto , Markus Lohrey , and Sebastian Maneth .
+Efficient memory representation of xml documents . In DBPL , 2005 .
+[ 6 ] Yi Chen , George A . Mihaila , Rajesh Bordawekar , and Sriram
+Padmanabhan . L tree : A dynamic labeling structure for ordered xml data . In Wolfgang Lindner , Marco Mesiti , Can T¨urker , Yannis Tzitzikas , and Athena Vakali , editors , EDBT Workshops , volume 3268 of Lecture Notes in Computer Science , pages 209–218 . Springer , 2004 .
+[ 7 ] James Cheney . XMLPPM : XML Conscious PPM
+Compression . See http://wwwcscornelledu/People/ jcheney/xmlppm/xmlppmhtml
+[ 8 ] Paolo Ferragina , Fabrizio Luccio , Giovanni Manzini , and
+S . Muthukrishnan . Compressing and searching xml data via two zips . In WWW , pages 751–760 , 2006 .
+[ 9 ] Torsten Grust , Maurice van Keulen , and Jens Teubner .
+Accelerating xpath evaluation in any rdbms . ACM Trans . Database Syst . , 29:91–131 , 2004 .
+[ 10 ] Alan Halverson , Josef Burger , Leonidas Galanis , Ameet
+Kini , Rajasekar Krishnamurthy , Ajith Nagaraja Rao , Feng Tian , Stratis Viglas , Yuan Wang , Jeffrey F . Naughton , and
+David J . DeWitt . Mixed Mode XML Query Processing . In Proceedings of the 29th International Conference on Very Large Databases ( VLDB ) , pages 225–236 . Morgan Kaufmann , 2003 .
+[ 11 ] Guy Jacobson . Succinct Static Data Structures . PhD thesis ,
+Carnegie Mellon University , 1988 .
+[ 12 ] H . V . Jagadish , S . Al Khalifa , A . Chapman , L . V . S . Lakshmanan , A . Nierman , S . Paparizos , J . M . Patel , D . Srivastava , N . Wiwatwattana , Y . Wu , and C . Yu . TIMBER : A native XML database . VLDB Journal , 11(4):274–291 , 2002 .
+[ 13 ] Vanja Josifovski , Marcus Fontoura , and Attlila Barta .
+Querying XML streams . VLDB Journal , 14(2):197–210 , 2005 .
+[ 14 ] Jyrki Katajainen and Erkki Makinen . Tree compression and optimization with applications . In International Journal of Foundations of Computer Science ( FOCS ) , Vol . 1 , pages 425–447 . IEEE Computer Society , 1990 .
+[ 15 ] Quanzhong Li and Bongki Moon . Indexing and querying
+XML data for regular path expressions . In Proceedings of the 27th International Conference on Very Large Databases ( VLDB ) , pages 361–370 . Morgan Kaufmann , 2001 . [ 16 ] Hartmut Liefke and Dan Suciu . XMill : an efficient compressor for XML data . In Proceedings of the 2000 ACM SIGMOD international conference on Management of data , pages 153–164 . ACM Press , 2000 .
+[ 17 ] Sebastian Maneth and Giorgio Busatto . Tree transducers and tree compressions . In Igor Walukiewicz , editor , FoSSaCS , volume 2987 of Lecture Notes in Computer Science , pages 363–377 . Springer , 2004 .
+[ 18 ] Mitchell P . Marcus , Beatrice Santorini , and Mary Ann
+Marcinkiewicz . Building a large annotated corpus of English : the Penn Treebank . Computational Linguistics , 19 , 1993 .
+[ 19 ] Jun Ki Min , Myung Jae Park , and Chin Wan Chung .
+XPRESS : A Queriable Compression for XML Data . In Proceedings of the 2003 ACM SIGMOD international conference on Management of data , pages 122–133 . ACM Press , 2003 .
+[ 20 ] J . Ian Munro , Venkatesh Raman , and Adam J . Storm .
+Representing Dynamic Binary Trees Succinctly . In Proceedings of the 12th Annual Symposium on Discrete Algorithms ( SODA ) , pages 529–536 . SIAM , 2001 .
+[ 21 ] Adam Silberstein , Hao He , Ke Yi , and Jun Yang . BOXes : Efficient maintenance of order based labeling for dynamic XML data . In the 21st International Conference on Data Engineering ( ICDE ) , pages 285–296 , 2005 .
+[ 22 ] Pankaj M . Tolani and Jayant R . Haritsa . XGRIND : A query friendly XML compressor . In Proceedings of the 18th International Conference on Data Engineering ( ICDE ) , pages 225–234 . IEEE Computer Society , 2002 .
+[ 23 ] Ning Zhang , Varun Kacholia , and M . Tamer Ozsu . A
+Succinct Physical Storage Scheme for Efficient Evaluation of Path Queries in XML . In Proceedings of the 20th International Conference on Data Engineering ( ICDE ) , pages 54–65 . IEEE Computer Society , 2004 .
+WWW 2007 / Track : XML and Web DataSession : Parsing , Normalizing , and Storing XML1082

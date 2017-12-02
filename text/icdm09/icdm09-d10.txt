@@ -1,0 +1,255 @@
+Execution Anomaly Detection in Distributed Systems through Unstructured Log Analysis
+Qiang FU1 , Jian Guang LOU1 , Yi WANG2 , Jiang LI1
+1Microsoft Research Asia
+Beijing , PR China
+{qifu , jlou , jiangli}@microsoft.com
+Abstract Detection of execution anomalies is very important for the maintenance , development , and performance refinement of large scale distributed systems . Execution anomalies include both work flow errors and low performance problems . People often use system logs produced by distributed systems for troubleshooting and problem diagnosis . However , manually inspecting system logs to detect anomalies is unfeasible due to the increasing scale and complexity of distributed systems . Therefore , there is a great demand for automatic anomaly detection techniques based on log analysis . In this paper , we propose an unstructured log analysis technique for anomaly detection . In the technique , we propose a novel algorithm to convert free form text messages in log files to log keys without heavily relying on application specific knowledge . The log keys correspond to the log print statements in the source code which can provide cues of system execution behavior . After converting log messages to log keys , we learn a Finite State Automaton ( FSA ) from training log sequences to present the normal work flow for each system component . At the same time , a performance measurement model is learned to characterize the normal execution performance based on the log messages’ timing information . With these learned models , we can automatically detect anomalies in newly input log files . Experiments on Hadoop and SILK show that the technique can effectively detect running anomalies .
+Keywords log analysis ; distributed system ; problem diagnosis ; FSA
+I .
+INTRODUCTION
+Large scale distributed systems are becoming key engines of IT industry . For a large commercial system , execution anomalies , including erroneous behavior or unexpected long response times , often result in user dissatisfaction and loss of revenue . These anomalies may be caused by hardware problems , network communication congestion or software bugs in distributed system components . Most systems generate and collect logs for troubleshooting , and developers and administrators often detect anomalies by manually checking system printed logs . However , as many large scale and complex applications are deployed , manually detecting anomalies becomes very difficult and inefficient . At first , it is very time consuming to diagnose through manually examining a great amount of log messages
+2Dept . of Computer Science & Technology
+Beijing University of Posts and Telecommunications
+Beijing , PR China wangyitseg@gmailcom produced by a large scale distributed system . Secondly , a single developer or system administrator may not have enough knowledge of the whole system , because many large enterprise systems often make use of Commercial Off the Shelf components ( eg third party components ) . In addition , the increasing complexity of distributed systems also lowers the efficiency of manual problem diagnosis further . Therefore , developing automatic execution anomaly monitoring and detection tools becomes an essential requirement of many distributed systems to ensure the Quality of Service . technique mainly consists of
+There are two classes of typical anomalies : one is work flow errors errors occurring during the execution paths ; the other is execution low performance the execution time takes much longer than normal cases although its execution path is correct . In this paper , we present an unstructured log analysis technique that can automatically detect system anomalies using commonly available system logs . It requires neither additional system source code instrumentation nor any runtime code profiling . The two processes : the learning process and the detection process . The goal of the learning process is to obtain models that represent the normal execution behavior of the system from those logs produced by normally completed jobs . The input data for the learning process is training log files printed by different machines . At first , we convert the log message sequences in the log files into log key sequences . Log keys are obtained by abstracting log messages . Then , we a derive Finite State Automaton ( FSA ) to model the execution path of the system . With the learned FSAs , we can identify the corresponding state sequences from training log sequences . Next , we count the execution time of each state transition in state sequences , and obtain a performance measurement model through statistical analysis . In the detection process , for newly input log sequences , we check them with those learned models to automatically detect anomalies . It should be noticed that the system ’s normal behavior may change after an upgrade . Therefore , it is necessary to re train the model after each system upgrade .
+Assumptions : In our technique , system anomaly detection is based on the cues gained from the previous normally completed jobs’ log files . We assume that each log message has a corresponding time stamp that indicates its generation time . We further assume that the logs are recoded using thread IDs or request IDs to distinguish logs of different threads or work flows . Most modern operating systems ( such as Windows and Linux ) and platforms ( such as Java and .NET ) provide thread IDs . We can therefore work with sequential logs only . The paper is organized as follows . In section 2 , several related research efforts are briefly surveyed . The log key extraction and FSA construction are introduced in section 3 and section 4 . In section 5 , we discuss the performance measurement model construction . After that , anomaly detection is described in section 6 . Then , experimental results are presented in section 7 . Finally , section 8 concludes the paper .
+II . RELATED WORK
+Monitoring and maintaining techniques that make use of execution logs are the least invasive and most applicable , because execution logs are often available during a system ’s daily running . Therefore , analyzing logs for problem diagnosis has been an active research area for several decades . In this paper , we only survey the approaches that perform the analysis automatically . One set of algorithms [ 1 , 2 , 3 , 4 ] judge the job ’s trace sequence as a whole , where a log sequence is often simply recognized as a symbol string . Dickenson et al [ 1 ] collect execution profiles from program runs , and use classification techniques to categorize the collected profiles based on some string distance metrics . Then , an analyst examines the profiles of each class to determine whether or not the class represents an anomaly . Mirgorodskiy et al [ 2 ] also use string distance metrics to categorize function level traces , and identify outlier traces or anomalies that substantially differ from the others . Yuan et al [ 4 ] propose a supervised classification algorithm to classify system call traces based on the similarity to the traces of known problems . In other literature , a quantitative feature is extracted from each log sequence for error detection . For example , in [ 3 ] , the authors preprocess the logs to extract the number of log occurrence times as a log feature , and detect anomalies using principal component analysis ( PCA ) . These kinds of algorithms can find whether the job is abnormal , while can hardly obtain the insight and accurate information about abnormal jobs .
+Another set of algorithms [ 5 8 ] view system logs as a series of footprints of systems’ execution . They try to learn FSA models from the traces to model the system behavior . In the work of Cotroneo et al [ 5 ] , FSA models are first derived from the traces of Java Virtual Machine collected by the JVMMon tool [ 6 ] . Then , logs of unsuccessful workloads are compared with the inferred FSA models to detect anomalous log sequences . SALSA [ 7 ] examines Hadoop logs to construct FSA models of the Datanode module and TaskTracker module . In [ 8 ] , based on the traces that record the sequences of components traversed in a system in response to a user request , the authors construct varied length n grams and a FSA to characterize the normal system behavior . A new trace is compared against the learned FSA to detect whether it is abnormal . In their algorithm , a variedlength n gram represents a state of the FSA . Unlike these methods , which heavily depend on application specific knowledge including some predefined log tokens and the stage structure of Map Reduce , our algorithm can work in a black box style . In addition , our algorithm is the only one that uses timing information in the log sequence to detect the low performance problem .
+In some other literature [ 17 , 18 ] , logs are used to perform troubleshooting related tasks in different scenarios . GMS [ 17 ] detects abnormal machines with wrong configurations . It extracts features from the data source and applies the distributed HilOut algorithm to identify the outliers as the misconfigured machines . Its data source includes log files , utility statistics and configuration files . In [ 18 ] , a decision tree is learned to identify the causes of detected failures where the failures have been detected beforehand . It records the runtime properties of each request in a multi tier Web server , and applies statistical learning techniques to identify the causes of failures . Unlike them , our algorithm mainly tries to detect anomalies through exploiting the timing and circulation information .
+III . LOG KEY EXTRACTION
+Systems logs usually record run time program behaviors , including events , states and inter component interactions . An unstructured log message often contains two types of information : one type is free form text string that is used to describe the semantic meaning of a recorded program behavior ; the other type is a parameter that is used to express some important system attributes . In general , the number of different log message types is often huge or even infinite because of various parameter values . Therefore , during log data mining , directly considering log messages as a whole may lead to the curse of dimension .
+In order to overcome this problem , we replace each log message by its corresponding log key to perform analysis . The log key is defined as the common content of all log messages which are printed by the same logprint statement in the source code . In other words , a log key equals to the free form text string of the log print statement without any parameters . For example , the log key of log message 5 ( shown in Figure 1 ) is “ Image file of size saved in seconds ” . We analyze logs based on log keys because : ( 1 ) In general cases , different logprint statements often output different log text messages . It means that each type of log key corresponds to one specific log print statement in the source code . Therefore , a sequence of log keys can reveal the execution path of the program . ( 2 ) The number of log key types is finite and is much less than the number of log message types . It can help us to avoid the curse of dimension during data mining .
+The challenging problem is that we know neither which log messages are printed by the same log print statement nor where parameters are in log messages . Therefore , it is very difficult to identify log keys . Generally , the log messages printed by the same statement are often highly similar to each other , while two log messages printed by different log print statements are often quite different . Based on this observation , we can use clustering techniques to group log messages printed by the same statement together , and then find their common part as the log key .
+However , the parameters may cause some clustering mistakes because the log messages printed by different statements may also be similar enough if they contain a lot of identical parameter values . In order to reduce the parameters’ influence on clustering , we first erase the contents that are obvious parameter values according to some empirical knowledge . Then , we further apply a raw log key clustering and group splitting algorithm to obtain log keys . Figure 1 gives an example to illustrate the procedure of extracting log keys from log messages .
+A . Erasing parameters by empirical rules
+As we know , parameters are often in forms of numbers , URIs , IP addresses ; or they follow the special symbols such as the colon or equal sign ; or they are embraced by braces , square brackets , or Parentheses . These contents can be easily identified . Therefore , empirical rules are often used to recognize and remove these parameters [ 9 ] . By roughly going through the log files , we can define some empirical regular expression rules to describe those typical parameter cases , and erase the matched contents . After that , the left contents of log messages are defined as raw log keys . The second block of Figure 1 gives some examples of raw log keys . We can see that the IP addresses , the numbers , and the full path of a file are all removed from the log messages .
+Although many parameters are erased , there are still some parameters that could not be completely removed in raw log keys . The main reason is that the empirical rules can’t exhaust all parameter patterns without application specific knowledge .
+B . Raw log key clustering
+We separate a raw log key into words using a space as separator . We use words as primitives to represent raw log keys because words are minimal meaningful elements in a sentence . So , each raw log key can be represented as a word sequence .
+Figure 1 Examples of log key extraction
+Before clustering , we need to find a proper metric to represent the similarity of two raw log keys . The string edit distance is a widely used metric to represent the similarity between word sequences . It equals to the number of edit operations required to transform one word sequence to the other . One edit operation can operate only one word . The operation can be adding , deleting or replacing . Obviously , the edit distance only counts the number of operated words ; it does not consider the positions of the operated words . However , for our problem , the positions of operated words in raw log keys are meaningful for measuring similarity . It is because most programmers tend to write text messages ( log keys ) firstly , and then add parameters afterwards . Therefore , words at the beginning of raw log keys have
+Log Message 1 : [ 17223670:4635 ] TCP Job name UpdateIndexLog Message 2 : [ 17223670:4635 ] TCP Job name DropTableLog Message 3 : [ 17223670:4635 ] TCP Job name UpdateTableLog Message 4 : [ 17223670:4635 ] TCP Job name DeleteDataLog Message 5 : Image file of size 57717 loaded in 0 seconds.Log Message 6 : Image file of size 70795 saved in 0 seconds.Log Message 7 : Edits file \tmp\hadoop Rico\dfs\name\current\edits of size 1049092 edits # 2057 loaded in 0 seconds.Erasing parameters by empirical rulesRaw log key 1 : [ ] TCP Job name UpdateIndexRaw log key 2 : [ ] TCP Job name DropTableRaw log key 3 : [ ] TCP Job name UpdateTableRaw log key 4 : [ ] TCP Job name DeleteDataRaw log key 5 : Image file of size loaded in seconds.Raw log key 6 : Image file of size saved in seconds.Raw log key 7 : Edits file of size edits # loaded in seconds.Clustering raw log keys Splitting groupsRaw log key 1 : [ ] TCP Job name UpdateIndexRaw log key 2 : [ ] TCP Job name DropTableRaw log key 3 : [ ] TCP Job name UpdateTableRaw log key 4 : [ ] TCP Job name DeleteData Raw log key 5 : Image file of size loaded in seconds. Raw log key 6 : Image file of size saved in seconds. Raw log key 7 : Edits file of size edits # loaded in seconds.log key 1 : [ ] TCP Job name log key 2 : Image file of size loaded in seconds. log key 3 : Image file of size saved in seconds. log key 4 : Edits file of size edits # loaded in seconds.Extracting log keysRaw log key 1 : [ ] TCP Job name UpdateIndexRaw log key 2 : [ ] TCP Job name DropTableRaw log key 3 : [ ] TCP Job name UpdateTableRaw log key 4 : [ ] TCP Job name DeleteData Raw log key 5 : Image file of size loaded in seconds.Raw log key 6 : Image file of size saved in seconds.Raw log key 7 : Edits file of size edits # loaded in seconds.Initial Group1Initial Group2 more probability to be parts of log keys than words at the end of raw log keys do . Therefore , the operated word at the beginning of the raw log keys should be more significant for measuring raw log keys’ difference . Based on this observation , we measure raw log keys’ similarity by the weighted edit distance , in which we use sigmoid similar function to compute weights at different positions . For two raw log keys 𝑟𝑘1 and 𝑟𝑘2 , we denote the necessary operations required to transform 𝑟𝑘1 to 𝑟𝑘2 as 𝑂𝐴1 ,𝑂𝐴2 ,…,𝑂𝐴𝐸𝑂 ; 𝐸𝑂is the number of necessary operations . The weighted edit distance between 𝑟𝑘1 and 𝑟𝑘2 is denoted as 𝑊𝐸𝐷 𝑟𝑘1 , 𝑟𝑘2 , 𝑊𝐸𝐷 𝑟𝑘1 , 𝑟𝑘2 = . Here , 𝑥𝑖 is the index of the word that is operated by the ith operation 𝑂𝐴𝑖 ; 𝜐 is a parameter controlling weight function .
+1+e(𝑥 𝑖 −𝜐 )
+𝐸𝑂 𝑖=1
+1
+( a ) The histogram on SILK experiment
+( b ) The histogram on Hadoop experiment
+Figure 2 . The histogram of raw log key pair number over weighted edit distance
+We cluster similar raw log keys together . For every two log keys , if the weighted edit distance between them is smaller than a threshold ς , we connect them with a link . Then , each connected component corresponds to a group which is called as an initial group . The initial group examples are shown in the third block in Figure 1 .
+The threshold ς could be automatically determined according to the following procedure . For every two raw log keys , we compute the weighted edit distance between them . Then we obtain a set of distance values . Each distance should be either inner class distance or inter class distance . The inner class ( or inter class ) distance is the distance between two raw log keys corresponding to the same log key ( or different log keys ) . In general , the inner class distances are usually small while the inter class distances are large . Therefore , we use a k means clustering algorithm to cluster all distances into two groups . The distances in the two groups roughly correspond to the inner class and the inter class distances respectively . Finally , we select the largest distance from the inner class distance group as the value of threshold ς .
+We obtain the raw log keys by the experiments on Hadoop and SILK respectively ( the experiments’ details are described in section 7 ) . We calculate the distances between every two raw log keys , and show the histogram of raw log key pair number over distance in Figure 2 . The x coordinate is the value of the weighted edit distance . The y coordinate is the number of raw log key pairs . The figures show that : ( 1 ) There are two significant peaks in each histogram . It seems that the proposed weighted edit distance is a good similarity metric for raw log key clustering . ( 2 ) There is a flat region between two peaks . It implies that our raw log key clustering algorithm is not sensitive to the threshold ς .
+C . Group splitting
+Ideally , raw log keys in the same initial group correspond to the same log key . In such cases , a log key can be obtained by extracting the common part of the raw log keys in the same initial group . However , raw log keys in one initial group may correspond to different log keys because those log keys are similar enough . To handle those cases , we propose a group splitting algorithm to obtain log keys .
+For an initial group , suppose there are 𝐺𝑁 raw log keys in this group . The common word sequence of the raw log keys within the group could be represented by 𝐶𝑊1 , 𝐶𝑊1 , … , 𝐶𝑊𝑁 . For example , the initial group 2 in Figure 1 contains raw log key 5 , 6 , 7 , and the common word sequence in the raw log keys are “ file ” , “ of ” , “ size ” , “ in ” , “ seconds ” . key , the log
+𝑖 , 𝐷𝑊2
+𝑖 , … , 𝐷𝑊𝑁 common word
+For each of the raw log keys in this group , eg the ith sequence 𝐶𝑊1 , 𝐶𝑊2,…,𝐶𝑊𝑁 separates the raw log key into N+1 𝑖 , 𝐷𝑊𝑁+1 parts which is denoted as 𝐷𝑊1 , 𝑖 ( 2 ≤ 𝑗 ≤ 𝑁 − 1 ) is the ith raw log key ’s where 𝐷𝑊𝑗 𝑖 is the ith raw log content between CWj 1 and CWj ; 𝐷𝑊1 is the ith key ’s content on the left side of CW1 ; 𝐷𝑊𝑁+1 raw log key ’s content on the right side of CWN . We call 𝑖 as the private content at position j of the ith raw 𝐷𝑊𝑗 log key . In the above example , the private content sequence of raw log key 7 is “ Edits ” , ∅ , ∅ , “ edits #
+𝑖
+𝑖 loaded ” , ∅,∅ . In the paper , ∅ represents that there is not any word in the private content .
+For each position j , 1 ≤ 𝑗 ≤ 𝑁 + 1 , we can obtain 𝐺𝑁 private contents at position j from 𝐺𝑁 raw log keys 𝐺𝑁 . We in the group , and they are 𝐷𝑊𝑗 denote the number of different values ( not including ∅ ) among those 𝐺𝑁 values as 𝑉𝑁𝑗 , and 𝑉𝑁𝑗 is called the private number at position j . For the initial group 2 in Figure 1 , 𝑉𝑁1 =2 , 𝑉𝑁2 =0 , 𝑉𝑁3 =0 , 𝑉𝑁4 =3 , 𝑉𝑁5 =0 , 𝑉𝑁6=0 .
+2 , … , 𝐷𝑊𝑗
+1 , 𝐷𝑊𝑗
+Intuitively speaking , if the private contents at position j are parameters , 𝑉𝑁𝑗 is often a large number because parameters may probably have many different values . However , if the private contents at position j are a part of log keys , 𝑉𝑁𝑗 should be a small number . Based on this observation , we find the smallest positive one among 𝑉𝑁1 , 𝑉𝑁2 ,… , 𝑉𝑁𝑁 , 𝑉𝑁𝑁+1 , eg 𝑉𝑁𝐽 . If 𝑉𝑁𝐽 is equal to or bigger than a threshold ϱ , which means that the private contents at position J have at least ϱ different values , then we consider that the private contents at position J are parameters . In such a situation , this initial group does not split anymore . Otherwise , if 𝑉𝑁𝐽 is smaller than the threshold ϱ , we consider that the private contents at position J are a part of log keys . In such a situation , this initial group splits into 𝑉𝑁𝐽 sub groups , satisfying that the raw log keys in the same sub group have the same private content at position J . In the paper , we set ϱ as 4 according to experiments .
+For the initial group 2 , 𝑉𝑁1 is the smallest positive value 2 and is smaller than the threshold 4 , so the initial group 2 splits into 2 sub groups according to raw log keys’ private contents at position 1 . The raw log key 5 and 6 are in one sub group , because they have the same private content “ Image ” ; the raw log key 7 is in the other sub group .
+When there are multiple private numbers at different positions that have the same smallest positive value smaller than the threshold , we further compare the entropies at those positions respectively , select the one position with the minimal entropy , and split the group according to the private contents at that position . We denote the entropy at position j as 𝐸𝑃𝑗 . We compute 𝐸𝑃𝑗 according to the distribution of private content values at position j . For example , for the initial group 2 and j=1 , we can obtain 3 values of the private content which are “ Image ” , “ Image ” , and “ Edits ” . The value ’s distribution is p( “ Image ” )=2/3 , p( “ Edits ” )=1/3 , so 𝐸𝑃1 = − = 0918 The entropy rule is reasonable because a smaller entropy indicates lesser diversity , which means the private contents at that position have more possibility to be parts of log keys . log log
+−
+2
+3
+2
+3
+1
+3
+1
+3
+If there are still multiple positions that have the same private number and the same entropy , then we split the group according to the private contents at the most left one among those positions .
+We perform the split procedure repeatedly , until there is no group satisfying the split condition . Finally , we extract the common part of raw log keys in each group as a log key .
+D . Determine log keys for new log messages
+After the above steps , we obtain the log key set from the training log messages in the training log files . When a new log message comes , we determine its log key according to the following two steps : First , we use the empirical rules to extract the raw log key from the log message . Second , we select the log key which has the minimal edit distance to the raw log key of the log message . If the weighted edit distance between the raw log key and the selected log key is smaller than a threshold ℴ , the selected log key is considered as the log key of the log message . Otherwise , the log message is considered as an error log message , and its log key is its raw log key . Here , we set ℴ as the largest one of the weighted edit distances between all raw log keys of training log messages and their corresponding log keys . By replacing each log message with its corresponding log key , a log message sequence can be converted into a log key sequence .
+IV . WORK FLOW MODEL
+In order to detect anomalies of work flows , we use a Finite State Automaton ( FSA ) to model the execution behavior of each system module . Although there are some other alternate models , such as Petri Net , we adopt FSA because it is simple but effective . FSA has been widely used in testing and debugging software applications [ 11 ] . A FSA consists of a finite number of states and transitions between the states . A set of algorithms have been proposed in previous literature to learn FSA from sequential log sequences [ 10 , 11 , 12 ] . In this paper , we use the algorithm proposed by [ 11 ] to learn a FSA for each system component from training log key sequences which are produced by normally completed jobs . Each transition in the learned FSAs corresponds to a log key . All training log key sequences can be interpreted by the learned FSAs . Therefore , each training log key sequence can be mapped to a state sequence . Figure 3 shows the example of the learned FSM of JobTracker of Hadoop ( refer to Section 71 ) We give the state interpretations according to the log message in Table 1 . From the learned the FSM , we obtain the following work flow : from S87 to S96 , the JobTracker carries out some initialization tasks when a new job is submitted . After initialization , the state machine enters S197 to add a new Map/Reduce task . For each map task , it selects local or remote data source for processing . Then , the task is completed . When the last task is finished , the job is completed , and all resources of tasks are cleared iteratively . In fact , the learned FSM correctly reflects the real work flow of the JobTracker . transition in the FSA , eg from Sa to Sb , the time intervals between two adjacent states ( Sa , Sb ) in the training state sequences produced by ith machine are denoted as 𝐾𝑖 ( 𝑆𝑎 , 𝑆𝑏 ) ; 1 ≤ 𝑖 ≤ 𝑀 . 1(𝑆𝑎 , 𝑆𝑏 ) , 𝜏𝑖 𝜏𝑖 Here , Ki is the total number of the time intervals in all state sequences produced by the ith machine .
+2(𝑆𝑎 , 𝑆𝑏 ) ,… , 𝜏𝑖 the
+Gaussian distribution
+We use a Gaussian model to present the distribution of the state transition interval . In practice , the computational capacity of machines in a distributed system is often heterogeneous . The different computing capacity of machines results in the state transition time intervals in different machines being quite different . In order to handle this problem , we introduce a capacity parameter for each machine . Our model contains machine independent parameters {𝜇 𝑆𝑎 , 𝑆𝑏 , 𝜎2(𝑆𝑎 , 𝑆𝑏 )} and machine dependent capacity parameters {𝜆1 𝑆𝑎 , 𝑆𝑏 ,𝜆2 𝑆𝑎 , 𝑆𝑏 ,… , 𝜆𝑀(𝑆𝑎 , 𝑆𝑏 ) } . Here , distribution 𝑁(𝜇 𝑆𝑎 , 𝑆𝑏 , 𝜎2 𝑆𝑎 , 𝑆𝑏 ) is used to represent the distribution of the state transition time on an imaginary computer with a standard computing capacity . It is only determined by the property of the specified state transition , and does not depend on the property of any specific machine . The computers’ properties are modeled by the capacity parameters 𝜆𝑖(𝑆𝑎 , 𝑆𝑏 ) , 1 ≤ 𝑖 ≤ 𝑀 . The computers’ computing capacity parameters are also associated with the state transition , because different state transitions often correspond to different computing tasks and the same computer may have a different computing capacity under different work load characteristics . computers’ computing
+Gaussian
+In this subsection , because the state transition is specified , we abridge state indicators in expressions or formulas for simplicity . We assume that the mean value of state transition time in the ith machine is proportional to its computing capacity parameter 𝜆𝑖 , and the variance 2 . With that assumption , the obis proportional to 𝜆𝑖 tained transition time instances in the ith machine satisfy the Gaussian distribution 𝑁(𝜆𝑖𝜇 , ( 𝜆𝑖𝜎)2 ) , 1 ≤ 𝑖 ≤ 𝑀 . We further assume that the obtained transition time instances are independent , and then the likelihood function is as follows . 𝐾1 , 𝜏2 𝑝 𝜏1 = 𝑁(𝜏𝑖
+𝐾2 , … , 𝜏𝑀 1 , … , 𝜏𝑀
+1 , 𝜏2 𝑗 ; 𝜆𝑖𝜇 , ( 𝜆𝑖𝜎)2 )
+1 , 𝜏1 𝑀 𝑖=1
+( 1 )
+2 , … , 𝜏2
+2 , … , 𝜏1
+𝐾𝑀
+𝐾𝑖 𝑗 =1
+With the variable substitutions of 𝛼𝑖 = 𝜆𝑖𝜇 and 𝛽 = we can obtain the log likelihood function : 𝐿 𝛼1 , 𝛼2 , … , 𝛼𝑀 , 𝛽
+𝜎 2 𝜇 2 ,
+𝑗 𝜏𝑖 𝛼𝑖
+= − [ 2ln 𝛼𝑖 + ln 𝛽 +
+𝑀 𝑖=1
+𝐾𝑖 𝑗 =1
+1
+𝛽
+( 1 −
+)2 ]
+( 2 )
+According to the Maximum Likelihood Estimation criterion , the optimal parameters should maximize 𝐿 𝛼1 , 𝛼2 , … , 𝛼𝑀 , 𝛽 . Because the optimal parameters should satisfy the partial differentiates of 𝐿 𝛼1 , 𝛼2 , … , 𝛼𝑀 , 𝛽 equal to 0 , we have : that
+Figure 3 . Example of a learned FSM
+Table 1 . The interpretations of states State S87~
+Interpretation Initialization when a new job submitted
+S96
+S197 S103 S99 S198 S106 S107
+Add a new map/reduce task Select remote data source Select local data source Task complete Job complete Clear task resource
+V . PERFORMANCE MEASUREMENT MODEL
+In this section , we present our technique to characterize the performance of the normally completed jobs . By comparing with normal performance characteristics , we can detect low performance in new jobs .
+After log key extraction , we obtain corresponding log key sequences . The time stamp of a log key is the same as the time stamp of its corresponding log message . In order to derive a performance measurement model , we need to know applications’ execution states . Therefore , we first convert each log key sequence to its corresponding state sequence . A state ’s time stamp is specified by the time stamp of its corresponding log key in the log key sequence .
+In a system execution , there are two types of low performance problems . One is that the time interval that a system component transits from a state to the next state is much longer than normal cases ; we name it transition time low performance . The other is that the circulation numbers of a loop structure are far more than normal cases ; we name that loop low performance . We use the transition time between adjacent states and the circulation numbers of all loop structures to characterize the normal performance of jobs .
+A . Transition time measurement model
+In a distributed system , each machine writes log message sequences to its local disc independently . Therefore , different training state sequences may be derived from logs in different machines . Suppose we have M machines in a distributed system . For each state
+S0S87S88S89S90S92S93S94S95S96S197S99S107S103S106S198S91
+𝐾 𝑖 𝑗 =1
+2
+𝑗 𝜏𝑖
++4𝐾𝑖 𝛽
+𝐾 𝑖 𝑗 =1
+𝑗 2 𝜏𝑖
+−
+𝐾 𝑖 𝑗 =1
+𝑗 𝜏𝑖
+𝛼𝑖 =
+, 1 ≤ 𝑖 ≤ 𝑀
+( 3 )
+2
+𝑀 𝑖=1
+𝑀 𝑖=1
+𝐾𝑖 𝑗 =1
+)
+𝑗 )2 ) ( 𝐾𝑖𝛼𝑖
+2𝐾𝑖𝛽 𝛽 = ( ( 𝛼𝑖 − 𝜏𝑖 However , there is no closed form solution to the above equation group ; we can only use an iterative procedure to obtain an approximation of the optimal parameters . It could be proved that after each iteration step , the value of 𝐿 𝛼1 , 𝛼2 , … , 𝛼𝑀 , 𝛽 increases . The iterative procedure is shown in Table 2 . When the difference of β in two iterations is small enough ( < Thβ ) , the iterative procedure terminates .
+Finally , we can obtain the transition time measurement model : the transition time from Sa to Sb in the ith machine distribution 𝑁(𝛼𝑖 𝑆𝑎 , 𝑆𝑏 , 𝛼𝑖
+2 𝑆𝑎 , 𝑆𝑏 𝛽 𝑆𝑎 , 𝑆𝑏 ) . the Gaussian satisfies
+It should be pointed out that the above algorithm can be easily implemented in a parallel mode . According to formula ( 3 ) , when given 𝛽 , 𝛼𝑖 can be determined by the sample data in the ith machine , ie 𝜏𝑖 ( 1 ≤ 𝑗 ≤ 𝐾𝑖 ) . Thus , each 𝛼𝑖 can be calculated separately at the ith machine . When given 𝛼𝑖 ( 1 ≤ 𝑖 ≤ 𝑀 ) , the intermediate results , ie 𝐾𝑖𝛼𝑖 , can also be calculated by machines separately . Then , it is very easy to integrate those intermediate results to obtain 𝛽 . Therefore , our algorithm can be used to learn models from the logs of very large scale systems .
+2 and ( 𝛼𝑖 − 𝜏𝑖
+𝐾𝑖 𝑗 =1
+𝑗 )2
+𝑗
+B . Circulation numbers measurement model
+The circulation numbers of loop structures are meaningful measurements for low performance detection because some executions’ low performance is caused by abnormally more loops although each of its adjacent state transition times seem normal . A loop structure is defined as a directed cyclic chain composed by the state transition in the learned FSA . For example , for the FSA shown in Figure 4 , one loop structure is {S2 , S3} , the other is {S1 , S2 , S3} . A loop structure execution instance is formed by consecutively repeating several rounds of a loop structure from its beginning to its end ; and the number of execution rounds is defined as a circulation number . For example , in the state sequence “ S0 S1 S2 S3 S2 S3 S1 S2 S3 S4 ” , the subsequences , eg “ S2 S3 S2 S3 ” and “ S2 S3 ” , are two execution instances of the loop structure {S2 , S3} in the state sequence , and the circulation numbers are 2 and 1 respectively ; the subsequence , eg “ S1 S2 S3 S2 S3 S1 S2 S3 ” is an execution instance of the loop structure {S1 , S2 , S3} , and the circulation number is 2 .
+We identify loop structures in the learned FSA . For each loop structure , eg L , we find the execution instances of L in all training state sequences , and record their circulation numbers as 𝐶1 𝐿 ,𝐶2 𝐿 ,…,𝐶𝐻(𝐿)(𝐿 ) ; where H(L ) is the amount of L ’s execution instances . Similarly , we use Gaussian distribution 𝑁(𝜇 𝐿 , 𝜎2(𝐿 ) ) to model them .
+𝜇 𝐿 =
+𝜎2 𝐿 =
+1
+𝐻(𝐿 ) 1
+𝐻(𝐿 )
+𝐻(𝐿 ) 𝑖=1
+𝐶𝑖(𝐿 )
+( 4 )
+𝐻(𝐿 ) 𝑖=1
+[ 𝐶𝑖 𝐿 − 𝜇 𝐿 ]2
+( 5 )
+Table 2 . Iterative procedure to compute parameters
+, 1 ≤ 𝑖 ≤ 𝑀 ;
+Initialization :
+𝛼𝑖 =
+1 𝐾𝑖
+𝐾𝑖 𝑗 =1
+𝑗 𝜏𝑖
+𝛽 = 𝛽′ = 0 ;
+While true
+Set 𝛽′ = 𝛽 ;
+Using current value of 𝛼𝑖 ( 1 ≤ 𝑖 ≤ 𝑀 ) , compute 𝛽 according to the last one formula in the formula group ( 3 ) ;
+If 𝛽′ − 𝛽 < 𝑇ℎ𝛽 , break ;
+Else using current value of 𝛽 , compute 𝛼𝑖 ( 1 ≤ 𝑖 ≤ 𝑀 ) according to the first M formula in the formula group ( 3 ) ;
+Endif
+End
+Figure 4 . An example of FSA
+VI . ANOMALIES DETECTION
+For a newly input log message sequence , we can obtain the corresponding log key sequence according to section 34 If the log key sequence can be generated by the learned FSA , then we consider that there is no work flow error . Otherwise , the first log key in the sequence that can’t be generated by the learned FSA is detected as a work flow error . The details of work flow error detection can be found in paper [ 11 ] . In this paper , we mainly focus on the low performance detection .
+A . Transition time low performance detection
+During low performance detection , we first convert the testing log key sequences to the corresponding state sequences according to the learned FSA . For each state transition in the state sequence produced by the ith machine , eg from Sa to Sb , we then compare its execution time with the learned transition time measurement model of the ith machine . If the execution time is larger
+S0Log key AS1S2Log key BS3Log key CS4Log key DLog key ALog key B than a threshold 𝛾𝑖(𝑆𝑎 , 𝑆𝑏 ) , it is considered as a transition time low performance . Here , the threshold is defined as the sum of the mean value and 𝜖 times standard deviation of the learned transition time distribution . 𝛾𝑖 𝑆𝑎 , 𝑆𝑏 = 𝛼𝑖 𝑆𝑎 , 𝑆𝑏 ( 1 + 𝜖 𝛽(𝑆𝑎 , 𝑆𝑏 ) ) ( 6 ) Obviously , the smaller 𝜖 is , the more state transitions are detected as low performance problems . At the same time , there will be more false positives and less false negatives . When applying our technique , users can adjust the value of 𝜖 according to real requirements . In the experiments , we set 𝜖 as 3 .
+Ethernet switch . The basic configurations are listed in Table 3 . Among them , PT17 is used as a master that hosts NameNode and JobTracker components . The others are used as slaves , and each slave hosts DataNode and TaskTracker components . During the experiments , we run the stand alone program ( namely CPUEater ) which consumes a predefined ratio of CPU so that we can better simulate a heterogeneous environment . Table 4 shows the utility ratios ( ie 100%consumed CPU ratio of CPUEater ) and the learned model parameters . We can see that the more powerful machine , the smaller the average transition time is .
+B . Loop low performance detection
+Similar to transition low performance detection , for each loop structure L , we calculate its threshold 𝜗(𝐿 ) as follows 𝜗 𝐿 = 𝜇 𝐿 + 𝜖𝜎(𝐿 )
+( 7 ) We find the execution instances of L whose circulation numbers are larger than 𝜗(𝐿 ) as loop low performance .
+VII . EXPERIMENTS
+In this section , we evaluate the proposed technique through detecting anomalies in two typical distributed computing systems : Hadoop and SILK ( a privately owned distributed computing system ) . In this section , we represent some typical cases to demonstrate our technique , and give out some over all evaluations on our experiment results .
+A . Case study on Hadoop
+Hadoop [ 13 ] is a well known open source implementation of Google ’s Map Reduce [ 14 ] framework and distributed file system ( GFS)[15 ] . It enables distributed computing of large scale , data intensive and stage based parallel applications . Hadoop is designed with master slave architecture . NameNode is a master of the distributed file system , which manages the metadata of all stored data chunks , while DataNodes are slaves used to store the data chunks . JobTracker acts as a task scheduler that decomposes the job into smaller tasks and assigns the tasks to different TaskTrackers . A TaskTracker is a worker of a task instance .
+The logs produced by Hadoop are not sequential log message sequences in its original forms . The log messages for different tasks interleave together . However , we can easily extract sequential log message sequences from logs by the task IDs .
+Table 3 . Basic configurations of machines
+Basic configuration Machine Intel dual core E3110@3.0G , 8G RAM PT03~PT05 PT06~PT11 Intel quad core E5430@2.66G , 8G RAM PT12~PT17 AMD Quad Core 2376@2.29G , 8G RAM
+Our test bed of Hadoop ( version 0.19 ) contains 16 machines ( from PT3 to PT17 ) connected with a 1G
+Table 4 . Utility ratio and model parameters
+Machine
+Utility Ratio
+Learned parameters pt09 pt07 pt12 pt14 pt05
+100 % 30 % 50 % 30 % 50 %
+β
+0.0187
+α ( s ) 38.04 47.10 65.02 65.63 78.46
+In the learning stage , we run 100 jobs of counting words in the test bed and collect the produced log files of these jobs as training data . The counting words job gives out the word frequency in the input text files . Each input text file for a job is about 10G . In the testing stage , we run 30 counting words jobs to produce testing data .
+In this subsection , we give one example of the test cases in Table 5 . In this case , we manually insert a low performance problem by limiting the bandwidth of machine PT9 to 1Mbps when running a job , and check whether our algorithm can detect it . The result shows that our algorithm can successfully detect the low performance problem that the transition time from state #21 to state #1 is much larger than the normal cases ( ie 60s > 3804s )
+Table 5 . Low performance transition of Hadoop
+Time Stamp 2009 01 18 10:42:31.452 2009 01 18 10:43:30.423
+State ID
+State Meaning
+21
+1
+Data source for a Map task is selected .
+Map task is completed .
+B . Case study on SILK
+SILK is a distributed system developed by our lab for large scale data intensive computing . Unlike MapReduce , SILK uses a Directed Acyclic Graph ( DAG ) framework similar to Dryad [ 16 ] . SILK is also designed based on the master slave architecture . A SchedulerServer component works as a master to decompose the job into smaller tasks , and then schedule and manage the tasks . SILK produces many log files during execu tion . For example , it generates about 1 million log messages every minute ( depending on workload intensity ) in a 256 machine system . Each log message contains a process ID and a thread ID . We can group log messages with the same process ID and thread ID into sequential log sequences . The test bed of SILK contains 7 machines ( 1 master , 6 slaves ) , which is set up for dailybuild testing . As our training data , we collect the training log files of all successful jobs during a ten day running in the test bed . The test logs are generated during one month of daily build testing . Our algorithm can detect several system execution anomalies ( shown in Table 7 ) . In this subsection , we give two typical examples .
+Case 1 : In this case , due to a networking issue , a slave task ( CopyDatabase ) tries several times to connect to a database , which makes a response to the master ( SchedulerServer ) and is largely delayed . From the log sequence of the master , our algorithm finds that the transition time from state #424 to state #428 is much larger than expected ( see Table 6 ) . According to the learned model , the average time interval is 12.32s , while the time interval in this case is 4253s Therefore , our algorithm detects it as an anomaly of transition time low performance .
+State ID
+State Meaning
+Table 6 . Case 1 : Low performance transition of SILK Time Stamp 2008 09 09 18:44:52.749 2008 09 09 18:45:35.280
+A worker progress event is
+Job task is started .
+424
+428 received .
+Case 2 : In this case , the master ( SchedulerServer ) sends a job finish message to a client , but the client never replies . This causes the master to repeat the attempt more than 20 times before giving up . Compared with 1 in normal situations , it is detected as a loop low performance anomaly by our algorithm .
+C . Overall results
+Table 7 shows the overall results of anomaly detection on Hadoop and SILK . In the experiments on Hadoop , we detect 15 types of anomalies , 2 of them being false positives ( FP ) . In the experiments on SILK , we detect 91 types of anomalies , 22 of which are FPs . Looking into these FPs , we find that our current loop low performance detection is sensitive to different workloads . This is because the circulation numbers of some loop structures largely depend on the work load . With the help of user ’s feedback , such FPs can be reduced by relaxing the threshold 𝜖.for the corresponding loop structures .
+D . Comparison of log key extraction
+In order to evaluate our log key extraction method , we compare our method with the method proposed by Jiang et . al . [ 9 ] . The comparison results are shown in
+Table 8 , where the numbers of real log key types are manually identified , and are used as the ground truth . For our algorithm , the numbers of obtained log key types are very close to the ground truth . Furthermore , more than 95 % of the log keys extracted by our method are identical with the real log keys . By comparison , our algorithm significantly outperforms the algorithm of [ 9 ] .
+Table 7 . Overall evaluation results
+Hadoop
+SILK
+Detected anomaly types
+False positive
+Detected anomaly types
+False positive
+4
+6
+5
+0
+0
+2
+16
+6
+69
+0
+0
+22
+Anomaly type
+Work flow error
+Transition time low performance
+Loop low performance
+Table 8 . Comparison results of log key extraction
+System
+Hadoop
+SILK
+Extracted log key types of Jiang et.al [ 9 ]
+Extracted log key types of our method
+257 2287
+197 651
+VIII . CONCLUSION
+Real log key types
+201 631
+As the scale and complexity of distributed systems continuously increases , the traditional problem of diagnosis approaches ; experienced developers manually checking system logs and exploring problems according to their knowledge becomes inefficient . Therefore , a lot of automatic log analysis techniques have been proposed . However , the task is still very challenging because log messages are usually unstructured free form text strings and application behaviors are often very complicated .
+In this paper , we focus on the log analysis technique for automated problem diagnosis . Our contributions include : ( 1 ) We propose a technique to detect anomalies , including work flow errors and low performance , by analyzing unstructured system logs . The technique requires neither additional system instrumentation nor any application specific knowledge . ( 2 ) We propose a novel technique to extract log keys from free text messages . Those log keys are the primitives in our model used to represent system behaviors . The limited number of log key types avoids the curse of dimension in the statistic learning procedure . ( 3 ) Model the two types of low performance . One is for modeling execution time of state transitions ; the other is for modeling the circulation number of loops . In the model , we take into account the factors of heterogeneous environments . ( 4 ) The detection algorithm can remove false positive detection of low performance caused by inputting large workloads . Experimental results on Hadoop and SILK demonstrate the power of our proposed technique .
+Future research directions include utilizing log parameter information to conduct further analysis , performing analysis on parallel logs that are produced by multi thread or event based systems , visualizing the models and the anomalies detection results to give intuitive explanation for human operators , and designing a user friendly interface .
+IX . REFERENCES
+[ 1 ] W . Dickinson , D . Leon , and A . Podgurski , “ Finding Failures by Cluster Analysis of Execution Profiles . In the proceeding of the 23rd International Conference on Software Engineering , May , 2001 . [ 2 ] AV Mirgorodskiy , N . Maruyama , and BP Miller , “ Problem Diagnosis in Large Scale Computing Environments ” , In the Proceedings of the ACM/IEEE SC 2006 Conference , Nov . 2006 . [ 3 ] W . Xu , L . Huang , A . Fox , D . Patterson , and M . Jordan , “ Mining Console Logs for Large Scale System Problem Detection ” , In Workshop on Tackling Computer Problems with Machine Learning Techniques , Dec . 2008 . [ 4 ] C . Yuan , N . Lao , JR Wen , J . Li , Z . Zhang , YM Wang , and W . Y . Ma , “ Automated Known Problem Diagnosis with Event Traces ” , In the proceeding of EuroSys 2006 , Apr . 2006 . [ 5 ] D . Cotroneo , R . Pietrantuono , L . Mariani , and F . Pastore , “ Investigation of Failure causes in work load driven reliability testing ” , In the proceeding of the 4th International Workshop on Software Quality Assurance , Sep . 2007 . [ 6 ] S . Orlando and S . Russo , “ Java Virtual Machine Monitoring for Dependability Benchmarking ” , In proceedings of the 9th IEEE International Symposium on Object and Component oriented Real –time Distributed Computing , Apr . 2006 . [ 7 ] J . Tan , X . Pan , S . Kavulya , R . Gandhi , and P . Narasimhan , “ SALSA : Analyzing Logs as State Machines ” , In the proceeding of 1st USENIX Workshop on the Analysis of System Logs , Dec . 2008 .
+[ 8 ] G . Jiang , H . Chen , C . Ungureanu , and K . Yoshihira . “ Multi resolution Abnormal Trace Detection Using Variedlength N grams and Automata ” , in the proceeding of 2nd International Conference on Autonomic Computing , Jun . 2005 . [ 9 ] Z . M . Jiang , A . E . Hassa , P . Flora , and G . Hamann , “ Abstracting Execution Logs to Execution Events for Enterprise Applications ” , in the proceeding of the 8th International Conference on Quality Software ( QSIC ) , pp.181 186 , 2008 . [ 10 ] G . Ammons , R . Bodik , and J . R . Larus , “ Mining Specifications ” , in the proceeding of ACM Symposium on Principles of Programming Languages ( POPL ) , Portland , Jan . 2002 . [ 11 ] L . Mariani and M . Pezz`e , “ Dynamic Detection of COTS Components Incompatibility ” , IEEE Software , pp . 7685 , vol.5 , 2007 . [ 12 ] D . Lo , and S C Khoo , “ QUARK : Empirical Assessment of Automaton based Specification Miners ” , in proceeding of the 13th Working Conference on Reverse Engineering ( WCRE’06 ) , 2006 . [ 13 ] Hadoop . http://hadoopapacheorg/core [ 14 ] J . Dean and S . Ghemawat , “ MapReduce : Simplified Data Processing on Large Clusters ” , In the proceeding of USENIX Symposium on Operating Systems Design and Implementation ( OSDI ) , Dec . 2004 . [ 15 ] S . Ghemawat and S . Leung , “ The Google File System ” , In the proceeding of ACM Symposium on Operating Systems Principles ( SOSP ) , Oct . 2003 . [ 16 ] M . Isard , M . Budiu , Y . Yu , A . Birrell , and D . Fetterly , “ Dryad : Distributed Data Parallel Programs from Sequential Building Blocks ” , In the proceeding of EuroSys , Mar . 2007 . [ 17 ] N . Palatin , A . Leizarowitz , A . Schuster , and R . Wolff , “ Mining for Misconfigured Machines in Grid Systems ” , in Proceeding of 12th ACM International Conference on Knowledge Discovery and Data Mining ( KDD ) , pp . 687 692 , Philadelphia , PA , USA , 2006 . [ 18 ] M . Chen , AX Zheng , J . Lloyd , M . I . Jordan , E . Brewer , “ Failure Diagnosis Using Decision Trees ” , in the processing of the first International Conference on Autonomic Computing ( ICAC ) , pp . 36 43 , 2004 .
