@@ -33,7 +33,6 @@ def generateCandidates(F, K):
 		if valid:
 			C.append(s1)	
 	return C
-#	for key, value in F.items():
 # takes in the potential frequent item sets and finds their support. Removes if support < minsup			
 def countCandidates(C, transactions, minsup):
 #	print('C: ',C)
