@@ -7,10 +7,7 @@ from itertools import *
 #removes papers without authors
 def soFreshAndSoCleanClean(Papers):
 	for pid, paper in Papers.items():
-#		print(paper.authors)
-#		if (int(paper.year) < 1996 or int(paper.year) > 2016):
-#			del Papers[pid]
-		if len(paper.authors) < 1:
+		if len(paper.authors) < 1 or paper.path == '':
 			del Papers[pid]
 	return Papers
 #assign N attributes to the data
@@ -45,6 +42,8 @@ def assignAttributes(Papers, PAA, N, outputType):
 #                print('assinging author count')
                 checked = set()
                 for paper in PAA:
+			if paper.pid not in Papers:
+				continue
                         if paper.pid not in data:
                                 data[paper.pid] = []
                         if paper.pid not in checked:

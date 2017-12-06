@@ -22,9 +22,11 @@ class paper:
 		self.title = title
 		self.year = year
 		self.conf = conf
-		self.confs = set(cid)
+		self.confs = set()
 		self.keywords = set()
 		self.authors = set()
+		self.confs.add(conf)
+		self.path = ''
 
         def display(self):
                 print(self.pid, self.title_case, self.title, self.year, self.conf, self.cid)
@@ -46,7 +48,19 @@ class author:
 	def display(self):
 		print(self.aid, self.name)
 
-
+#Load in papers#
+fPaper = open("./microsoft/Papers.txt", "r")
+#use of a dictioanry removes duplicate values
+Papers = {}
+for line in fPaper.readlines():
+        words = line.split("\t")
+        #remove papers not in our given conferences
+        if words[7] not in ['icdm', 'kdd', 'wsdm', 'www']:
+                continue
+        if words[0] not in Papers:
+                Papers[words[0]] = paper(words[0], words[1], words[2], words[3], words[7], words[9])
+        elif words[7] not in Papers[words[0]].confs:
+                Papers[words[0]].confs.add(words[7])
 #Load in indexes#
 fIndex = open("./microsoft/index.txt", "r")
 indexEntries = []
@@ -55,21 +69,9 @@ for line in fIndex.readlines():
 	#removes entries with null values
 	if '' in words:
 		continue
-	indexEntries.append(index(words[0], words[1], words[2], words[3]))
-#Load in papers#
-fPaper = open("./microsoft/Papers.txt", "r")
-#use of a dictioanry removes duplicate values
-Papers = {}
-for line in fPaper.readlines():
-	#remove entries with null values
-        words = line.split("\t")
-	#remove papers not in our given conferences
-	if words[7] not in ['icdm', 'kdd', 'wsdm', 'www']:
-		continue
-	if words[0] not in Papers:
-		Papers[words[0]] = paper(words[0], words[1], words[2], words[3], words[7], words[9])
-	elif words[7] not in Papers[words[0]].confs:
-		Papers[words[0]].confs.add(words[7])
+	if words[2] in Papers:
+		indexEntries.append(index(words[0], words[1], words[2], words[3]))
+		Papers[words[2]].path = './text/' + words[0] + '/' + words[1]
 #Load in keywords
 fKeywords = open("./microsoft/PaperKeywords.txt", "r")
 for line in fKeywords.readlines():
@@ -105,6 +107,10 @@ print('finished loading files')
 
 print('Task 1 - Data Cleaning, statistics, attribute assigning, visualization')
 Papers = soFreshAndSoCleanClean(Papers)
+for key, value in Papers.items():
+	if len(value.confs) > 1:
+		print (value.confs)
+
 spicyStats(Papers)
 #[1,2,3] array indicates we want to use all 3 attributes for our data
 attributeData = assignAttributes(Papers,PAA, [1,2,3], 'list')
