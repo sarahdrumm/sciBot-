@@ -4,6 +4,7 @@ from itertools import *
 from apriori import Apriori
 from kmeans import *
 from spicyStats import *
+from entityExtraction import *
 
 class index:
 	def __init__(self, folder, filename, pid, title):
@@ -114,6 +115,12 @@ for key, value in Papers.items():
 spicyStats(Papers)
 #[1,2,3] array indicates we want to use all 3 attributes for our data
 attributeData = assignAttributes(Papers,PAA, [1,2,3], 'list')
+
+print('Task 3 - Entity Typing')
+print('=======================')
+entityExtraction(Papers)
+print('=======================')
+
 
 print('Task 4 - Frequent Patern Mining (Apriori)')
 print('=======================')
