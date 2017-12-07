@@ -112,10 +112,9 @@ print('finished loading files')
 
 print('Task 1 - Data Cleaning, statistics, attribute assigning, visualization')
 Papers = soFreshAndSoCleanClean(Papers)
-
-#spicyStats(Papers)
+spicyStats(Papers)
 #[1,2,3] array indicates we want to use all 3 attributes for our data
-#attributeData = assignAttributes(Papers,PAA, [1,2,3], 'list')
+attributeData = assignAttributes(Papers,PAA, [1,2,3,4,5])
 
 print('Task 2 - Entity Mining: Candidate generation and quality assessment')
 print('=======================')
@@ -152,12 +151,12 @@ print('=======================')
 
 print('Task 6 - Naive Bayes')
 print('=======================')
-naiveBayes(Papers, ['kdd', 'wsdm', 'www', 'icdm'], ['computer science', 'data mining'])
+#naiveBayes(Papers, ['kdd', 'wsdm', 'www', 'icdm'], ['computer science', 'data mining'])
 print('=======================')
 print('Task 7 - KMeans clustering')
 print('=======================')
 #call Kmeans with 4 clusters and euclidean distance metric
-#kMeans(attributeData, 4, 'euclidean')
+kMeans(attributeData, 4, 'euclidean', 'random')
 print('=======================')
 
 print('Task 8 - Conference Clustering')

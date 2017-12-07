@@ -40,10 +40,10 @@ def Euclidean(data, centroids):
 
 def kMeans(data, K, distMetric, C):
 	centroids = []
-	if centroids == 'random':
+	if C == 'random':
 		for i in range(K):
 			randInt = randint(0,len(data)-1)
-			centroids.append(data.keys()[randInt])
+			centroids.append(data[data.keys()[randInt]])
 	else:
 		centroids = C
 	distances = [0]*K	#array to compute distance from 1 point to each centroid
