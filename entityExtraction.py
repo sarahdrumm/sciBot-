@@ -6,13 +6,6 @@ def entityExtraction(Papers):
         paperid = paper.pid
         path = paper.path+'.txt'
         paperid_path.append([paperid,path])
-    #fr = open('microsoft/inde.txt','rb')
-    #for line in fr:
-        #arr = line.strip('\r\n').split('\t')
-        #paperid = arr[2]
-        #path = 'text/'+arr[0]+'/'+arr[1]+'.txt'
-        #paperid_path.append([paperid,path])
-    #fr.close()
     phrase2count = {}
     for [paperid,path] in paperid_path:
         fr = open(path,'rb')
