@@ -6,6 +6,8 @@ from kmeans import *
 from spicyStats import *
 from confClustering import *
 from entityExtraction import *
+from entityTyping import *
+from entityLabeling import *
 
 class index:
 	def __init__(self, folder, filename, pid, title):
@@ -112,11 +114,16 @@ Papers = soFreshAndSoCleanClean(Papers)
 #[1,2,3] array indicates we want to use all 3 attributes for our data
 #attributeData = assignAttributes(Papers,PAA, [1,2,3], 'list')
 
-print('Task 3 - Entity Typing')
+print('Task 2 - Entity Mining: Candidate generation and quality assessment')
 print('=======================')
 #entityExtraction(Papers)
 print('=======================')
 
+print('Task 3 - Entity typing')
+print('=======================')
+entityTyping(Papers)
+entityLabeling()
+print('=======================')
 
 print('Task 4 - Frequent Patern Mining (Apriori)')
 print('=======================')
