@@ -9,6 +9,8 @@ from entityExtraction import *
 from entityTyping import *
 from entityLabeling import *
 from testMine import *
+from entityFP import *
+from naiveBayes import *
 
 class index:
 	def __init__(self, folder, filename, pid, title):
@@ -133,9 +135,25 @@ print('=======================')
 
 print('Task 5)')
 print('=======================')
-entityset = entiMining(Papers)
+#Phrases = entiMining(Papers)
+#Problems = []
+#Methods = []
+#fProb = open("./problem.txt", "r")
+#for line in fProb.readlines():
+#        words = line.split("\n")
+#	Problems.append(words[0])
+#fMeth = open("./method.txt", "r")
+#for line in fMeth.readlines():
+#        words = line.split("\n")
+#        Methods.append(words[0])
+#AprioriEntity(Phrases, Problems, Methods, 10)
+
 print('=======================')
 
+print('Task 6 - Naive Bayes')
+print('=======================')
+naiveBayes(Papers, ['kdd', 'wsdm', 'www', 'icdm'], ['computer science', 'data mining'])
+print('=======================')
 print('Task 7 - KMeans clustering')
 print('=======================')
 #call Kmeans with 4 clusters and euclidean distance metric
