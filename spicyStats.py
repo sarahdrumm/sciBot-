@@ -5,7 +5,7 @@ from itertools import *
 #import plotly.graph_objs as go
 
 #removes papers without authors
-def soFreshAndSoCleanClean(Papers):
+def finalClean(Papers):
 	for pid, paper in Papers.items():
 		if len(paper.authors) < 1 or paper.path == '':
 			del Papers[pid]

@@ -1,6 +1,7 @@
-import os
-import operator
 from itertools import *
+import operator
+import os
+import sys
 
 def generateCandidates(F, K):
 #	print('generating candidates', K)
@@ -35,7 +36,6 @@ def generateCandidates(F, K):
 	return C
 # takes in the potential frequent item sets and finds their support. Removes if support < minsup			
 def countCandidates(C, transactions, minsup):
-#	print('C: ',C)
 #	print('counting candidates')
 	counts = {}
 	for item in C:
@@ -46,7 +46,6 @@ def countCandidates(C, transactions, minsup):
 				else:
 					counts[item] = 1
 	F = {k:v for (k,v) in counts.items() if v >= minsup}
-#	print ('F: ', F)
 	for key, value in sorted(F.items(), key=operator.itemgetter(1), reverse=True):
 		print(key,value)
 		break
@@ -75,11 +74,15 @@ def getF(transactions, K, minsup):
 		return {k:v for (k,v) in counts.items() if v >=minsup} 
 
 #Task 4 - Apiori
-def Apriori(PAA, minsup):
+def Apriori(PAA, Papers, minsup):
+	print('Minsup: ' + str(minsup))
+	print('(Author AIDs), Support')
 	#create all transactions (1 per paper)
 	transactions = {}
 	f1 = {}		#frequent item sets of size 1 (getting counts when creating transactions so we don't have to iterate over PAA twice)
 	for item in PAA:
+		if item.pid not in Papers:
+			continue
 		if item.pid in transactions:
 			transactions[item.pid].append(item.aid)
 		else:

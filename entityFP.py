@@ -23,20 +23,19 @@ def entityPMRelations(transactions, P, M, K, minsup):
 	for key, value in sorted(counts.items(), key=operator.itemgetter(1), reverse=True):
 		print(key, value)
 #		print(process)
-		if ixx > 5:
+		if ixx > 10:
 			break
 		ixx+=1
 	return {k:v for (k,v) in counts.items() if v >=minsup} 
 
 #Task 4 - Apiori
 def AprioriEntity(Phrases, Problems, Methods, minsup):
+	print('problem/method, support (only top 10 printed)')
 	#come up with Problem, Method counts of size 1
 	p1 = {}
 	m1 = {}
 	transactions = {}
 	for phrase, track in Phrases.items():
-		if phrase == 'operating system':
-			print(phrase, phrase in Problems, phrase in Methods)
 		for pid in track.paperids:
 			if pid not in transactions:
 				transactions[pid] = []

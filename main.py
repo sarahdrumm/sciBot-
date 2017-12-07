@@ -129,7 +129,7 @@ print('=======================')
 
 print('\nTask 4 - Frequent Patern Mining (Apriori)')
 print('=======================')
-#Apriori(PAA, 30)
+#Apriori(PAA, Papers, 5)
 print('=======================')
 
 print('\nTask 5 - Problem-method association mining')
