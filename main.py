@@ -10,7 +10,7 @@ from entityTyping import *
 from entityLabeling import *
 from testMine import *
 from entityFP import *
-#from naiveBayes import *
+from naiveBayes import *
 
 class index:
 	def __init__(self, folder, filename, pid, title):
@@ -110,29 +110,29 @@ for line in fPAA.readlines():
 		Papers[words[0]].authors.add(words[1])
 print('finished loading files')
 
-print('Task 1 - Data Cleaning, statistics, attribute assigning, visualization')
+print('\nTask 1 - Data Cleaning, statistics, attribute assigning, visualization')
 Papers = soFreshAndSoCleanClean(Papers)
 spicyStats(Papers)
 #[1,2,3] array indicates we want to use all 3 attributes for our data
 attributeData = assignAttributes(Papers,PAA, [1,2,3,4,5])
 
-print('Task 2 - Entity Mining: Candidate generation and quality assessment')
+print('\nTask 2 - Entity mining: Candidate generation and quality assessment')
 print('=======================')
 #entityExtraction(Papers)
 print('=======================')
 
-print('Task 3 - Entity typing')
+print('\nTask 3 - Entity typing')
 print('=======================')
 #entityTyping(Papers)
 #entityLabeling()
 print('=======================')
 
-print('Task 4 - Frequent Patern Mining (Apriori)')
+print('\nTask 4 - Frequent Patern Mining (Apriori)')
 print('=======================')
 #Apriori(PAA, 30)
 print('=======================')
 
-print('Task 5)')
+print('\nTask 5 - Problem-method association mining')
 print('=======================')
 #Phrases = entiMining(Papers)
 #Problems = []
@@ -149,17 +149,18 @@ print('=======================')
 
 print('=======================')
 
-print('Task 6 - Naive Bayes')
+print('\nTask 6 - Naive Bayes')
 print('=======================')
 #naiveBayes(Papers, ['kdd', 'wsdm', 'www', 'icdm'], ['computer science', 'data mining'])
 print('=======================')
-print('Task 7 - KMeans clustering')
+
+print('\nTask 7 - KMeans clustering')
 print('=======================')
 #call Kmeans with 4 clusters and euclidean distance metric
 kMeans(attributeData, 4, 'euclidean', 'random')
 print('=======================')
 
-print('Task 8 - Conference Clustering')
+print('\nTask 8 - Conference Clustering')
 print('=======================')
 #confClustering(Papers, PAA, ['icdm', 'kdd', 'wsdm', 'www'])
 print('=======================')
