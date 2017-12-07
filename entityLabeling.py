@@ -59,5 +59,3 @@ def entityLabeling():
     fw.close()
 
 entityLabeling()
-
-

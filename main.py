@@ -10,7 +10,7 @@ from entityTyping import *
 from entityLabeling import *
 from testMine import *
 from entityFP import *
-from naiveBayes import *
+#from naiveBayes import *
 
 class index:
 	def __init__(self, folder, filename, pid, title):
@@ -113,7 +113,7 @@ print('finished loading files')
 print('Task 1 - Data Cleaning, statistics, attribute assigning, visualization')
 Papers = soFreshAndSoCleanClean(Papers)
 
-#spicyStats(Papers)
+spicyStats(Papers)
 #[1,2,3] array indicates we want to use all 3 attributes for our data
 #attributeData = assignAttributes(Papers,PAA, [1,2,3], 'list')
 
@@ -152,7 +152,7 @@ print('=======================')
 
 print('Task 6 - Naive Bayes')
 print('=======================')
-naiveBayes(Papers, ['kdd', 'wsdm', 'www', 'icdm'], ['computer science', 'data mining'])
+#naiveBayes(Papers, ['kdd', 'wsdm', 'www', 'icdm'], ['computer science', 'data mining'])
 print('=======================')
 print('Task 7 - KMeans clustering')
 print('=======================')

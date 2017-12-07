@@ -10,14 +10,6 @@ def entityTyping(Papers):
     wordsets = [set(s_method.split(' ')),set(s_problem.split(' ')),set(s_dataset.split(' ')),set(s_metric.split(' '))]
 
     paperid_path = []
-    #fr = open('microsoft/inde.txt','rb')
-    #for line in fr:
-    #    arr = line.strip('\r\n').split('\t')
-    #    paperid = arr[2]
-    #    path = 'text/'+arr[0]+'/'+arr[1]+'.txt'
-    #    paperid_path.append([paperid,path])
-    #    print(paperid + path)
-    #fr.close()
     for pid, paper in Papers.items():
         paperid = paper.pid
         path = paper.path+'.txt'
