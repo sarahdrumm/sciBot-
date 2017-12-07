@@ -151,13 +151,16 @@ print('=======================')
 
 print('\nTask 6 - Naive Bayes')
 print('=======================')
-#naiveBayes(Papers, ['kdd', 'wsdm', 'www', 'icdm'], ['computer science', 'data mining'])
+naiveBayes(Papers, ['kdd','wsdm', 'www', 'icdm'], ['collaborative filtering', 'data mining'])
+naiveBayes(Papers, ['wsdm', 'www', 'icdm', 'kdd'], ['latent dirichlet allocation', 'expectation maximization'])
+naiveBayes(Papers, ['kdd','wsdm','www', 'icdm'], ['support vector machine', 'data mining'])
+naiveBayes(Papers, ['kdd', 'wsdm','icdm' ,'www'], ['support vector machine', 'data mining'])
 print('=======================')
 
 print('\nTask 7 - KMeans clustering')
 print('=======================')
 #call Kmeans with 4 clusters and euclidean distance metric
-kMeans(attributeData, 4, 'euclidean', 'random')
+#kMeans(attributeData, 4, 'euclidean', 'random')
 print('=======================')
 
 print('\nTask 8 - Conference Clustering')
