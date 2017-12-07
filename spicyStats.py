@@ -58,7 +58,7 @@ def assignAttributes(Papers, PAA, N):
                                 data[paper.pid] = []
                         data[paper.pid].append(0)
                         for keyword in paper.keywords:
-                                if 'data' in keyword:
+                                if 'data mining' in keyword:
                                         data[paper.pid][index] = 20
                 index += 1
 
