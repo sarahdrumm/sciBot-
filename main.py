@@ -8,6 +8,7 @@ from confClustering import *
 from entityExtraction import *
 from entityTyping import *
 from entityLabeling import *
+from testMine import *
 
 class index:
 	def __init__(self, folder, filename, pid, title):
@@ -121,13 +122,18 @@ print('=======================')
 
 print('Task 3 - Entity typing')
 print('=======================')
-entityTyping(Papers)
-entityLabeling()
+#entityTyping(Papers)
+#entityLabeling()
 print('=======================')
 
 print('Task 4 - Frequent Patern Mining (Apriori)')
 print('=======================')
 #Apriori(PAA, 30)
+print('=======================')
+
+print('Task 5)')
+print('=======================')
+entityset = entiMining(Papers)
 print('=======================')
 
 print('Task 7 - KMeans clustering')
@@ -138,6 +144,6 @@ print('=======================')
 
 print('Task 8 - Conference Clustering')
 print('=======================')
-confClustering(Papers, PAA, ['icdm', 'kdd', 'wsdm', 'www'])
+#confClustering(Papers, PAA, ['icdm', 'kdd', 'wsdm', 'www'])
 print('=======================')
 
