@@ -5,6 +5,7 @@ from apriori import Apriori
 from kmeans import *
 from spicyStats import *
 from confClustering import *
+from entityExtraction import *
 
 class index:
 	def __init__(self, folder, filename, pid, title):
@@ -106,9 +107,16 @@ print('finished loading files')
 
 print('Task 1 - Data Cleaning, statistics, attribute assigning, visualization')
 Papers = soFreshAndSoCleanClean(Papers)
+
 #spicyStats(Papers)
 #[1,2,3] array indicates we want to use all 3 attributes for our data
 #attributeData = assignAttributes(Papers,PAA, [1,2,3], 'list')
+
+print('Task 3 - Entity Typing')
+print('=======================')
+#entityExtraction(Papers)
+print('=======================')
+
 
 print('Task 4 - Frequent Patern Mining (Apriori)')
 print('=======================')

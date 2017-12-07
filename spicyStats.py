@@ -34,11 +34,37 @@ def assignAttributes(Papers, PAA, N):
                                 data[paper.pid] = []
                         data[paper.pid].append(0)
                         for keyword in paper.keywords:
-                                if 'vector machine' in keyword:
+                                if 'world wide web' in keyword:
                                         data[paper.pid][index] = 20
                 index += 1
-        #Number of Authors who wrote the paper
+        #If 'vector machine' is a keyword of the paper (weight 10)
         if (3 in N):
+ #               print('assining vector machine')
+                checked = set()
+                for key, paper in Papers.items():
+                        if paper.pid not in data:
+                                data[paper.pid] = []
+                        data[paper.pid].append(0)
+                        for keyword in paper.keywords:
+                                if 'web search engine' in keyword:
+                                        data[paper.pid][index] = 20
+                index += 1
+        #If 'vector machine' is a keyword of the paper (weight 10)
+        if (4 in N):
+ #               print('assining vector machine')
+                checked = set()
+                for key, paper in Papers.items():
+                        if paper.pid not in data:
+                                data[paper.pid] = []
+                        data[paper.pid].append(0)
+                        for keyword in paper.keywords:
+                                if 'data' in keyword:
+                                        data[paper.pid][index] = 20
+                index += 1
+
+
+        #Number of Authors who wrote the paper
+        if (5 in N):
 #                print('assinging author count')
                 checked = set()
                 for paper in PAA:
