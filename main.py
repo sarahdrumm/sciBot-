@@ -111,7 +111,7 @@ for line in fPAA.readlines():
 print('finished loading files')
 
 print('\nTask 1 - Data Cleaning, statistics, attribute assigning, visualization')
-Papers = soFreshAndSoCleanClean(Papers)
+Papers = finalClean(Papers)
 spicyStats(Papers)
 #[1,2,3] array indicates we want to use all 3 attributes for our data
 attributeData = assignAttributes(Papers,PAA, [1,2,3,4,5])
