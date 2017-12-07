@@ -4,6 +4,7 @@ from itertools import *
 from apriori import Apriori
 from kmeans import *
 from spicyStats import *
+from confClustering import *
 
 class index:
 	def __init__(self, folder, filename, pid, title):
@@ -47,8 +48,6 @@ class author:
 		self.name = name
 	def display(self):
 		print(self.aid, self.name)
-
-#Load in papers#
 fPaper = open("./microsoft/Papers.txt", "r")
 #use of a dictioanry removes duplicate values
 Papers = {}
@@ -107,13 +106,9 @@ print('finished loading files')
 
 print('Task 1 - Data Cleaning, statistics, attribute assigning, visualization')
 Papers = soFreshAndSoCleanClean(Papers)
-for key, value in Papers.items():
-	if len(value.confs) > 1:
-		print (value.confs)
-
-spicyStats(Papers)
+#spicyStats(Papers)
 #[1,2,3] array indicates we want to use all 3 attributes for our data
-attributeData = assignAttributes(Papers,PAA, [1,2,3], 'list')
+#attributeData = assignAttributes(Papers,PAA, [1,2,3], 'list')
 
 print('Task 4 - Frequent Patern Mining (Apriori)')
 print('=======================')
@@ -123,5 +118,11 @@ print('=======================')
 print('Task 7 - KMeans clustering')
 print('=======================')
 #call Kmeans with 4 clusters and euclidean distance metric
-kMeans(attributeData, 4, 'euclidean')
+#kMeans(attributeData, 4, 'euclidean')
 print('=======================')
+
+print('Task 8 - Conference Clustering')
+print('=======================')
+confClustering(Papers, PAA, ['icdm', 'kdd', 'wsdm', 'www'])
+print('=======================')
+

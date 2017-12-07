@@ -11,7 +11,7 @@ def soFreshAndSoCleanClean(Papers):
 			del Papers[pid]
 	return Papers
 #assign N attributes to the data
-def assignAttributes(Papers, PAA, N, outputType):
+def assignAttributes(Papers, PAA, N):
         data = {}
         index = 0
 	scatterX = []
@@ -35,7 +35,7 @@ def assignAttributes(Papers, PAA, N, outputType):
                         data[paper.pid].append(0)
                         for keyword in paper.keywords:
                                 if 'vector machine' in keyword:
-                                        data[paper.pid][index] = 10
+                                        data[paper.pid][index] = 20
                 index += 1
         #Number of Authors who wrote the paper
         if (3 in N):
@@ -64,13 +64,7 @@ def assignAttributes(Papers, PAA, N, outputType):
 #               points = [trace]
 #               py.iplot(points, filename='basic-scatter')
 
-	if outputType == 'dict':
-		return data
-	output = []
-        for key, value in data.items():
-                output.append(value)
-
-        return output
+	return data
 
 
 
